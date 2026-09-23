@@ -1,0 +1,6 @@
+{
+  "name": "BK'S MAP",
+  "description": "Nền tảng tìm kiếm, kết nối và quản lý nhà ở sinh viên cao cấp đã xác thực gần trường Đại học Bách Khoa – Đại học Đà Nẵng.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

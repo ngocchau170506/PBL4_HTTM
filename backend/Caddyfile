@@ -1,0 +1,19 @@
+# Đọc DOMAIN_NAME từ biến môi trường, mặc định là :80 nếu không có
+{$DOMAIN_NAME::80} {
+    # Bật nén file để web load nhanh hơn
+    encode zstd gzip
+
+    # Chuyển tiếp (Proxy) tất cả request bắt đầu bằng /api/ vào container backend
+    handle /api/* {
+        # Đảm bảo frontend có dòng cấu hình biến môi trường VITE_API_URL=/api
+        reverse_proxy backend:3000
+    }
+
+    # Phục vụ thư mục build của Frontend
+    handle {
+        root * /usr/src/frontend/dist
+        # React Router: Nếu không tìm thấy file, trả về index.html để React xử lý
+        try_files {path} /index.html
+        file_server
+    }
+}

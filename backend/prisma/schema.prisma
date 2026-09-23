@@ -1,0 +1,151 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// ==========================================
+// NHÓM 1: QUẢN LÝ CON NGƯỜI & PHÂN QUYỀN
+// ==========================================
+
+model User {
+  id           Int      @id @default(autoincrement())
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  hoTen        String   @map("ho_ten")
+  sdt          String?
+  role         String   @default("DRIVER") // "MANAGER" | "DRIVER"
+  trangThai    String   @default("ACTIVE") @map("trang_thai") // "ACTIVE" | "INACTIVE"
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Quan hệ 1-1 mở rộng
+  driver  Driver?
+  manager Manager?
+
+  @@map("users")
+}
+
+model Driver {
+  userId         Int      @id @map("user_id")
+  bangLai        String   @map("bang_lai")
+  uyTin          Int      @default(100) @map("uy_tin") // Quỹ điểm uy tín (Default 100)
+  trangThaiTaiXe String   @default("AVAILABLE") @map("trang_thai_tai_xe") // "AVAILABLE" | "ON_TRIP" | "OFFLINE"
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trips      Trip[]
+  violations Violation[]
+
+  @@map("drivers")
+}
+
+model Manager {
+  userId    Int      @id @map("user_id")
+  vaiTro    String   @default("COORDINATOR") @map("vai_tro") // "ADMIN" | "COORDINATOR"
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("managers")
+}
+
+// ==========================================
+// NHÓM 2: QUẢN LÝ TÀI SẢN & DANH MỤC
+// ==========================================
+
+model Vehicle {
+  id        Int      @id @default(autoincrement())
+  bienSo    String   @unique @map("bien_so")
+  loaiXe    String?  @map("loai_xe") // "Xe Tải 5 Tấn", "Xe Container", "Xe Bán Tải"
+  trangThai String   @default("AVAILABLE") @map("trang_thai") // "AVAILABLE" | "IN_USE" | "MAINTENANCE"
+  createdAt DateTime @default(now()) @map("created_at")
+
+  iotDevice IotDevice?
+  trips     Trip[]
+
+  @@map("vehicles")
+}
+
+model IotDevice {
+  id         Int      @id @default(autoincrement())
+  macAddress String   @unique @map("mac_address")
+  phienBan   String?  @map("phien_ban")
+  vehicleId  Int?     @unique @map("vehicle_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  vehicle Vehicle?     @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  logs    IotDataLog[]
+
+  @@map("iot_devices")
+}
+
+model Route {
+  id           Int      @id @default(autoincrement())
+  tenTuyen     String   @map("ten_tuyen")
+  khoangCachKm Float?   @map("khoang_cach_km")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  trips Trip[]
+
+  @@map("routes")
+}
+
+// ==========================================
+// NHÓM 3: LUỒNG VẬN HÀNH & GIÁM SÁT IOT
+// ==========================================
+
+model Trip {
+  id              Int       @id @default(autoincrement())
+  driverId        Int       @map("driver_id")
+  vehicleId       Int       @map("vehicle_id")
+  routeId         Int       @map("route_id")
+  thoiGianBatDau  DateTime? @map("thoi_gian_bat_dau")
+  thoiGianKetThuc DateTime? @map("thoi_gian_ket_thuc")
+  trangThai       String    @default("PLANNED") @map("trang_thai") // "PLANNED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED"
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  driver     Driver       @relation(fields: [driverId], references: [userId], onDelete: Cascade)
+  vehicle    Vehicle      @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  route      Route        @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  logs       IotDataLog[]
+  violations Violation[]
+
+  @@map("trips")
+}
+
+model IotDataLog {
+  id              Int      @id @default(autoincrement())
+  tripId          Int?     @map("trip_id")
+  deviceId        Int      @map("device_id")
+  kinhDo          Float    @map("kinh_do")
+  viDo            Float    @map("vi_do")
+  tocDo           Float    @map("toc_do")
+  co2Level        Float?   @map("co2_level") // Nồng độ khí CO2 đo từ cảm biến MQ-135 (ppm)
+  thoiGianGhiNhan DateTime @default(now()) @map("thoi_gian_ghi_nhan")
+
+  trip   Trip?     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  device IotDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@map("iot_data_logs")
+}
+
+model Violation {
+  id             Int      @id @default(autoincrement())
+  driverId       Int      @map("driver_id")
+  tripId         Int      @map("trip_id")
+  loaiViPham     String   @map("loai_vi_pham") // "NGỦ GẬT (AI)", "DÙNG ĐIỆN THOẠI (AI)", "NGÁP DÀI", "NỒNG ĐỘ CO2 CAO", "QUÁ TỐC ĐỘ"
+  diemTru        Int      @map("diem_tru")
+  videoUrl       String?  @map("video_url")
+  videoDuration  Int?     @map("video_duration")
+  thoiGianViPham DateTime @default(now()) @map("thoi_gian_vi_pham")
+  moTa           String?  @map("mo_ta")
+
+  driver Driver @relation(fields: [driverId], references: [userId], onDelete: Cascade)
+  trip   Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@map("violations")
+}

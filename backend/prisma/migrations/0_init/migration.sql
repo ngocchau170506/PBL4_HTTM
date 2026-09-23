@@ -1,0 +1,154 @@
+-- CreateSchema
+CREATE SCHEMA IF NOT EXISTS "public";
+
+-- CreateEnum
+CREATE TYPE "Role" AS ENUM ('USER', 'ADMIN');
+
+-- CreateEnum
+CREATE TYPE "RoomStatus" AS ENUM ('AVAILABLE', 'ALMOST_FULL', 'FULL');
+
+-- CreateTable
+CREATE TABLE "User" (
+    "id" UUID NOT NULL,
+    "email" VARCHAR(50) NOT NULL,
+    "passwordHash" VARCHAR(255),
+    "userName" VARCHAR(100),
+    "avatar" TEXT,
+    "isVerified" BOOLEAN NOT NULL DEFAULT false,
+    "verifyToken" VARCHAR(255),
+    "tokenExpires" TIMESTAMP(3),
+    "hashedRefreshToken" TEXT,
+    "googleId" VARCHAR(255),
+    "authProvider" VARCHAR(20) NOT NULL DEFAULT 'local',
+    "role" "Role" NOT NULL DEFAULT 'USER',
+    "isBanned" BOOLEAN NOT NULL DEFAULT false,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "User_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Owner" (
+    "id" UUID NOT NULL,
+    "userName" VARCHAR(100) NOT NULL,
+    "phoneNumber" VARCHAR(20) NOT NULL,
+
+    CONSTRAINT "Owner_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Room" (
+    "id" UUID NOT NULL,
+    "title" VARCHAR(255) NOT NULL,
+    "address" TEXT NOT NULL,
+    "street" VARCHAR(150),
+    "ward" VARCHAR(100),
+    "latitude" DECIMAL(10,8) NOT NULL,
+    "longitude" DECIMAL(11,8) NOT NULL,
+    "distanceToBk" DECIMAL(5,2),
+    "price" INTEGER NOT NULL,
+    "area" DECIMAL(5,2) NOT NULL,
+    "electricityPrice" TEXT,
+    "waterPrice" TEXT,
+    "status" "RoomStatus" NOT NULL DEFAULT 'AVAILABLE',
+    "sharedOwner" BOOLEAN NOT NULL DEFAULT false,
+    "curfew" VARCHAR(100),
+    "otherCosts" VARCHAR(255),
+    "description" TEXT,
+    "isHidden" BOOLEAN NOT NULL DEFAULT false,
+    "createdBy" UUID NOT NULL,
+    "ownerId" UUID NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Room_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "UserFavorite" (
+    "userId" UUID NOT NULL,
+    "roomId" UUID NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "UserFavorite_pkey" PRIMARY KEY ("userId","roomId")
+);
+
+-- CreateTable
+CREATE TABLE "Feature" (
+    "id" UUID NOT NULL,
+    "name" VARCHAR(100) NOT NULL,
+    "icon" VARCHAR(50),
+
+    CONSTRAINT "Feature_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "RoomFeature" (
+    "roomId" UUID NOT NULL,
+    "featureId" UUID NOT NULL,
+
+    CONSTRAINT "RoomFeature_pkey" PRIMARY KEY ("roomId","featureId")
+);
+
+-- CreateTable
+CREATE TABLE "RoomImage" (
+    "id" UUID NOT NULL,
+    "roomId" UUID NOT NULL,
+    "imageUrl" TEXT NOT NULL,
+    "storagePath" TEXT,
+    "displayOrder" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "RoomImage_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "OutboxFileDelete" (
+    "id" UUID NOT NULL,
+    "storagePath" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "retryCount" INTEGER NOT NULL DEFAULT 0,
+    "errorMessage" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "OutboxFileDelete_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "User_googleId_key" ON "User"("googleId");
+
+-- CreateIndex
+CREATE INDEX "UserFavorite_roomId_idx" ON "UserFavorite"("roomId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Feature_name_key" ON "Feature"("name");
+
+-- CreateIndex
+CREATE INDEX "RoomImage_roomId_idx" ON "RoomImage"("roomId");
+
+-- AddForeignKey
+ALTER TABLE "Room" ADD CONSTRAINT "Room_createdBy_fkey" FOREIGN KEY ("createdBy") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Room" ADD CONSTRAINT "Room_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "Owner"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "UserFavorite" ADD CONSTRAINT "UserFavorite_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "UserFavorite" ADD CONSTRAINT "UserFavorite_roomId_fkey" FOREIGN KEY ("roomId") REFERENCES "Room"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "RoomFeature" ADD CONSTRAINT "RoomFeature_roomId_fkey" FOREIGN KEY ("roomId") REFERENCES "Room"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "RoomFeature" ADD CONSTRAINT "RoomFeature_featureId_fkey" FOREIGN KEY ("featureId") REFERENCES "Feature"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "RoomImage" ADD CONSTRAINT "RoomImage_roomId_fkey" FOREIGN KEY ("roomId") REFERENCES "Room"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+

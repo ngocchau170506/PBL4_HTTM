@@ -1,0 +1,61 @@
+# ============================================================
+# Docker Compose — PRODUCTION (EC2)
+# File này dành riêng cho môi trường Production trên AWS EC2.
+# File docker-compose.yml gốc vẫn giữ nguyên cho dev local.
+#
+# Cách dùng trên EC2:
+#   docker compose -f docker-compose.prod.yml up -d --build
+# ============================================================
+
+services:
+  backend:
+    build: .
+    container_name: bkmap_backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    expose:
+      - "3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r=>{if(!r.ok)throw 1}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: bkmap_caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file:
+      - .env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - ../frontend/dist:/usr/src/frontend/dist:ro
+    depends_on:
+      - backend
+
+  redis:
+    image: redis:alpine
+    container_name: redis_cache
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis_data:
+  caddy_data:
+  caddy_config:
