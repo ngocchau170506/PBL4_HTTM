@@ -1,0 +1,35 @@
+[
+  {
+    "id": 12,
+    "user_id": 12,
+    "ho_ten": "Nguyễn Văn Hùng",
+    "sdt": "0905123456",
+    "bang_lai": "FC",
+    "uy_tin": 78,
+    "cap_canh_bao": "NORMAL",
+    "trang_thai_tai_xe": "ACTIVE",
+    "xe_hien_tai": "43C-128.45"
+  },
+  {
+    "id": 15,
+    "user_id": 15,
+    "ho_ten": "Phạm Quốc Bảo",
+    "sdt": "0912987654",
+    "bang_lai": "C",
+    "uy_tin": 62,
+    "cap_canh_bao": "CANH_CAO_VANG",
+    "trang_thai_tai_xe": "RESTRICTED",
+    "xe_hien_tai": "43C-901.22"
+  },
+  {
+    "id": 18,
+    "user_id": 18,
+    "ho_ten": "Hoàng Minh Tuấn",
+    "sdt": "0988112233",
+    "bang_lai": "FC",
+    "uy_tin": 18,
+    "cap_canh_bao": "BAO_DONG_DO",
+    "trang_thai_tai_xe": "LOCKED",
+    "xe_hien_tai": null
+  }
+]
