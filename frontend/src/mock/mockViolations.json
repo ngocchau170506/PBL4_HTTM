@@ -1,0 +1,62 @@
+[
+  {
+    "id": 9931,
+    "trip_id": 5821,
+    "driver_name": "Nguyễn Văn Hùng",
+    "vehicle_plate": "43C-128.45",
+    "loai_vi_pham": "BUON_NGU",
+    "diem_tru": 10,
+    "trang_thai": "PENDING_MANUAL_REVIEW",
+    "ai_confidence_score": 0.72,
+    "thoi_gian_vi_pham": "2026-09-23T08:15:32Z",
+    "thoi_gian_bat_dau_theo_doi": "2026-09-23T08:15:30Z",
+    "video_duration": 10,
+    "video_url": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
+    "mo_ta": "Phát hiện mắt nhắm liên tục quá 1.8s và góc đầu nghiêng bất thường."
+  },
+  {
+    "id": 9932,
+    "trip_id": 5821,
+    "driver_name": "Nguyễn Văn Hùng",
+    "vehicle_plate": "43C-128.45",
+    "loai_vi_pham": "CO2_CAO",
+    "diem_tru": 2,
+    "trang_thai": "CONFIRMED",
+    "ai_confidence_score": 0.98,
+    "thoi_gian_vi_pham": "2026-09-23T07:45:10Z",
+    "thoi_gian_bat_dau_theo_doi": "2026-09-23T07:40:10Z",
+    "video_duration": 0,
+    "video_url": null,
+    "mo_ta": "Nồng độ CO2 duy trì ở mức 1620 ppm quá 5 phút sau cảnh báo bằng giọng nói."
+  },
+  {
+    "id": 9933,
+    "trip_id": 5819,
+    "driver_name": "Trần Đình Trọng",
+    "vehicle_plate": "29H-882.11",
+    "loai_vi_pham": "DIEN_THOAI",
+    "diem_tru": 5,
+    "trang_thai": "CONFIRMED",
+    "ai_confidence_score": 0.93,
+    "thoi_gian_vi_pham": "2026-09-23T06:20:15Z",
+    "thoi_gian_bat_dau_theo_doi": "2026-09-23T06:20:12Z",
+    "video_duration": 10,
+    "video_url": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
+    "mo_ta": "Tay cầm điện thoại áp vào tai trong lúc xe đang lưu thông tốc độ 65km/h."
+  },
+  {
+    "id": 9934,
+    "trip_id": 5815,
+    "driver_name": "Lê Hoàng Nam",
+    "vehicle_plate": "51D-492.30",
+    "loai_vi_pham": "MET_MOI_NGAP",
+    "diem_tru": 5,
+    "trang_thai": "REJECTED",
+    "ai_confidence_score": 0.54,
+    "thoi_gian_vi_pham": "2026-09-22T21:10:00Z",
+    "thoi_gian_bat_dau_theo_doi": "2026-09-22T21:05:00Z",
+    "video_duration": 10,
+    "video_url": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4",
+    "mo_ta": "Hệ thống Edge ghi nhận ngáp nhưng Server phân tích là tài xế đang hát theo nhạc (False Positive)."
+  }
+]

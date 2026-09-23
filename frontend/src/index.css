@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+@theme {
+  /* Tùy chỉnh màu sắc nhận diện hệ thống Dashboard IoT */
+  --color-brand-blue: #1e40af;     /* Xanh dương đậm: Màu chủ đạo của Header/Nút bấm */
+  --color-brand-dark: #0f172a;     /* Xanh đen (Slate 900): Màu của Sidebar */
+  --color-brand-light: #f8fafc;    /* Xám nhạt (Slate 50): Màu nền của trang */
+  
+  --color-alert-danger: #ef4444;   /* Đỏ: Ngủ gật / CO2 > 1500ppm / Báo động đỏ */
+  --color-alert-warning: #f59e0b;  /* Vàng: Ngáp nhiều / CO2 1000-1500ppm / Cảnh cáo */
+  --color-alert-safe: #10b981;     /* Xanh lá: Bình thường / Ca chạy an toàn */
+}
