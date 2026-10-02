@@ -17,6 +17,7 @@ options = FaceLandmarkerOptions(
     num_faces=1
 )
 
+#cv2.VideoCapture(0)
 cap = cv2.VideoCapture(0)
 
 timestamp_ms = 0

@@ -1,49 +1,39 @@
 import cv2
 import mediapipe as mp
-import numpy as np
 import json
-import os
+import math
+import time
 
-MODEL_PATH = "models/face_landmarker.task"
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+
+
 BASELINE_PATH = "calibration/baseline.json"
-
-K_EAR = 2.0
-K_MAR = 2.0
+MODEL_PATH = "models/face_landmarker.task"
 
 LEFT_EYE = [33, 160, 158, 133, 153, 144]
 RIGHT_EYE = [362, 385, 387, 263, 373, 380]
 
-MOUTH = {
-    "left": 61,
-    "right": 291,
-    "top": 13,
-    "bottom": 14
-}
-
-BaseOptions = mp.tasks.BaseOptions
-FaceLandmarker = mp.tasks.vision.FaceLandmarker
-FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
-RunningMode = mp.tasks.vision.RunningMode
-
-
-def landmark_to_point(landmark, width, height):
-    return np.array([
-        landmark.x * width,
-        landmark.y * height
-    ])
+MOUTH_LEFT = 61
+MOUTH_RIGHT = 291
+MOUTH_TOP = 13
+MOUTH_BOTTOM = 14
 
 
 def distance(p1, p2):
-    return np.linalg.norm(p1 - p2)
+    return math.sqrt(
+        (p1.x - p2.x) ** 2 +
+        (p1.y - p2.y) ** 2
+    )
 
 
-def calculate_ear(landmarks, eye_indices, width, height):
-    p1 = landmark_to_point(landmarks[eye_indices[0]], width, height)
-    p2 = landmark_to_point(landmarks[eye_indices[1]], width, height)
-    p3 = landmark_to_point(landmarks[eye_indices[2]], width, height)
-    p4 = landmark_to_point(landmarks[eye_indices[3]], width, height)
-    p5 = landmark_to_point(landmarks[eye_indices[4]], width, height)
-    p6 = landmark_to_point(landmarks[eye_indices[5]], width, height)
+def calculate_ear(landmarks, eye_indices):
+    p1 = landmarks[eye_indices[0]]
+    p2 = landmarks[eye_indices[1]]
+    p3 = landmarks[eye_indices[2]]
+    p4 = landmarks[eye_indices[3]]
+    p5 = landmarks[eye_indices[4]]
+    p6 = landmarks[eye_indices[5]]
 
     vertical_1 = distance(p2, p6)
     vertical_2 = distance(p3, p5)
@@ -55,30 +45,11 @@ def calculate_ear(landmarks, eye_indices, width, height):
     return (vertical_1 + vertical_2) / (2.0 * horizontal)
 
 
-def calculate_mar(landmarks, width, height):
-    left = landmark_to_point(
-        landmarks[MOUTH["left"]],
-        width,
-        height
-    )
-
-    right = landmark_to_point(
-        landmarks[MOUTH["right"]],
-        width,
-        height
-    )
-
-    top = landmark_to_point(
-        landmarks[MOUTH["top"]],
-        width,
-        height
-    )
-
-    bottom = landmark_to_point(
-        landmarks[MOUTH["bottom"]],
-        width,
-        height
-    )
+def calculate_mar(landmarks):
+    left = landmarks[MOUTH_LEFT]
+    right = landmarks[MOUTH_RIGHT]
+    top = landmarks[MOUTH_TOP]
+    bottom = landmarks[MOUTH_BOTTOM]
 
     horizontal = distance(left, right)
     vertical = distance(top, bottom)
@@ -89,19 +60,19 @@ def calculate_mar(landmarks, width, height):
     return vertical / horizontal
 
 
-if not os.path.exists(BASELINE_PATH):
-    print("baseline.json not found.")
-    print("Please run calibration first.")
-    exit()
+def calculate_z_score(value, mean, std):
+    if std <= 0:
+        return 0.0
+
+    return (value - mean) / std
 
 
-with open(
-    BASELINE_PATH,
-    "r",
-    encoding="utf-8"
-) as file:
-    baseline = json.load(file)
+def load_baseline():
+    with open(BASELINE_PATH, "r", encoding="utf-8") as file:
+        return json.load(file)
 
+
+baseline = load_baseline()
 
 ear_mean = baseline["ear"]["mean"]
 ear_std = baseline["ear"]["std"]
@@ -110,175 +81,191 @@ mar_mean = baseline["mar"]["mean"]
 mar_std = baseline["mar"]["std"]
 
 
-ear_threshold = ear_mean - K_EAR * ear_std
-mar_threshold = mar_mean + K_MAR * mar_std
+print("===== DRIVER BASELINE =====")
+print(f"EAR mean : {ear_mean:.4f}")
+print(f"EAR std  : {ear_std:.4f}")
+print(f"MAR mean : {mar_mean:.4f}")
+print(f"MAR std  : {mar_std:.4f}")
+print("============================")
 
 
-print("Baseline loaded")
-print()
-print(f"EAR mean      : {ear_mean:.4f}")
-print(f"EAR std       : {ear_std:.4f}")
-print(f"EAR threshold : {ear_threshold:.4f}")
-print()
-print(f"MAR mean      : {mar_mean:.4f}")
-print(f"MAR std       : {mar_std:.4f}")
-print(f"MAR threshold : {mar_threshold:.4f}")
-print()
+base_options = python.BaseOptions(
+    model_asset_path=MODEL_PATH
+)
 
-
-options = FaceLandmarkerOptions(
-    base_options=BaseOptions(
-        model_asset_path=MODEL_PATH
-    ),
-    running_mode=RunningMode.VIDEO,
+options = vision.FaceLandmarkerOptions(
+    base_options=base_options,
+    running_mode=vision.RunningMode.VIDEO,
     num_faces=1
 )
 
+face_landmarker = vision.FaceLandmarker.create_from_options(options)
+#"rtsp://192.168.1.10:554/user=admin_password=tlJwpbo6_channel=1_stream=0.sdp?real_stream"
 cap = cv2.VideoCapture(0)
 
-if not cap.isOpened():
-    print("Cannot open camera.")
-    exit()
+start_time = time.time()
 
-timestamp_ms = 0
+while True:
 
+    ret, frame = cap.read()
 
-with FaceLandmarker.create_from_options(options) as landmarker:
+    if not ret:
+        break
 
-    while cap.isOpened():
+    rgb_frame = cv2.cvtColor(
+        frame,
+        cv2.COLOR_BGR2RGB
+    )
 
-        ret, frame = cap.read()
+    mp_image = mp.Image(
+        image_format=mp.ImageFormat.SRGB,
+        data=rgb_frame
+    )
 
-        if not ret:
-            break
+    timestamp_ms = int(
+        (time.time() - start_time) * 1000
+    )
 
-        frame = cv2.flip(frame, 1)
+    result = face_landmarker.detect_for_video(
+        mp_image,
+        timestamp_ms
+    )
 
-        height, width = frame.shape[:2]
+    if result.face_landmarks:
 
-        rgb_frame = cv2.cvtColor(
+        landmarks = result.face_landmarks[0]
+
+        ear_left = calculate_ear(
+            landmarks,
+            LEFT_EYE
+        )
+
+        ear_right = calculate_ear(
+            landmarks,
+            RIGHT_EYE
+        )
+
+        ear = (ear_left + ear_right) / 2.0
+
+        mar = calculate_mar(landmarks)
+
+        z_ear = calculate_z_score(
+            ear,
+            ear_mean,
+            ear_std
+        )
+
+        z_mar = calculate_z_score(
+            mar,
+            mar_mean,
+            mar_std
+        )
+
+        cv2.putText(
             frame,
-            cv2.COLOR_BGR2RGB
+            f"EAR: {ear:.3f}",
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 0),
+            2
         )
 
-        mp_image = mp.Image(
-            image_format=mp.ImageFormat.SRGB,
-            data=rgb_frame
+        cv2.putText(
+            frame,
+            f"MAR: {mar:.3f}",
+            (20, 70),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 0),
+            2
         )
 
-        result = landmarker.detect_for_video(
-            mp_image,
-            timestamp_ms
+        cv2.putText(
+            frame,
+            f"Z_EAR: {z_ear:.2f}",
+            (20, 105),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 0),
+            2
         )
 
-        timestamp_ms += 33
+        cv2.putText(
+            frame,
+            f"Z_MAR: {z_mar:.2f}",
+            (20, 140),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 0),
+            2
+        )
 
-        if result.face_landmarks:
-
-            landmarks = result.face_landmarks[0]
-
-            left_ear = calculate_ear(
-                landmarks,
-                LEFT_EYE,
-                width,
-                height
-            )
-
-            right_ear = calculate_ear(
-                landmarks,
-                RIGHT_EYE,
-                width,
-                height
-            )
-
-            ear = (left_ear + right_ear) / 2.0
-
-            mar = calculate_mar(
-                landmarks,
-                width,
-                height
-            )
-
-            if ear < ear_threshold:
-                eye_status = "EYE CLOSED"
-            else:
-                eye_status = "EYE OPEN"
-
-            if mar > mar_threshold:
-                mouth_status = "MOUTH OPEN"
-            else:
-                mouth_status = "MOUTH NORMAL"
-
-            cv2.putText(
-                frame,
-                f"EAR: {ear:.3f}",
-                (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2
-            )
-
-            cv2.putText(
-                frame,
-                f"EAR Threshold: {ear_threshold:.3f}",
-                (20, 75),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2
-            )
-
-            cv2.putText(
-                frame,
-                f"MAR: {mar:.3f}",
-                (20, 110),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2
-            )
-
-            cv2.putText(
-                frame,
-                f"Eye: {eye_status}",
-                (20, 155),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 255, 0),
-                2
-            )
-
-            cv2.putText(
-                frame,
-                f"Mouth: {mouth_status}",
-                (20, 195),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 255, 0),
-                2
-            )
-
+        if z_ear < -2.0:
+            eye_status = "EYE DEVIATION"
         else:
+            eye_status = "EYE NORMAL"
 
-            cv2.putText(
-                frame,
-                "NO FACE",
-                (20, 50),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.9,
-                (0, 0, 255),
-                2
-            )
+        if z_mar > 2.0:
+            mouth_status = "MOUTH DEVIATION"
+        else:
+            mouth_status = "MOUTH NORMAL"
 
-        cv2.imshow(
-            "Realtime Face Features",
-            frame
+        eye_color = (
+            (0, 0, 255)
+            if z_ear < -2.0
+            else (0, 255, 0)
         )
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+        mouth_color = (
+            (0, 0, 255)
+            if z_mar > 2.0
+            else (0, 255, 0)
+        )
+
+        cv2.putText(
+            frame,
+            eye_status,
+            (20, 180),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            eye_color,
+            2
+        )
+
+        cv2.putText(
+            frame,
+            mouth_status,
+            (20, 215),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            mouth_color,
+            2
+        )
+
+    else:
+
+        cv2.putText(
+            frame,
+            "NO FACE",
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 0, 255),
+            2
+        )
+
+    cv2.imshow(
+        "Realtime Driver Features",
+        frame
+    )
+
+    key = cv2.waitKey(1) & 0xFF
+
+    if key == ord("q"):
+        break
 
 
 cap.release()
+face_landmarker.close()
 cv2.destroyAllWindows()

@@ -13,8 +13,8 @@ SAMPLE_INTERVAL = 1.0 / BUFFER_FPS
 frame_buffer = deque(maxlen=BUFFER_SIZE)
 
 
-cap = cv2.VideoCapture(0)
 
+cap = cv2.VideoCapture(0)
 if not cap.isOpened():
     print("Cannot open camera")
     exit()
