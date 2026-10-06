@@ -6,36 +6,110 @@
     "tai_trong": "30 Tấn",
     "trang_thai": "DANG_CHAY",
     "iot_device": {
+      "id": 104,
       "mac_address": "00:1B:44:11:3A:B7",
       "phien_ban": "v2.1 (Pi4 + ESP32)",
       "trang_thai": "ONLINE"
     },
-    "tai_xe_hien_tai": "Nguyễn Văn Hùng"
+    "tai_xe_hien_tai": "Nguyễn Văn Hùng",
+    "driver_id": 12,
+    "trip_id": 5821,
+    "telemetry": {
+      "kinh_do": 108.2120,
+      "vi_do": 16.0680,
+      "toc_do": 62.5,
+      "co2_ppm": 850,
+      "trang_thai_canh_bao": "NORMAL",
+      "thoi_gian_cap_nhat": "2026-09-24T13:30:00Z"
+    }
   },
   {
     "id": 2,
     "bien_so": "43C-901.22",
     "loai_xe": "Tải thùng 15 tấn",
     "tai_trong": "15 Tấn",
-    "trang_thai": "SAN_SANG",
+    "trang_thai": "DANG_CHAY",
     "iot_device": {
+      "id": 105,
       "mac_address": "00:1B:44:11:3A:C8",
       "phien_ban": "v2.1 (Pi4 + ESP32)",
       "trang_thai": "ONLINE"
     },
-    "tai_xe_hien_tai": null
+    "tai_xe_hien_tai": "Phạm Quốc Bảo",
+    "driver_id": 15,
+    "trip_id": 5820,
+    "telemetry": {
+      "kinh_do": 108.1540,
+      "vi_do": 15.9800,
+      "toc_do": 54.0,
+      "co2_ppm": 1280,
+      "trang_thai_canh_bao": "CANH_CAO_VANG",
+      "thoi_gian_cap_nhat": "2026-09-24T13:32:00Z"
+    }
   },
   {
     "id": 3,
     "bien_so": "29H-882.11",
     "loai_xe": "Container 20ft",
     "tai_trong": "20 Tấn",
+    "trang_thai": "DANG_CHAY",
+    "iot_device": {
+      "id": 106,
+      "mac_address": "00:1B:44:11:3A:D9",
+      "phien_ban": "v2.1 (Pi4 + ESP32)",
+      "trang_thai": "ONLINE"
+    },
+    "tai_xe_hien_tai": "Trần Đình Trọng",
+    "driver_id": 20,
+    "trip_id": 5819,
+    "telemetry": {
+      "kinh_do": 106.3125,
+      "vi_do": 20.9388,
+      "toc_do": 68.0,
+      "co2_ppm": 640,
+      "trang_thai_canh_bao": "NORMAL",
+      "thoi_gian_cap_nhat": "2026-09-24T13:28:00Z"
+    }
+  },
+  {
+    "id": 4,
+    "bien_so": "51D-492.30",
+    "loai_xe": "Tải đông lạnh 10 tấn",
+    "tai_trong": "10 Tấn",
+    "trang_thai": "SAN_SANG",
+    "iot_device": {
+      "id": 107,
+      "mac_address": "00:1B:44:11:3A:E1",
+      "phien_ban": "v2.1 (Pi4 + ESP32)",
+      "trang_thai": "ONLINE"
+    },
+    "tai_xe_hien_tai": "Lê Hoàng Nam",
+    "driver_id": 22,
+    "trip_id": null,
+    "telemetry": {
+      "kinh_do": 106.7000,
+      "vi_do": 10.7700,
+      "toc_do": 0,
+      "co2_ppm": 450,
+      "trang_thai_canh_bao": "NORMAL",
+      "thoi_gian_cap_nhat": "2026-09-24T12:00:00Z"
+    }
+  },
+  {
+    "id": 5,
+    "bien_so": "36C-551.88",
+    "loai_xe": "Container 40ft",
+    "tai_trong": "32 Tấn",
     "trang_thai": "BAO_DUONG",
     "iot_device": {
-      "mac_address": "00:1B:44:11:3A:D9",
+      "id": 108,
+      "mac_address": "00:1B:44:11:3A:F2",
       "phien_ban": "v2.0 (Pi3)",
       "trang_thai": "OFFLINE"
     },
-    "tai_xe_hien_tai": null
+    "tai_xe_hien_tai": null,
+    "driver_id": null,
+    "trip_id": null,
+    "telemetry": null
   }
 ]

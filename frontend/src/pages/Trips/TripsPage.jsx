@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import toast from "react-hot-toast";
 import mockShifts from "../../mock/mockShifts.json";
 
 function TripsPage() {
@@ -193,7 +194,7 @@ function TripsPage() {
                   {/* Hành động */}
                   <td className="px-4 py-4 text-right">
                     <button
-                      onClick={() => alert(`Xem chi tiết ca #${shift.id}`)}
+                      onClick={() => toast(`Chi tiết ca #${shift.id}: Tuyến ${shift.route.ten_tuyen}`, { icon: 'ℹ️' })}
                       className="text-brand-blue text-xs font-bold hover:underline"
                     >
                       Chi tiết

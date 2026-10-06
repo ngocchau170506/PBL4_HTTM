@@ -1,0 +1,42 @@
+[
+  {
+    "id": 1,
+    "ten_tuyen": "Hà Nội - Hải Phòng",
+    "khoang_cach_km": 120.5,
+    "diem_dau": "Kho Cảng Cát Lái - Hải Phòng",
+    "diem_cuoi": "Kho ICD Mỹ Đình - Hà Nội",
+    "thoi_gian_chay_uoc_tinh_gio": 2.5
+  },
+  {
+    "id": 2,
+    "ten_tuyen": "Đà Nẵng - Huế",
+    "khoang_cach_km": 105.0,
+    "diem_dau": "Khu công nghiệp Hòa Khánh - Đà Nẵng",
+    "diem_cuoi": "KCN Phú Bài - Thừa Thiên Huế",
+    "thoi_gian_chay_uoc_tinh_gio": 2.2
+  },
+  {
+    "id": 3,
+    "ten_tuyen": "Đà Nẵng - Quy Nhơn",
+    "khoang_cach_km": 305.5,
+    "diem_dau": "Cảng Tiên Sa - Đà Nẵng",
+    "diem_cuoi": "Cảng Quy Nhơn - Bình Định",
+    "thoi_gian_chay_uoc_tinh_gio": 6.5
+  },
+  {
+    "id": 4,
+    "ten_tuyen": "TP. Hồ Chí Minh - Phan Thiết",
+    "khoang_cach_km": 215.0,
+    "diem_dau": "Tổng kho Sóng Thần - Bình Dương",
+    "diem_cuoi": "KCN Phan Thiết - Bình Thuận",
+    "thoi_gian_chay_uoc_tinh_gio": 4.5
+  },
+  {
+    "id": 5,
+    "ten_tuyen": "TP. Hồ Chí Minh - Cần Thơ",
+    "khoang_cach_km": 165.0,
+    "diem_dau": "Khu chế xuất Tân Thuận - TP.HCM",
+    "diem_cuoi": "KCN Trà Nóc - Cần Thơ",
+    "thoi_gian_chay_uoc_tinh_gio": 3.5
+  }
+]

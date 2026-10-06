@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext, useEffect } from "react";
+import React, { createContext, useState, useContext } from "react";
 
 // Tạo Context để lưu trữ thông tin đăng nhập
 const AuthContext = createContext();

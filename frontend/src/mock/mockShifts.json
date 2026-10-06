@@ -4,10 +4,11 @@
     "driver": {
       "id": 12,
       "ho_ten": "Nguyễn Văn Hùng",
-      "sdt": "0905123456"
+      "sdt": "0905123456",
+      "uy_tin": 78
     },
     "vehicle": {
-      "id": 7,
+      "id": 1,
       "bien_so": "43C-128.45",
       "loai_xe": "Container 40ft"
     },
@@ -25,52 +26,113 @@
         "ly_do": "Trùng khung giờ yếu sinh học (13:00 - 15:00) của tài xế"
       }
     ],
-    "trip_id": 5822
+    "trip_id": 5821,
+    "created_by": 2,
+    "created_at": "2026-09-23T10:00:00Z"
   },
   {
     "id": 3391,
     "driver": {
       "id": 15,
       "ho_ten": "Phạm Quốc Bảo",
-      "sdt": "0912987654"
+      "sdt": "0912987654",
+      "uy_tin": 62
     },
     "vehicle": {
-      "id": 8,
+      "id": 2,
       "bien_so": "43C-901.22",
       "loai_xe": "Tải thùng 15 tấn"
     },
     "route": {
-      "id": 1,
+      "id": 2,
       "ten_tuyen": "Đà Nẵng - Huế",
-      "khoang_cach_km": 102.0
+      "khoang_cach_km": 105.0
     },
     "thoi_gian_bat_dau_du_kien": "2026-09-25T07:30:00Z",
     "thoi_gian_ket_thuc_du_kien": "2026-09-25T11:30:00Z",
     "trang_thai": "SCHEDULED",
     "canh_bao_khi_tao": [],
-    "trip_id": null
+    "trip_id": null,
+    "created_by": 2,
+    "created_at": "2026-09-24T08:30:00Z"
   },
   {
-    "id": 3389,
+    "id": 3392,
     "driver": {
-      "id": 18,
-      "ho_ten": "Hoàng Minh Tuấn",
-      "sdt": "0988112233"
+      "id": 20,
+      "ho_ten": "Trần Đình Trọng",
+      "sdt": "0934567890",
+      "uy_tin": 92
     },
     "vehicle": {
-      "id": 2,
+      "id": 3,
       "bien_so": "29H-882.11",
       "loai_xe": "Container 20ft"
     },
     "route": {
-      "id": 5,
-      "ten_tuyen": "Đà Nẵng - Quảng Ngãi",
-      "khoang_cach_km": 145.0
+      "id": 1,
+      "ten_tuyen": "Hà Nội - Hải Phòng",
+      "khoang_cach_km": 120.5
     },
-    "thoi_gian_bat_dau_du_kien": "2026-09-23T06:00:00Z",
-    "thoi_gian_ket_thuc_du_kien": "2026-09-23T10:30:00Z",
+    "thoi_gian_bat_dau_du_kien": "2026-09-25T14:00:00Z",
+    "thoi_gian_ket_thuc_du_kien": "2026-09-25T18:00:00Z",
+    "trang_thai": "ACCEPTED",
+    "canh_bao_khi_tao": [],
+    "trip_id": null,
+    "created_by": 2,
+    "created_at": "2026-09-24T09:15:00Z"
+  },
+  {
+    "id": 3393,
+    "driver": {
+      "id": 22,
+      "ho_ten": "Lê Hoàng Nam",
+      "sdt": "0977665544",
+      "uy_tin": 85
+    },
+    "vehicle": {
+      "id": 4,
+      "bien_so": "51D-492.30",
+      "loai_xe": "Tải đông lạnh 10 tấn"
+    },
+    "route": {
+      "id": 4,
+      "ten_tuyen": "TP. Hồ Chí Minh - Phan Thiết",
+      "khoang_cach_km": 215.0
+    },
+    "thoi_gian_bat_dau_du_kien": "2026-09-26T05:00:00Z",
+    "thoi_gian_ket_thuc_du_kien": "2026-09-26T12:00:00Z",
+    "trang_thai": "DECLINED",
+    "ly_do_tu_choi": "Trùng lịch kiểm tra sức khỏe tổng quát định kỳ tại bệnh viện",
+    "canh_bao_khi_tao": [],
+    "trip_id": null,
+    "created_by": 2,
+    "created_at": "2026-09-24T10:00:00Z"
+  },
+  {
+    "id": 3389,
+    "driver": {
+      "id": 12,
+      "ho_ten": "Nguyễn Văn Hùng",
+      "sdt": "0905123456",
+      "uy_tin": 78
+    },
+    "vehicle": {
+      "id": 1,
+      "bien_so": "43C-128.45",
+      "loai_xe": "Container 40ft"
+    },
+    "route": {
+      "id": 2,
+      "ten_tuyen": "Đà Nẵng - Huế",
+      "khoang_cach_km": 105.0
+    },
+    "thoi_gian_bat_dau_du_kien": "2026-09-22T13:00:00Z",
+    "thoi_gian_ket_thuc_du_kien": "2026-09-22T18:30:00Z",
     "trang_thai": "COMPLETED",
     "canh_bao_khi_tao": [],
-    "trip_id": 5819
+    "trip_id": 5790,
+    "created_by": 2,
+    "created_at": "2026-09-21T10:00:00Z"
   }
 ]

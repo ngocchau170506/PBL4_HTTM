@@ -1,16 +1,14 @@
-import React, { useState, useEffect } from "react";
-import mockDrivers from "../../mock/mockDrivers";
+import React, { useState } from "react";
+import mockDrivers from "../../mock/mockDrivers.json";
 
 function DashboardPage() {
-  const [fleetStatus, setFleetStatus] = useState([]);
-  useEffect(() => {
-    const activeFleet = mockDrivers.map((driver) => ({
+  const [fleetStatus] = useState(() =>
+    mockDrivers.map((driver) => ({
       ...driver,
       kinh_do: 106.6881 + Math.random() * 0.01,
       vi_do: 20.8449 + Math.random() * 0.01,
-    }));
-    setFleetStatus(activeFleet);
-  }, []);
+    }))
+  );
 
   const totalVehicles = fleetStatus.length;
   const safeVehicles = fleetStatus.filter(

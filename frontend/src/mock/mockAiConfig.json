@@ -1,0 +1,19 @@
+{
+  "auto_confirm_min": 0.85,
+  "manual_review_min": 0.60,
+  "auto_reject_below": 0.60,
+  "microsleep_eye_closed_sec": 1.5,
+  "yawn_sliding_window_min": 5,
+  "yawn_trigger_count": 3,
+  "co2_warning_threshold_ppm": 1000,
+  "co2_danger_threshold_ppm": 1500,
+  "co2_countdown_minutes": 5,
+  "phone_distraction_seconds": 3.0,
+  "min_rest_hours_between_shifts": 10,
+  "max_driving_hours_per_shift": 8,
+  "manual_review_deadline_hours": 24,
+  "bonus_safe_shift": 5,
+  "bonus_safe_night_shift": 10,
+  "updated_at": "2026-09-19T14:15:00Z",
+  "updated_by": "Trần Quản Trị"
+}

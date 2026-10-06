@@ -1,0 +1,122 @@
+[
+  {
+    "id": 1,
+    "driver_id": 12,
+    "driver_name": "Nguyễn Văn Hùng",
+    "khung_gio_yeu_sinh_hoc": ["13:00 - 15:00", "02:00 - 04:00"],
+    "thoi_gian_lai_toi_da_khuyen_nghi": 420,
+    "thoi_gian_lai_trung_binh_truoc_met_moi": 210,
+    "tan_suat_vi_pham_30_ngay": {
+      "BUON_NGU": 2,
+      "MET_MOI_NGAP": 4,
+      "CO2_CAO": 2,
+      "DIEN_THOAI": 1
+    },
+    "is_default_profile": false,
+    "ky_tinh_toan_tu": "2026-08-24",
+    "ky_tinh_toan_den": "2026-09-23",
+    "danh_gia_chung": "Nhịp sinh học giảm rõ rệt đầu giờ chiều (13h-15h). Khuyến nghị không xếp ca đêm liên tục quá 2 ngày.",
+    "hieu_chuan_khuon_mat": {
+      "trang_thai": "SUCCESS",
+      "eye_open_ratio": 0.34,
+      "head_pose_yaw_baseline": -1.2,
+      "thoi_gian_hieu_chuan": "2026-09-24T12:50:00Z"
+    }
+  },
+  {
+    "id": 2,
+    "driver_id": 15,
+    "driver_name": "Phạm Quốc Bảo",
+    "khung_gio_yeu_sinh_hoc": ["00:00 - 03:00"],
+    "thoi_gian_lai_toi_da_khuyen_nghi": 360,
+    "thoi_gian_lai_trung_binh_truoc_met_moi": 180,
+    "tan_suat_vi_pham_30_ngay": {
+      "BUON_NGU": 3,
+      "MET_MOI_NGAP": 6,
+      "CO2_CAO": 1,
+      "DIEN_THOAI": 3
+    },
+    "is_default_profile": false,
+    "ky_tinh_toan_tu": "2026-08-24",
+    "ky_tinh_toan_den": "2026-09-23",
+    "danh_gia_chung": "Điểm uy tín 62 (Cảnh cáo vàng). Đang bị giảm 30% ca chạy đêm theo quy định SRS 3.3. Cần giám sát chặt chẽ.",
+    "hieu_chuan_khuon_mat": {
+      "trang_thai": "SUCCESS",
+      "eye_open_ratio": 0.31,
+      "head_pose_yaw_baseline": 0.8,
+      "thoi_gian_hieu_chuan": "2026-09-24T11:45:00Z"
+    }
+  },
+  {
+    "id": 3,
+    "driver_id": 18,
+    "driver_name": "Hoàng Minh Tuấn",
+    "khung_gio_yeu_sinh_hoc": ["14:00 - 16:00", "01:00 - 05:00"],
+    "thoi_gian_lai_toi_da_khuyen_nghi": 300,
+    "thoi_gian_lai_trung_binh_truoc_met_moi": 120,
+    "tan_suat_vi_pham_30_ngay": {
+      "BUON_NGU": 7,
+      "MET_MOI_NGAP": 12,
+      "CO2_CAO": 4,
+      "DIEN_THOAI": 5
+    },
+    "is_default_profile": false,
+    "ky_tinh_toan_tu": "2026-08-24",
+    "ky_tinh_toan_den": "2026-09-23",
+    "danh_gia_chung": "Điểm uy tín 18 (Báo động đỏ). Tài khoản bị đình chỉ công tác theo quy tắc SRS 3.3. Đang chờ xem xét hội đồng kỷ luật.",
+    "hieu_chuan_khuon_mat": {
+      "trang_thai": "FAILED",
+      "eye_open_ratio": 0.18,
+      "head_pose_yaw_baseline": 4.5,
+      "thoi_gian_hieu_chuan": "2026-09-20T08:00:00Z"
+    }
+  },
+  {
+    "id": 4,
+    "driver_id": 20,
+    "driver_name": "Trần Đình Trọng",
+    "khung_gio_yeu_sinh_hoc": ["03:00 - 05:00"],
+    "thoi_gian_lai_toi_da_khuyen_nghi": 480,
+    "thoi_gian_lai_trung_binh_truoc_met_moi": 270,
+    "tan_suat_vi_pham_30_ngay": {
+      "BUON_NGU": 0,
+      "MET_MOI_NGAP": 1,
+      "CO2_CAO": 0,
+      "DIEN_THOAI": 1
+    },
+    "is_default_profile": false,
+    "ky_tinh_toan_tu": "2026-08-24",
+    "ky_tinh_toan_den": "2026-09-23",
+    "danh_gia_chung": "Thể trạng xuất sắc, điểm uy tín cao (92). Thích hợp điều phối các cung đường dài xuyên tỉnh và ca đêm.",
+    "hieu_chuan_khuon_mat": {
+      "trang_thai": "SUCCESS",
+      "eye_open_ratio": 0.38,
+      "head_pose_yaw_baseline": 0.2,
+      "thoi_gian_hieu_chuan": "2026-09-24T05:30:00Z"
+    }
+  },
+  {
+    "id": 5,
+    "driver_id": 22,
+    "driver_name": "Lê Hoàng Nam",
+    "khung_gio_yeu_sinh_hoc": ["13:00 - 14:30"],
+    "thoi_gian_lai_toi_da_khuyen_nghi": 450,
+    "thoi_gian_lai_trung_binh_truoc_met_moi": 240,
+    "tan_suat_vi_pham_30_ngay": {
+      "BUON_NGU": 1,
+      "MET_MOI_NGAP": 2,
+      "CO2_CAO": 1,
+      "DIEN_THOAI": 0
+    },
+    "is_default_profile": false,
+    "ky_tinh_toan_tu": "2026-08-24",
+    "ky_tinh_toan_den": "2026-09-23",
+    "danh_gia_chung": "Thể trạng ổn định. Chấp hành tốt quy định an toàn xe buồng lái.",
+    "hieu_chuan_khuon_mat": {
+      "trang_thai": "SUCCESS",
+      "eye_open_ratio": 0.35,
+      "head_pose_yaw_baseline": -0.4,
+      "thoi_gian_hieu_chuan": "2026-09-23T20:45:00Z"
+    }
+  }
+]

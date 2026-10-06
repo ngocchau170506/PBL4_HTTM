@@ -1,0 +1,42 @@
+[
+  {
+    "id": 1,
+    "ma_loai": "BUON_NGU",
+    "ten_loai": "Ngủ gật / Mất tập trung kéo dài (Microsleep)",
+    "diem_tru_mac_dinh": 10,
+    "icon": "🚨",
+    "dieu_kien_kich_hoat": "Mắt nhắm >= 1.5 - 2.0 giây HOẶC gục đầu đột ngột",
+    "xu_ly_offline": "Còi báo động khẩn cấp, cắt video 10s lưu local",
+    "xu_ly_online": "Báo đỏ điều phối viên, xác thực video AI -> Trừ 10 điểm uy tín"
+  },
+  {
+    "id": 2,
+    "ma_loai": "MET_MOI_NGAP",
+    "ten_loai": "Mệt mỏi / Ngáp liên tục nhiều lần",
+    "diem_tru_mac_dinh": 5,
+    "icon": "🥱",
+    "dieu_kien_kich_hoat": "Cửa sổ trượt: Ngáp >= 3 lần trong vòng 5 phút",
+    "xu_ly_offline": "Phát loa nhắc tìm trạm nghỉ, gửi GPS về Server tìm trạm gần nhất",
+    "xu_ly_online": "Đếm ngược thời gian T+15 phút, nếu quá hạn không dừng nghỉ -> Trừ 5 điểm"
+  },
+  {
+    "id": 3,
+    "ma_loai": "CO2_CAO",
+    "ten_loai": "Nồng độ CO2 vượt ngưỡng an toàn",
+    "diem_tru_mac_dinh": 2,
+    "icon": "⚠️",
+    "dieu_kien_kich_hoat": "Cảm biến CO2 đo được > 1000 - 1500 ppm",
+    "xu_ly_offline": "Phát loa: 'Mở cửa lấy gió ngoài', đếm ngược 5 phút",
+    "xu_ly_online": "Quá 5 phút CO2 không giảm về mức an toàn -> Trừ 2 điểm"
+  },
+  {
+    "id": 4,
+    "ma_loai": "DIEN_THOAI",
+    "ten_loai": "Sử dụng điện thoại khi đang lái xe",
+    "diem_tru_mac_dinh": 5,
+    "icon": "📱",
+    "dieu_kien_kich_hoat": "Tay cầm điện thoại áp tai HOẶC nhìn xuống > 3 giây",
+    "xu_ly_offline": "Phát loa: 'Yêu cầu tập trung lái xe', cắt video 10s",
+    "xu_ly_online": "Server AI tái thẩm định video -> Trừ 5 điểm"
+  }
+]

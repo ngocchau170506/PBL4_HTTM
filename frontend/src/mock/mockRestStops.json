@@ -1,0 +1,41 @@
+[
+  {
+    "trip_id": 5821,
+    "tram_nghi": {
+      "id": 101,
+      "ten": "Trạm dừng nghỉ Sa Huỳnh - Quảng Ngãi",
+      "kinh_do": 109.0567,
+      "vi_do": 14.7321,
+      "khoang_cach_km": 6.8,
+      "thoi_gian_du_kien_phut": 8,
+      "dia_chi": "Km 984+200 Quốc lộ 1A, Phổ Thạnh, Đức Phổ, Quảng Ngãi",
+      "tien_ich": ["Bãi đỗ xe container 50 xe", "Khu nghỉ ngơi có điều hòa", "Căn tin 24/7", "Trạm sạc & Cứu hộ"]
+    }
+  },
+  {
+    "trip_id": 5819,
+    "tram_nghi": {
+      "id": 102,
+      "ten": "Trạm dừng nghỉ V52 Hải Dương",
+      "kinh_do": 106.3125,
+      "vi_do": 20.9388,
+      "khoang_cach_km": 8.4,
+      "thoi_gian_du_kien_phut": 9,
+      "dia_chi": "Km 52 Cao tốc Hà Nội - Hải Phòng",
+      "tien_ich": ["Cửa hàng tiện lợi", "Cây xăng Petrolimex", "Khu vệ sinh sạch", "Bãi xe tải nặng"]
+    }
+  },
+  {
+    "trip_id": 5815,
+    "tram_nghi": {
+      "id": 103,
+      "ten": "Trạm dừng nghỉ Dầu Giây - Đồng Nai",
+      "kinh_do": 107.1350,
+      "vi_do": 10.9250,
+      "khoang_cach_km": 12.0,
+      "thoi_gian_du_kien_phut": 14,
+      "dia_chi": "Km 1826 Quốc lộ 1A, Xuân Thạnh, Thống Nhất, Đồng Nai",
+      "tien_ich": ["Khu ăn uống lớn", "Phòng tắm nước nóng cho tài xế", "Khu bảo dưỡng lốp"]
+    }
+  }
+]

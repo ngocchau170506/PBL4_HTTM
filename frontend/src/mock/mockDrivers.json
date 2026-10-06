@@ -8,7 +8,10 @@
     "uy_tin": 78,
     "cap_canh_bao": "NORMAL",
     "trang_thai_tai_xe": "ACTIVE",
-    "xe_hien_tai": "43C-128.45"
+    "xe_hien_tai": "43C-128.45",
+    "hieu_chuan_status": "SUCCESS",
+    "tong_so_ca_chay": 48,
+    "ti_le_an_toan_pct": 94
   },
   {
     "id": 15,
@@ -19,7 +22,10 @@
     "uy_tin": 62,
     "cap_canh_bao": "CANH_CAO_VANG",
     "trang_thai_tai_xe": "RESTRICTED",
-    "xe_hien_tai": "43C-901.22"
+    "xe_hien_tai": "43C-901.22",
+    "hieu_chuan_status": "SUCCESS",
+    "tong_so_ca_chay": 35,
+    "ti_le_an_toan_pct": 78
   },
   {
     "id": 18,
@@ -30,6 +36,37 @@
     "uy_tin": 18,
     "cap_canh_bao": "BAO_DONG_DO",
     "trang_thai_tai_xe": "LOCKED",
-    "xe_hien_tai": null
+    "xe_hien_tai": null,
+    "hieu_chuan_status": "FAILED",
+    "tong_so_ca_chay": 26,
+    "ti_le_an_toan_pct": 45
+  },
+  {
+    "id": 20,
+    "user_id": 20,
+    "ho_ten": "Trần Đình Trọng",
+    "sdt": "0934567890",
+    "bang_lai": "FC",
+    "uy_tin": 92,
+    "cap_canh_bao": "NORMAL",
+    "trang_thai_tai_xe": "ACTIVE",
+    "xe_hien_tai": "29H-882.11",
+    "hieu_chuan_status": "SUCCESS",
+    "tong_so_ca_chay": 64,
+    "ti_le_an_toan_pct": 98
+  },
+  {
+    "id": 22,
+    "user_id": 22,
+    "ho_ten": "Lê Hoàng Nam",
+    "sdt": "0977665544",
+    "bang_lai": "C",
+    "uy_tin": 85,
+    "cap_canh_bao": "NORMAL",
+    "trang_thai_tai_xe": "ACTIVE",
+    "xe_hien_tai": "51D-492.30",
+    "hieu_chuan_status": "SUCCESS",
+    "tong_so_ca_chay": 52,
+    "ti_le_an_toan_pct": 92
   }
 ]

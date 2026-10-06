@@ -1,0 +1,86 @@
+[
+  {
+    "id": 88123,
+    "user_id": 45,
+    "user_name": "Phạm Điều Phối",
+    "hanh_dong": "CONFIRM_VIOLATION",
+    "doi_tuong_loai": "violation",
+    "doi_tuong_id": 9931,
+    "gia_tri_truoc": {
+      "trang_thai": "PENDING_MANUAL_REVIEW"
+    },
+    "gia_tri_sau": {
+      "trang_thai": "MANUALLY_CONFIRMED"
+    },
+    "ly_do": "Xem video bằng chứng xác nhận tài xế có hành vi nhắm mắt ngủ gật gục đầu",
+    "created_at": "2026-09-23T09:00:05Z"
+  },
+  {
+    "id": 88122,
+    "user_id": 1,
+    "user_name": "Trần Quản Trị",
+    "hanh_dong": "LOCK_DRIVER",
+    "doi_tuong_loai": "driver",
+    "doi_tuong_id": 18,
+    "gia_tri_truoc": {
+      "trang_thai_tai_xe": "RESTRICTED",
+      "uy_tin": 28
+    },
+    "gia_tri_sau": {
+      "trang_thai_tai_xe": "LOCKED",
+      "uy_tin": 18
+    },
+    "ly_do": "Điểm uy tín an toàn rơi xuống ngưỡng Báo động đỏ (<= 20 điểm). Đình chỉ theo SRS 3.3",
+    "created_at": "2026-09-20T08:30:00Z"
+  },
+  {
+    "id": 88121,
+    "user_id": 45,
+    "user_name": "Phạm Điều Phối",
+    "hanh_dong": "REJECT_VIOLATION",
+    "doi_tuong_loai": "violation",
+    "doi_tuong_id": 9934,
+    "gia_tri_truoc": {
+      "trang_thai": "PENDING_MANUAL_REVIEW"
+    },
+    "gia_tri_sau": {
+      "trang_thai": "MANUALLY_REJECTED"
+    },
+    "ly_do": "False Alarm: Tài xế hát theo bài hát trên cabin xe, không phải ngáp mệt mỏi",
+    "created_at": "2026-09-22T21:30:00Z"
+  },
+  {
+    "id": 88120,
+    "user_id": 1,
+    "user_name": "Trần Quản Trị",
+    "hanh_dong": "UPDATE_AI_THRESHOLD",
+    "doi_tuong_loai": "config",
+    "doi_tuong_id": 1,
+    "gia_tri_truoc": {
+      "auto_confirm_min": 0.90,
+      "manual_review_min": 0.65
+    },
+    "gia_tri_sau": {
+      "auto_confirm_min": 0.85,
+      "manual_review_min": 0.60
+    },
+    "ly_do": "Cân bằng tỷ lệ phát hiện False Positive theo chỉ số NFR_3 (<5%)",
+    "created_at": "2026-09-19T14:15:00Z"
+  },
+  {
+    "id": 88119,
+    "user_id": 45,
+    "user_name": "Phạm Điều Phối",
+    "hanh_dong": "OVERRIDE_SHIFT_CREATION",
+    "doi_tuong_loai": "shift",
+    "doi_tuong_id": 3390,
+    "gia_tri_truoc": null,
+    "gia_tri_sau": {
+      "driver_id": 12,
+      "route_id": 3,
+      "canh_bao": "Trùng khung giờ yếu sinh học 13:00 - 15:00"
+    },
+    "ly_do": "Tài xế đã nghỉ ngơi đủ 12 tiếng buổi sáng, bổ sung nước giải khát tăng lực",
+    "created_at": "2026-09-23T10:00:00Z"
+  }
+]
