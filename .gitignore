@@ -32,3 +32,10 @@ yarn-error.log*
 
 # AI Agent config
 .agents/
+# Python & AI Module
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+AI/logs/*.log
+AI/logs/*.jsonl

@@ -1,0 +1,23 @@
+# ==============================================================================
+# YOLO26 UNIFIED DRIVER SAFETY DATASET CONFIGURATION
+# Bảng Cấu Hình Dataset Huấn Luyện Mô Hình Toàn Năng 8 Classes
+# ==============================================================================
+
+# Thư mục gốc chứa dữ liệu (tương đối so với file yaml hoặc đường dẫn tuyệt đối)
+path: ../dataset
+
+# Đường dẫn thư mục ảnh huấn luyện và kiểm thử
+train: images/train
+val: images/val
+test: images/test
+
+# 8 Classes Chuẩn Hóa Toàn Năng (All-In-One Unified Classes)
+names:
+  0: driver_face       # Khuôn mặt / Vùng đầu tài xế
+  1: eye_open          # Mắt mở tỉnh táo
+  2: eye_close         # Mắt nhắm buồn ngủ
+  3: mouth_normal      # Miệng khép bình thường / Không ngáp
+  4: mouth_yawn        # Miệng há to ngáp
+  5: cell_phone        # Cầm / nghe điện thoại
+  6: smoking           # Hút thuốc lá / vape
+  7: head_tilt         # Nghiêng đầu / Gục đầu ngủ
