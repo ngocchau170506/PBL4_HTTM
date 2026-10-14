@@ -3,7 +3,7 @@ import time
 import numpy as np
 from ultralytics import YOLO
 
-model = YOLO("models/best.pt")
+model = YOLO("AI/models/best.pt")
 cap = cv2.VideoCapture(0)
 
 if not cap.isOpened():
