@@ -1,0 +1,31 @@
+{
+  "_doc": "Cấu hình DUY NHẤT (R4). Không hard-code địa chỉ, fps, ngưỡng, timeout trong code. Giá trị đề xuất, chờ MAIN duyệt.",
+  "mode": "sim",
+  "camera": {
+    "source": "webcam",
+    "index": 0,
+    "uri": null,
+    "fps": 10,
+    "width": 640,
+    "height": 480
+  },
+  "esp32": {
+    "enabled": false,
+    "uri": null
+  },
+  "sampler": {
+    "target_fps": 5
+  },
+  "baseline": {
+    "seconds_min": 5,
+    "seconds_max": 10
+  },
+  "ai": {
+    "adapter": "stub",
+    "timeout_ms": 500
+  },
+  "response": {
+    "pre_event_ms": 2000,
+    "buffer_frames": 50
+  }
+}

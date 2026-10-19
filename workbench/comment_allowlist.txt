@@ -1,0 +1,4 @@
+# comment_allowlist.txt — CHỈ MAIN được sửa file này. AI không được sửa.
+# Mỗi dòng 1 ngoại lệ cho check_comments.py, dạng:  đường_dẫn|LUẬT|lý_do
+# Ví dụ:  src/fd_process/ai/stub.py|C4|StubAdapter.load() cố ý rỗng, chốt ngày 2026-xx-xx
+# Lý do để trống thì dòng không có hiệu lực.
