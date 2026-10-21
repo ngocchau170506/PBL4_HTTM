@@ -6,7 +6,7 @@ Mỗi component: VAI TRÒ | VÀO | RA | LỖI PHÁT RA | KHÔNG ĐƯỢC LÀM | 
 [C-CONNECT] fd_connect  (tiếp nhận kết nối: cam, ESP32, ...)
   VAI TRÒ : mở/đóng/giám sát kết nối, cấp địa chỉ nguồn (id, kiểu, uri)
   VÀO     : cấu hình từ fd_config (yaml/json)
-  RA      : RawPacket (xem logic.ts), sự kiện trạng thái kết nối
+  RA      : RawPacket (xem src/contracts/logic.py), sự kiện trạng thái kết nối
   LỖI     : E_CONN_OPEN, E_CONN_LOST, E_CONN_TIMEOUT
   KHÔNG   : xử lí ảnh, chạy AI, quyết định vi phạm
   TEST    : workbench/connect_probe (mở nguồn, đếm gói/giây, ngắt giả)
@@ -70,4 +70,5 @@ Mỗi component: VAI TRÒ | VÀO | RA | LỖI PHÁT RA | KHÔNG ĐƯỢC LÀM | 
 ======== QUY ƯỚC CHUNG ========
 - Tên mã lỗi: E_<FD>_<LOẠI>. Mọi lỗi mang: trace_id, nodePath, ts, mô tả ngắn.
 - Mọi component có hàm health() trả OK/DEGRADED/DOWN để fd_flow theo dõi.
-- Thêm component mới: ghi vào file này + feature-map.md + logic.ts (NodeId) trước khi viết code.
+- Thêm component mới: ghi vào file này + feature-map.md + src/contracts/logic.py (NodeId, qua Change Request) trước khi viết code.
+- DRAFT/logic.ts và DRAFT/state.ts là bản nháp cũ, không phải hợp đồng. Hợp đồng thật nằm ở src/contracts/logic.py và state.py.

@@ -1,17 +1,17 @@
 {
-  "_doc": "Cấu hình DUY NHẤT (R4). Không hard-code địa chỉ, fps, ngưỡng, timeout trong code. Giá trị đề xuất, chờ MAIN duyệt.",
+  "_doc": "Cấu hình DUY NHẤT (R4). Không hard-code địa chỉ, fps, ngưỡng, timeout trong code. Đã duyệt cấu hình RTSP Camera & cổng ESP32 COM3 cho G2/G2.5.",
   "mode": "sim",
   "camera": {
-    "source": "webcam",
+    "source": "rtsp",
     "index": 0,
-    "uri": null,
-    "fps": 10,
+    "uri": "rtsp://192.168.1.210:554/user=admin_password=tlJwpbo6_channel=1_stream=0&protocol=unicast&onvif=ture.sdp?real_stream",
+    "fps": 25,
     "width": 640,
     "height": 480
   },
   "esp32": {
     "enabled": false,
-    "uri": null
+    "uri": "COM3"
   },
   "sampler": {
     "target_fps": 5

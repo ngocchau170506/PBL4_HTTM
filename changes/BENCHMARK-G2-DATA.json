@@ -1,0 +1,158 @@
+{
+  "p1_throughput": [
+    {
+      "frames": 10000,
+      "time_s": 1.117,
+      "fps": 8950.0,
+      "mean_lat_us": 108.9,
+      "p50_lat_us": 108.9,
+      "p95_lat_us": 125.1,
+      "p99_lat_us": 178.6,
+      "peak_ram_mb": 0.333,
+      "mem_growth_kb": 329.15
+    },
+    {
+      "frames": 20000,
+      "time_s": 2.584,
+      "fps": 7738.7,
+      "mean_lat_us": 125.9,
+      "p50_lat_us": 116.2,
+      "p95_lat_us": 209.6,
+      "p99_lat_us": 238.7,
+      "peak_ram_mb": 0.953,
+      "mem_growth_kb": 555.58
+    },
+    {
+      "frames": 30000,
+      "time_s": 4.059,
+      "fps": 7391.2,
+      "mean_lat_us": 131.8,
+      "p50_lat_us": 116.1,
+      "p95_lat_us": 230.8,
+      "p99_lat_us": 253.4,
+      "peak_ram_mb": 1.557,
+      "mem_growth_kb": 775.82
+    },
+    {
+      "frames": 40000,
+      "time_s": 5.463,
+      "fps": 7322.6,
+      "mean_lat_us": 133.1,
+      "p50_lat_us": 115.8,
+      "p95_lat_us": 229.9,
+      "p99_lat_us": 254.2,
+      "peak_ram_mb": 2.192,
+      "mem_growth_kb": 1040.58
+    },
+    {
+      "frames": 50000,
+      "time_s": 7.863,
+      "fps": 6359.1,
+      "mean_lat_us": 153.3,
+      "p50_lat_us": 128.7,
+      "p95_lat_us": 243.9,
+      "p99_lat_us": 274.3,
+      "peak_ram_mb": 2.815,
+      "mem_growth_kb": 1264.0
+    }
+  ],
+  "p2_fps_cases": {
+    "cases": [
+      {
+        "name": "Webcam thấp",
+        "src_fps": 10,
+        "tgt_fps": 5,
+        "total_in": 100,
+        "passed": 50,
+        "expected": 50,
+        "mean_interval_ms": 200,
+        "expected_interval_ms": 200.0,
+        "jitter_stdev_ms": 0.0,
+        "measured_fps": 5.0
+      },
+      {
+        "name": "Camera RTSP thật (192.168.1.210)",
+        "src_fps": 25,
+        "tgt_fps": 5,
+        "total_in": 250,
+        "passed": 50,
+        "expected": 50,
+        "mean_interval_ms": 200,
+        "expected_interval_ms": 200.0,
+        "jitter_stdev_ms": 0.0,
+        "measured_fps": 5.0
+      },
+      {
+        "name": "Camera chuẩn 30 FPS",
+        "src_fps": 30,
+        "tgt_fps": 6,
+        "total_in": 300,
+        "passed": 60,
+        "expected": 60,
+        "mean_interval_ms": 166.66,
+        "expected_interval_ms": 166.67,
+        "jitter_stdev_ms": 0.48,
+        "measured_fps": 6.0
+      },
+      {
+        "name": "Camera tốc độ cao 60 FPS",
+        "src_fps": 60,
+        "tgt_fps": 5,
+        "total_in": 600,
+        "passed": 50,
+        "expected": 50,
+        "mean_interval_ms": 200,
+        "expected_interval_ms": 200.0,
+        "jitter_stdev_ms": 0.0,
+        "measured_fps": 5.0
+      },
+      {
+        "name": "Camera siêu tốc 120 FPS",
+        "src_fps": 120,
+        "tgt_fps": 6,
+        "total_in": 1200,
+        "passed": 60,
+        "expected": 60,
+        "mean_interval_ms": 166.66,
+        "expected_interval_ms": 166.67,
+        "jitter_stdev_ms": 0.48,
+        "measured_fps": 6.0
+      }
+    ]
+  },
+  "p3_esp32": {
+    "num_requests": 10000,
+    "total_time_s": 2.011,
+    "throughput_req_per_s": 4972.0,
+    "mean_latency_us": 197.06,
+    "p95_latency_us": 290.4,
+    "p99_latency_us": 319.3,
+    "camera_mean_latency_us": 139.04,
+    "system_state": "DEGRADED"
+  },
+  "p4_alert": {
+    "num_alerts": 2000,
+    "mean_latency_us": 18.57,
+    "mean_latency_ms": 0.019,
+    "p95_latency_us": 23.3,
+    "p99_latency_us": 31.5,
+    "max_latency_us": 91.8
+  },
+  "p5_ai_compat": {
+    "ai_throughput": 62666.0,
+    "mean_latency_us": 15.96,
+    "p95_latency_us": 25.5,
+    "before_gate_ok": true,
+    "timeout_protection_ok": true,
+    "after_gate_ok": true
+  },
+  "p6_endurance": {
+    "num_drivers": 20,
+    "total_frames": 2400,
+    "faults_injected": 1200,
+    "faults_caught": 1200,
+    "catch_rate": 100.0
+  },
+  "peak_ram_mb": 3.39,
+  "total_time_s": 30.98
+}
