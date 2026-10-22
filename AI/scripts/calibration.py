@@ -19,7 +19,7 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODEL_PATH = PROJECT_ROOT / "AI" / "models" / "face_landmarker.task"
 BASELINE_PATH = PROJECT_ROOT / "AI" / "calibration" / "baseline.json"
-CALIBRATION_SECONDS = 30.0
+CALIBRATION_SECONDS = 15.0
 SAMPLE_INTERVAL = 0.1
 
 LEFT_EYE = [33, 160, 158, 133, 153, 144]
@@ -156,7 +156,13 @@ class CalibrationSession:
         elapsed = now - self.started_at
         if elapsed >= self.duration:
             self.finished = True
-            return {"elapsed": self.duration, "remaining": 0.0, "face_detected": False}
+            return {
+                "elapsed": self.duration,
+                "remaining": 0.0,
+                "duration": self.duration,
+                "sample_count": self.sample_count,
+                "face_detected": False,
+            }
 
         height, width = frame.shape[:2]
         timestamp = max(self.last_timestamp + 1, int(now * 1000))
@@ -166,27 +172,38 @@ class CalibrationSession:
             data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
         )
         result = face_landmarker.detect_for_video(image, timestamp)
-        metrics = {"ear": None, "mar": None, "yaw": None, "pitch": None, "roll": None}
+        metrics = {
+            "ear": self.ear_values[-1] if self.ear_values else None,
+            "mar": self.mar_values[-1] if self.mar_values else None,
+            "yaw": self.yaw_values[-1] if self.yaw_values else None,
+            "pitch": self.pitch_values[-1] if self.pitch_values else None,
+            "roll": self.roll_values[-1] if self.roll_values else None,
+        }
         if result.face_landmarks:
             landmarks = result.face_landmarks[0]
             pose = calculate_head_pose(landmarks, width, height)
             if pose and now - self.last_sample_at >= self.sample_interval:
-                metrics["ear"] = (
+                ear = (
                     calculate_ear(landmarks, LEFT_EYE, width, height)
                     + calculate_ear(landmarks, RIGHT_EYE, width, height)
                 ) / 2.0
-                metrics["mar"] = calculate_mar(landmarks, width, height)
+                mar = calculate_mar(landmarks, width, height)
+                yaw, pitch, roll = pose
+                self.ear_values.append(ear)
+                self.mar_values.append(mar)
+                self.yaw_values.append(yaw)
+                self.pitch_values.append(pitch)
+                self.roll_values.append(roll)
+                metrics["ear"] = ear
+                metrics["mar"] = mar
                 metrics["yaw"], metrics["pitch"], metrics["roll"] = pose
-                self.ear_values.append(metrics["ear"])
-                self.mar_values.append(metrics["mar"])
-                self.yaw_values.append(metrics["yaw"])
-                self.pitch_values.append(metrics["pitch"])
-                self.roll_values.append(metrics["roll"])
                 self.last_sample_at = now
         return {
             **metrics,
             "elapsed": elapsed,
             "remaining": max(0.0, self.duration - elapsed),
+            "duration": self.duration,
+            "sample_count": self.sample_count,
             "face_detected": bool(result.face_landmarks),
         }
 

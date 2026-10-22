@@ -2,6 +2,7 @@
 
 import time
 import sys
+import os
 from pathlib import Path
 
 import cv2
@@ -12,14 +13,16 @@ if __package__ in (None, ""):
 
 from AI.app.dashboard import Dashboard
 from AI.scripts.calibration import (
-    BASELINE_PATH, MODEL_PATH, CalibrationSession, calculate_head_pose,
-    validate_baseline,
+    BASELINE_PATH,
+    CALIBRATION_SECONDS,
+    MODEL_PATH,
+    CalibrationSession,
+    calculate_head_pose,
 )
 from AI.scripts.drowsiness_pipeline import DrowsinessPipeline
+from AI.scripts.esp_communication import EspCommunicator
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-WINDOW_TITLE = "AI Driver Monitor"
+WINDOW_TITLE = "Assess the driver's condition"
 STABLE_FRAMES_REQUIRED = 15
 
 
@@ -36,7 +39,7 @@ def _detect_alignment(frame, landmarker, timestamp):
     if pose is None:
         return False, {"FACE": "THAY", "POSE": "KHONG TIN CAY"}
     yaw, pitch, roll = pose
-    stable = abs(yaw) <= 25 and abs(pitch) <= 25 and abs(roll) <= 20
+    stable = abs(yaw) <= 15 and abs(pitch) <= 15 and abs(roll) <= 10
     return stable, {
         "FACE": "OK", "YAW": f"{yaw:.1f}", "PITCH": f"{pitch:.1f}",
         "ROLL": f"{roll:.1f}",
@@ -73,66 +76,84 @@ def run():
             stable, metrics = _detect_alignment(frame, landmarker, timestamp)
             stable_frames = stable_frames + 1 if stable else 0
             can_continue = stable_frames >= STABLE_FRAMES_REQUIRED
-            status = ("Tu the on dinh - nhan TIEP TUC"
-                      if can_continue else
-                      "Giu dau thang, nhin tu nhien vao camera")
+
+            status = (
+                "Can chinh thanh cong - bat dau do baseline ca nhan"
+                if can_continue
+                else "Giu dau thang, nhin tu nhien vao camera"
+            )
+
             dashboard.show_alignment(frame, status, metrics, can_continue)
+
             action = dashboard.poll_action()
+
             if action == "quit":
                 return
-            if action == "continue" and can_continue:
+
+            if can_continue:
                 break
 
-        calibration = CalibrationSession()
-        calibration.start()
-        while not calibration.finished:
+        # GIAI DOAN 2: Do baseline ca nhan (Personal Calibration)
+        session = CalibrationSession(duration=CALIBRATION_SECONDS)
+        session.start()
+
+        while not session.finished:
             ok, frame = cap.read()
             if not ok:
-                raise RuntimeError("Khong doc duoc frame trong hieu chuan")
-            data = calibration.update(frame, landmarker)
-            data["sample_count"] = calibration.sample_count
+                raise RuntimeError("Khong doc duoc frame khi do baseline")
+
+            data = session.update(frame, landmarker)
             dashboard.show_calibration(frame, data)
+
             if dashboard.poll_action() == "quit":
                 return
 
-        minimum_samples = 10
-        if not calibration.save(BASELINE_PATH, minimum_samples=minimum_samples):
-            dashboard.show_message(
-                frame, "HIEU CHUAN THAT BAI",
-                "Khong du mau hop le. Baseline cu duoc giu nguyen.",
-            )
-            while dashboard.poll_action() != "quit":
-                time.sleep(0.05)
-            return
-        new_baseline = validate_baseline(
-            BASELINE_PATH, minimum_samples=minimum_samples
-        )
-        if new_baseline is None:
-            raise RuntimeError("Baseline vua luu khong hop le")
+        # Luu ket qua vao baseline.json
+        saved = session.save(BASELINE_PATH)
+        if saved:
+            print(f"[CALIBRATION] Luu baseline ca nhan thanh cong: {BASELINE_PATH}")
+        else:
+            print("[CALIBRATION] Khong du mau hop le de tao baseline moi, giu baseline hien tai.")
 
-        while True:
+        # Thong bao hoan tat truoc khi khoi dong giam sat
+        msg_end = time.monotonic() + 1.5
+        while time.monotonic() < msg_end:
             ok, frame = cap.read()
             if not ok:
-                raise RuntimeError("Khong doc duoc frame khi giam sat")
-            dashboard.show_message(
-                frame, "SAN SANG GIAM SAT",
-                "Baseline hop le. Nhan BAT DAU GIAM SAT (hoac phim S).",
-                can_start=True,
-            )
-            action = dashboard.poll_action()
-            if action == "quit":
-                return
-            if action == "start":
                 break
+            dashboard.show_message(
+                frame,
+                "CALIBRATION COMPLETE",
+                "Do baseline ca nhan thanh cong!\nDang khoi dong he thong giam sat...",
+                can_start=False,
+            )
+            if dashboard.poll_action() == "quit":
+                return
 
+        # Chuyen ownership landmarker sang pipeline.
+        # Pipeline se goi landmarker.close() trong pipeline.close().
+        # Dat landmarker = None de finally block khong double-close.
+        esp = EspCommunicator(
+            mode=os.getenv("ESP_MODE", "MOCK"),
+            port=os.getenv("ESP_PORT"),
+            baudrate=int(os.getenv("ESP_BAUDRATE", "115200")),
+        )
+        pipeline = DrowsinessPipeline(
+            esp_communicator=esp,
+            face_landmarker=landmarker,
+        )
+        landmarker = None  # pipeline now owns the landmarker
 
-        pipeline = DrowsinessPipeline(landmarker, BASELINE_PATH)
         while True:
             ok, frame = cap.read()
             if not ok:
-                raise RuntimeError("Khong doc duoc frame khi giam sat")
+                raise RuntimeError(
+                    "Khong doc duoc frame khi giam sat"
+                )
+
             rendered, state = pipeline.process(frame)
             dashboard.show_monitor(rendered, state)
+
             if dashboard.poll_action() == "quit":
                 return
     finally:

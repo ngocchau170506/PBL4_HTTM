@@ -1,31 +1,31 @@
 {
-    "calibration_duration": 30.0,
+    "calibration_duration": 15.0,
     "samples": {
-        "raw": 246,
-        "valid_ear": 213,
-        "valid_mar": 226,
-        "valid_head_pose": 232
+        "raw": 125,
+        "valid_ear": 108,
+        "valid_mar": 112,
+        "valid_head_pose": 101
     },
     "ear": {
-        "mean": 0.3386,
-        "std": 0.0138
+        "mean": 0.3473,
+        "std": 0.0125
     },
     "mar": {
-        "mean": 0.0577,
-        "std": 0.0128
+        "mean": 0.0772,
+        "std": 0.0169
     },
     "head_pose": {
         "yaw": {
-            "mean": 3.5676,
-            "std": 3.337
+            "mean": -4.2061,
+            "std": 6.038
         },
         "pitch": {
-            "mean": 0.0013,
-            "std": 0.7788
+            "mean": 4.0182,
+            "std": 0.9101
         },
         "roll": {
-            "mean": -1.9693,
-            "std": 1.534
+            "mean": -3.0479,
+            "std": 1.7371
         }
     }
 }

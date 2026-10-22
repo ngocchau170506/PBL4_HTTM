@@ -12,6 +12,7 @@ __pycache__/
 datasets/
 runs/
 logs/
+AI/evidence/
 
 *.pt
 *.pth
