@@ -25,6 +25,7 @@ from AI.scripts.calibration import (
     validate_baseline,
 )
 from AI.scripts.esp_communication import EspCommunicator
+from AI.scripts.event_recorder import EventRecorder
 from AI.scripts.time_utils import filename_timestamp, iso_timestamp, local_now
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -203,6 +204,9 @@ class DrowsinessPipeline:
         baseline_path=None,
         enable_perf_log=True,
         perf_log_interval=5.0,
+        event_storage_dir=None,
+        enable_event_recorder=True,
+        event_recorder=None,
     ):
         model_path = Path(model_path)
 
@@ -274,6 +278,11 @@ class DrowsinessPipeline:
             log_interval=float(os.getenv("PERF_LOG_INTERVAL", perf_log_interval)),
             enable_logging=bool(enable_perf_log),
         )
+        self.event_recorder = event_recorder
+        if self.event_recorder is None and enable_event_recorder:
+            self.event_recorder = EventRecorder(
+                event_storage_dir or str(PROJECT_ROOT / "AI" / "data"),
+            )
 
     def _update_drowsy_state(self, instantaneous_drowsy: bool, duration: float) -> AlertState:
         """Cập nhật máy trạng thái phát hiện buồn ngủ (Drowsiness State Machine)."""
@@ -455,9 +464,18 @@ class DrowsinessPipeline:
                 f"Su dung nguong mac dinh: EAR={self.ear_threshold}, MAR={self.mar_threshold}"
             )
 
-    def process(self, frame):
+    def process(
+        self,
+        frame,
+        frame_id=None,
+        capture_timestamp_ns=None,
+        capture_time_utc=None,
+    ):
         t_pipeline_start = time.perf_counter()
-        monotonic_time = time.monotonic()
+        monotonic_time = (
+            capture_timestamp_ns / 1_000_000_000
+            if capture_timestamp_ns is not None else time.monotonic()
+        )
         wall_time = local_now()
 
         # Đo latency suy luận YOLO
@@ -490,6 +508,20 @@ class DrowsinessPipeline:
             instantaneous_yawning, "_yawning_started", monotonic_time,
             "_yawning_started_at", wall_time,
         )
+
+        if self.event_recorder is not None:
+            if instantaneous_drowsy and drowsy_duration == 0.0:
+                self.event_recorder.start_event(
+                    "DROWSY",
+                    capture_timestamp_ns or time.monotonic_ns(),
+                    capture_time_utc or iso_timestamp(self._drowsy_started_at or wall_time),
+                )
+            if instantaneous_yawning and yawning_duration == 0.0:
+                self.event_recorder.start_event(
+                    "YAWNING",
+                    capture_timestamp_ns or time.monotonic_ns(),
+                    capture_time_utc or iso_timestamp(self._yawning_started_at or wall_time),
+                )
 
         # Cap nhat State Machine
         self._update_drowsy_state(instantaneous_drowsy, drowsy_duration)
@@ -547,6 +579,56 @@ class DrowsinessPipeline:
             vote_ratio=yawning_vote_ratio,
             instantaneous=instantaneous_yawning,
         )
+
+        if self.event_recorder is not None:
+            event_timestamp_ns = capture_timestamp_ns or time.monotonic_ns()
+            event_metadata = {
+                "yolo_status": (
+                    "DROWSY" if instantaneous_drowsy
+                    else "YAWNING" if instantaneous_yawning else "NORMAL"
+                ),
+                "yolo_detections": [
+                    {"label": name, "confidence": confidence}
+                    for name, confidence in detections
+                ],
+                "yolo_confidence": max((confidence for _, confidence in detections), default=None),
+                "confidence": max((confidence for _, confidence in detections), default=None),
+                "mediapipe_valid": (
+                    bool(mp_result.get("valid")) if mp_result is not None else None
+                ),
+                "ear": mp_result.get("ear") if mp_result else None,
+                "mar": mp_result.get("mar") if mp_result else None,
+            }
+            for event_type, active, local_state, confirmed in (
+                ("DROWSY", instantaneous_drowsy, self.drowsy_state.value,
+                 self.drowsy_state in {
+                     AlertState.CONFIRMED, AlertState.SUSPECTED, AlertState.CONFLICT
+                 }),
+                ("YAWNING", instantaneous_yawning, self.yawning_state.value,
+                 self.yawning_state in {
+                     AlertState.CONFIRMED, AlertState.SUSPECTED, AlertState.CONFLICT
+                 }),
+            ):
+                self.event_recorder.update_event(
+                    event_type,
+                    event_timestamp_ns,
+                    local_state,
+                    confirmed,
+                    {
+                        "frame_id": frame_id,
+                        **event_metadata,
+                        "yolo_active": active,
+                        "local_state": local_state,
+                        "face_valid": (
+                            bool(mp_result.get("valid"))
+                            if mp_result is not None else None
+                        ),
+                    },
+                    confirmed_at_ns=event_timestamp_ns if confirmed else None,
+                    confirmed_at_time=capture_time_utc if confirmed else None,
+                )
+                if not active:
+                    self.event_recorder.end_detection(event_type, event_timestamp_ns)
 
         # Xac dinh loai canh bao va trang thai ESP can gui
         confirmed_alert = "NORMAL"
@@ -768,6 +850,9 @@ class DrowsinessPipeline:
         return event
 
     def close(self):
+        if self.event_recorder is not None:
+            self.event_recorder.close()
+            self.event_recorder = None
         self.esp.close()
         if self._landmarker is not None:
             try:

@@ -13,6 +13,7 @@ datasets/
 runs/
 logs/
 AI/evidence/
+AI/data/
 
 *.pt
 *.pth

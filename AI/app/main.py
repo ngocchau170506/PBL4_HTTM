@@ -20,7 +20,9 @@ from AI.scripts.calibration import (
     calculate_head_pose,
 )
 from AI.scripts.drowsiness_pipeline import DrowsinessPipeline
+from AI.scripts.camera_frame_source import CameraFrameSource
 from AI.scripts.esp_communication import EspCommunicator
+from AI.scripts.event_recorder import EventRecorder
 
 WINDOW_TITLE = "Assess the driver's condition"
 STABLE_FRAMES_REQUIRED = 15
@@ -58,6 +60,7 @@ def run():
     dashboard = Dashboard()
     landmarker = None
     pipeline = None
+    camera_source = None
     try:
         options = mp.tasks.vision.FaceLandmarkerOptions(
             base_options=mp.tasks.BaseOptions(model_asset_path=str(model_path)),
@@ -138,30 +141,47 @@ def run():
             port=os.getenv("ESP_PORT"),
             baudrate=int(os.getenv("ESP_BAUDRATE", "115200")),
         )
+        event_recorder = EventRecorder(str(Path(__file__).resolve().parents[1] / "data"))
+        camera_source = CameraFrameSource(cap, on_frame=event_recorder.append_frame)
+        cap = None
         pipeline = DrowsinessPipeline(
             esp_communicator=esp,
             face_landmarker=landmarker,
+            event_recorder=event_recorder,
+            enable_event_recorder=False,
         )
         landmarker = None  # pipeline now owns the landmarker
 
+        last_frame_id = 0
         while True:
-            ok, frame = cap.read()
+            ok, frame, frame_id, capture_timestamp_ns, capture_time_utc = camera_source.read_latest(
+                after_frame_id=last_frame_id,
+            )
             if not ok:
                 raise RuntimeError(
                     "Khong doc duoc frame khi giam sat"
                 )
 
-            rendered, state = pipeline.process(frame)
+            last_frame_id = frame_id
+            rendered, state = pipeline.process(
+                frame,
+                frame_id=frame_id,
+                capture_timestamp_ns=capture_timestamp_ns,
+                capture_time_utc=capture_time_utc,
+            )
             dashboard.show_monitor(rendered, state)
 
             if dashboard.poll_action() == "quit":
                 return
     finally:
+        if camera_source is not None:
+            camera_source.close()
         if pipeline is not None:
             pipeline.close()
         if landmarker is not None:
             landmarker.close()
-        cap.release()
+        if cap is not None:
+            cap.release()
         dashboard.close()
         cv2.destroyAllWindows()
 
