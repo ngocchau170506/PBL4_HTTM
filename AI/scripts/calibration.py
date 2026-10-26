@@ -19,7 +19,7 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODEL_PATH = PROJECT_ROOT / "AI" / "models" / "face_landmarker.task"
 BASELINE_PATH = PROJECT_ROOT / "AI" / "calibration" / "baseline.json"
-CALIBRATION_SECONDS = 8.0
+CALIBRATION_SECONDS = 5.0
 SAMPLE_INTERVAL = 0.1
 
 LEFT_EYE = [33, 160, 158, 133, 153, 144]

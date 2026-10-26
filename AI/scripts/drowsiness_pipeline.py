@@ -25,6 +25,8 @@ from AI.scripts.calibration import (
     validate_baseline,
 )
 from AI.scripts.esp_communication import EspCommunicator
+from AI.scripts.sensor_fusion import SensorFusion
+from AI.scripts.telemetry import Telemetry
 from AI.scripts.event_recorder import EventRecorder
 from AI.scripts.time_utils import filename_timestamp, iso_timestamp, local_now
 
@@ -33,24 +35,10 @@ YOLO_MODEL_PATH = PROJECT_ROOT / "AI" / "models" / "best.pt"
 CONFIDENCE_THRESHOLD = 0.2
 BUFFER_SIZE = 10
 DROWSY_THRESHOLD_SECONDS = 2.0
-YAWNING_THRESHOLD_SECONDS = 2.0
+YAWNING_THRESHOLD_SECONDS = 1.0
 
-# ---------------------------------------------------------
-# Hang so kiem thu va cau hinh Hybrid Two-Stage Verification
-# ---------------------------------------------------------
-# Mốc thời gian kích hoạt và xác nhận (giây)
-MEDIAPIPE_TRIGGER_SECONDS = 1.0       # Kích hoạt MediaPipe khi YOLO nghi ngờ nhắm mắt >= 1.0s
-DROWSY_CONFIRM_SECONDS = 2.0          # Mốc YOLO kết luận DROWSY (đồng bộ với drowsy_threshold)
-DROWSY_FALLBACK_SECONDS = 2.5         # Giới hạn dự phòng tối đa (nếu chưa đủ bằng chứng)
-
-YAWN_MEDIAPIPE_TRIGGER_SECONDS = 0.5  # Kích hoạt MediaPipe khi YOLO nghi ngờ ngáp >= 0.5s
-YAWN_CONFIRM_SECONDS = 1.0            # Mốc YOLO kết luận YAWNING (hoặc yawning_threshold)
-YAWN_FALLBACK_SECONDS = 1.3           # Giới hạn dự phòng tối đa ngáp
-
-# Tiêu chí đánh giá chất lượng xác minh MediaPipe
-MIN_VALID_SAMPLES = 5                 # Số frame MediaPipe có landmark hợp lệ tối thiểu trong window
-CLOSED_VOTE_THRESHOLD = 0.70          # Tỉ lệ vote mắt nhắm hợp lệ (cấu hình thử nghiệm 0.6, 0.7, 0.8)
-OPEN_VOTE_THRESHOLD = 0.70            # Tỉ lệ vote miệng mở hợp lệ
+# Minimum valid baseline samples; decisions use independent temporal evidence.
+MIN_VALID_SAMPLES = 5
 
 # Hệ số tính ngưỡng động từ baseline cá nhân
 EAR_BASELINE_FACTOR = 0.75            # Ngưỡng nhắm mắt = mean_ear * 0.75
@@ -64,10 +52,9 @@ DEFAULT_MAR_THRESHOLD = 0.50
 
 class AlertState(str, Enum):
     IDLE = "IDLE"                    # Bình thường, chưa phát hiện dấu hiệu
-    WATCHING = "WATCHING"            # YOLO phát hiện Eye_Closed / Mouth_Open (chờ đạt mốc kích hoạt)
-    VERIFYING = "VERIFYING"          # MediaPipe được kích hoạt xác minh (1.0s - 2.0s cho mắt, 0.5s - 1.0s cho miệng)
+    VERIFYING = "VERIFYING"          # Abnormal evidence has not reached the duration threshold.
     CONFIRMED = "CONFIRMED"          # Xác nhận cảnh báo: Cả YOLO và MediaPipe đều đồng thuận
-    SUSPECTED = "SUSPECTED"          # Cảnh báo phòng ngừa: YOLO có bằng chứng mạnh nhưng MediaPipe thiếu dữ liệu
+    SUSPECTED = "SUSPECTED"          # Single-source alert: YOLO or MediaPipe unavailable.
     CONFLICT = "CONFLICT"            # Mâu thuẫn: YOLO thấy mắt nhắm nhưng MediaPipe có đủ mẫu và xác nhận mắt mở
     TRACKING_LOST = "TRACKING_LOST"  # Mất theo dõi khuôn mặt hoàn toàn
 
@@ -84,7 +71,7 @@ def _is_yawning(name):
 
 class PerformanceMonitor:
     """Bộ theo dõi hiệu năng thời gian thực nhẹ (không làm chậm pipeline).
-    
+
     Đo lường:
     - AI processing FPS (làm mượt qua EMA).
     - YOLO inference latency (ms).
@@ -210,12 +197,18 @@ class DrowsinessPipeline:
     ):
         model_path = Path(model_path)
 
-        if not model_path.is_file():
-            raise FileNotFoundError(
-                f"Khong tim thay YOLO model: {model_path}"
-            )
-
-        self.model = YOLO(str(model_path))
+        self.model = None
+        self.model_error = None
+        try:
+            if not model_path.exists():
+                raise FileNotFoundError(f"YOLO model not found: {model_path}")
+            self.model = YOLO(str(model_path))
+        except Exception as exc:
+            self.model_error = str(exc)
+            print(f"[STARTUP] YOLO unavailable; MediaPipe-only mode: {exc}")
+        self.fusion = SensorFusion(drowsy_threshold, yawning_threshold)
+        self.telemetry = Telemetry(os.getenv("PERF_CSV", str(PROJECT_ROOT / "logs" / "performance.csv")))
+        self._alert_latency_ms = None
         self.frame_buffer = deque(maxlen=BUFFER_SIZE)
         self.esp = esp_communicator or EspCommunicator()
         self.drowsy_threshold = float(drowsy_threshold)
@@ -258,18 +251,12 @@ class DrowsinessPipeline:
 
         # State machine độc lập cho Drowsiness (Nhắm mắt)
         self.drowsy_state = AlertState.IDLE
-        self._drowsy_votes = []          # List bool: True nếu EAR < ear_threshold (mắt nhắm)
-        self._drowsy_metrics = []        # List tuple: (monotonic_time, ear)
-        self._drowsy_conflict_count = 0  # Đếm số lần mâu thuẫn liên tiếp
 
         # State machine độc lập cho Yawning (Ngáp)
         self.yawning_state = AlertState.IDLE
-        self._yawning_votes = []         # List bool: True nếu MAR > mar_threshold (miệng mở)
-        self._yawning_metrics = []       # List tuple: (monotonic_time, mar)
-        self._yawning_conflict_count = 0
 
         # Quản lý cảnh báo ESP và chống gửi trùng lặp
-        self._active_esp_alert = None    # "DROWSY", "YAWNING", hoặc None
+        self._active_esp_alert = None    # Desired state queued to the transport worker.
         self._alert_recorded = False     # Đã lưu ảnh & events.jsonl cho sự kiện này chưa
         self._conflict_recorded = False  # Đã ghi nhận log CONFLICT chưa
 
@@ -284,45 +271,10 @@ class DrowsinessPipeline:
                 event_storage_dir or str(PROJECT_ROOT / "AI" / "data"),
             )
 
-    def _update_drowsy_state(self, instantaneous_drowsy: bool, duration: float) -> AlertState:
-        """Cập nhật máy trạng thái phát hiện buồn ngủ (Drowsiness State Machine)."""
-        if not instantaneous_drowsy:
-            self.drowsy_state = AlertState.IDLE
-            self._drowsy_votes.clear()
-            self._drowsy_metrics.clear()
-            return self.drowsy_state
-
-        if duration < MEDIAPIPE_TRIGGER_SECONDS:
-            self.drowsy_state = AlertState.WATCHING
-        elif MEDIAPIPE_TRIGGER_SECONDS <= duration < self.drowsy_threshold:
-            if self.drowsy_state == AlertState.WATCHING:
-                # Bắt đầu vào window xác minh 1s -> 2s, làm mới danh sách vote
-                self._drowsy_votes.clear()
-                self._drowsy_metrics.clear()
-            self.drowsy_state = AlertState.VERIFYING
-        return self.drowsy_state
-
-    def _update_yawning_state(self, instantaneous_yawning: bool, duration: float) -> AlertState:
-        """Cập nhật máy trạng thái phát hiện ngáp (Yawning State Machine)."""
-        if not instantaneous_yawning:
-            self.yawning_state = AlertState.IDLE
-            self._yawning_votes.clear()
-            self._yawning_metrics.clear()
-            return self.yawning_state
-
-        if duration < YAWN_MEDIAPIPE_TRIGGER_SECONDS:
-            self.yawning_state = AlertState.WATCHING
-        elif YAWN_MEDIAPIPE_TRIGGER_SECONDS <= duration < self.yawning_threshold:
-            if self.yawning_state == AlertState.WATCHING:
-                self._yawning_votes.clear()
-                self._yawning_metrics.clear()
-            self.yawning_state = AlertState.VERIFYING
-        return self.yawning_state
-
     def _run_mediapipe(self, frame, monotonic_time: float) -> dict:
         """Thực thi suy luận MediaPipe Face Landmarker có điều kiện trên frame.
-        
-        Chỉ được gọi khi hệ thống ở trạng thái VERIFYING.
+
+        Chạy độc lập với YOLO để hỗ trợ cảnh báo khi YOLO thiếu dữ liệu.
         Bảo đảm timestamp tăng đơn điệu theo quy chuẩn MediaPipe VIDEO mode.
         """
         if self._landmarker is None:
@@ -360,7 +312,7 @@ class DrowsinessPipeline:
         mar = calculate_mar(landmarks, width, height)
 
         # Lọc mẫu INVALID: khoảng cách ngang bằng 0 hoặc landmark bất thường
-        if ear <= 0.01:
+        if not (0.01 < ear < 1.0 and 0.0 <= mar < 3.0):
             return {
                 "valid": False, "ear": None, "mar": None,
                 "timestamp": monotonic_time, "reason": "DEGENERATE_LANDMARKS"
@@ -373,71 +325,6 @@ class DrowsinessPipeline:
             "timestamp": monotonic_time,
             "reason": "OK",
         }
-
-    def _evaluate_drowsy_decision(
-        self, duration: float, valid_samples: int, vote_ratio: float, instantaneous: bool
-    ) -> AlertState:
-        """Đánh giá quyết định Drowsy tại mốc 2.0s và dự phòng tối đa 2.5s."""
-        if not instantaneous or duration <= 0:
-            return AlertState.IDLE
-
-        if duration < MEDIAPIPE_TRIGGER_SECONDS:
-            return AlertState.WATCHING
-
-        # Đã đạt từ 2.0s trở lên: kiểm tra điều kiện CONFIRMED ngay
-        # (Nếu đạt ở 2.0s, 2.1s, 2.3s thì kết luận cảnh báo ngay)
-        if duration >= DROWSY_CONFIRM_SECONDS:
-            if valid_samples >= MIN_VALID_SAMPLES and vote_ratio >= CLOSED_VOTE_THRESHOLD:
-                return AlertState.CONFIRMED
-
-            # Nếu đã từng CONFIRMED trong đợt này, duy trì cho đến khi mở mắt
-            if self.drowsy_state == AlertState.CONFIRMED:
-                return AlertState.CONFIRMED
-
-            # Nếu chưa đủ điều kiện và vẫn trong cửa sổ dự phòng (2.0s <= t < 2.5s):
-            if duration < DROWSY_FALLBACK_SECONDS:
-                return AlertState.VERIFYING
-
-            # Đã vượt quá 2.5s mà vẫn chưa thể CONFIRMED -> Xử lý 3 nhánh UNCERTAIN
-            # Nhánh 2: Mâu thuẫn (MediaPipe có đủ mẫu nhưng vote ratio < 0.70)
-            if valid_samples >= MIN_VALID_SAMPLES and vote_ratio < CLOSED_VOTE_THRESHOLD:
-                if self.drowsy_state != AlertState.CONFLICT:
-                    self._drowsy_conflict_count += 1
-                return AlertState.CONFLICT
-
-            # Nhánh 1: YOLO có bằng chứng mạnh liên tục >= 2.5s nhưng MediaPipe thiếu dữ liệu
-            return AlertState.SUSPECTED
-
-        return AlertState.VERIFYING
-
-    def _evaluate_yawning_decision(
-        self, duration: float, valid_samples: int, vote_ratio: float, instantaneous: bool
-    ) -> AlertState:
-        """Đánh giá quyết định Yawning tại mốc 1.0s và dự phòng tối đa 1.3s."""
-        if not instantaneous or duration <= 0:
-            return AlertState.IDLE
-
-        if duration < YAWN_MEDIAPIPE_TRIGGER_SECONDS:
-            return AlertState.WATCHING
-
-        if duration >= YAWN_CONFIRM_SECONDS:
-            if valid_samples >= MIN_VALID_SAMPLES and vote_ratio >= OPEN_VOTE_THRESHOLD:
-                return AlertState.CONFIRMED
-
-            if self.yawning_state == AlertState.CONFIRMED:
-                return AlertState.CONFIRMED
-
-            if duration < YAWN_FALLBACK_SECONDS:
-                return AlertState.VERIFYING
-
-            if valid_samples >= MIN_VALID_SAMPLES and vote_ratio < OPEN_VOTE_THRESHOLD:
-                if self.yawning_state != AlertState.CONFLICT:
-                    self._yawning_conflict_count += 1
-                return AlertState.CONFLICT
-
-            return AlertState.SUSPECTED
-
-        return AlertState.VERIFYING
 
     def _load_and_compute_thresholds(self):
         """Doc baseline.json, validate va tinh toan nguong EAR/MAR dong."""
@@ -478,28 +365,53 @@ class DrowsinessPipeline:
         )
         wall_time = local_now()
 
-        # Đo latency suy luận YOLO
+        # Independent measurements: no detection is unknown, not a normal vote.
         t_yolo_start = time.perf_counter()
-        results = self.model.predict(
-            source=frame,
-            conf=CONFIDENCE_THRESHOLD,
-            verbose=False,
-        )
-        t_yolo_end = time.perf_counter()
-        yolo_time_s = t_yolo_end - t_yolo_start
-
-        rendered = results[0].plot()
-        detected_classes = []
         detections = []
-
-        for box in results[0].boxes:
-            class_id = int(box.cls[0].item())
-            class_name = self.model.names[class_id]
-            detected_classes.append(class_name)
-            detections.append((class_name, float(box.conf[0].item())))
-
-        instantaneous_drowsy = any(_is_drowsy(name) for name in detected_classes)
-        instantaneous_yawning = any(_is_yawning(name) for name in detected_classes)
+        yolo_error = None
+        rendered = frame.copy()
+        try:
+            if self.model is None:
+                raise RuntimeError(self.model_error or "YOLO unavailable")
+            results = self.model.predict(source=frame, imgsz=int(os.getenv("YOLO_IMGSZ", "416")),
+                                         conf=CONFIDENCE_THRESHOLD, verbose=False)
+            if os.getenv("HEADLESS", "0") != "1":
+                rendered = results[0].plot()
+            for box in results[0].boxes:
+                name = self.model.names[int(box.cls[0].item())]
+                detections.append((name, float(box.conf[0].item())))
+        except Exception as exc:
+            yolo_error = str(exc)
+        yolo_time_s = time.perf_counter() - t_yolo_start
+        detected_classes = [name for name, _ in detections]
+        yolo_eye = yolo_mouth = None
+        for name in detected_classes:
+            label = name.casefold().replace(" ", "_").replace("-", "_")
+            if _is_drowsy(name):
+                yolo_eye = True
+            elif "eye_open" in label or "open_eye" in label:
+                if yolo_eye is None:
+                    yolo_eye = False
+            if _is_yawning(name):
+                yolo_mouth = True
+            elif "mouth_closed" in label or "mouth_close" in label or "closed_mouth" in label:
+                if yolo_mouth is None:
+                    yolo_mouth = False
+        t_mp_start = time.perf_counter()
+        mp_result = self._run_mediapipe(frame, monotonic_time)
+        mp_time_s = time.perf_counter() - t_mp_start
+        mp_active = self._landmarker is not None
+        mp_eye = mp_result["ear"] < self.ear_threshold if mp_result["valid"] else None
+        mp_mouth = mp_result["mar"] > self.mar_threshold if mp_result["valid"] else None
+        decisions, tracking_lost = self.fusion.update(
+            monotonic_time, {"eye": yolo_eye, "mouth": yolo_mouth},
+            {"eye": mp_eye, "mouth": mp_mouth},
+            mp_result["valid"] or yolo_eye is not None or yolo_mouth is not None
+            or any(name.casefold().replace("_", " ") in {"attentive head", "distracted head"}
+                   for name in detected_classes),
+        )
+        instantaneous_drowsy = decisions["eye"].active
+        instantaneous_yawning = decisions["mouth"].active
         drowsy_duration = self._update_timer(
             instantaneous_drowsy, "_drowsy_started", monotonic_time,
             "_drowsy_started_at", wall_time,
@@ -523,70 +435,25 @@ class DrowsinessPipeline:
                     capture_time_utc or iso_timestamp(self._yawning_started_at or wall_time),
                 )
 
-        # Cap nhat State Machine
-        self._update_drowsy_state(instantaneous_drowsy, drowsy_duration)
-        self._update_yawning_state(instantaneous_yawning, yawning_duration)
-
-        # Kich hoat MediaPipe co dieu kien khi o trang thai VERIFYING (Event-triggered)
-        mp_active = (
-            self.drowsy_state == AlertState.VERIFYING
-            or self.yawning_state == AlertState.VERIFYING
-        )
-        mp_result = None
-        t_mp_start = time.perf_counter()
-        if mp_active:
-            mp_result = self._run_mediapipe(frame, monotonic_time)
-
-            # Tich luy vote cho Drowsiness trong window [1.0s, 2.0s]
-            if self.drowsy_state == AlertState.VERIFYING and mp_result["valid"]:
-                is_closed = mp_result["ear"] < self.ear_threshold
-                self._drowsy_votes.append(is_closed)
-                self._drowsy_metrics.append((monotonic_time, mp_result["ear"]))
-
-            # Tich luy vote cho Yawning trong window [0.5s, 1.0s]
-            if self.yawning_state == AlertState.VERIFYING and mp_result["valid"]:
-                is_open = mp_result["mar"] > self.mar_threshold
-                self._yawning_votes.append(is_open)
-                self._yawning_metrics.append((monotonic_time, mp_result["mar"]))
-        t_mp_end = time.perf_counter()
-        mp_time_s = (t_mp_end - t_mp_start) if mp_active else 0.0
-
-        drowsy_valid_samples = len(self._drowsy_votes)
-        drowsy_vote_ratio = (
-            sum(self._drowsy_votes) / drowsy_valid_samples
-            if drowsy_valid_samples > 0
-            else 0.0
-        )
-        yawning_valid_samples = len(self._yawning_votes)
-        yawning_vote_ratio = (
-            sum(self._yawning_votes) / yawning_valid_samples
-            if yawning_valid_samples > 0
-            else 0.0
-        )
-
-        # ---------------------------------------------------------------------
-        # Giai doan 3 & 4: Danh gia quyet dinh tai 2.0s va du phong toi da 2.5s
-        # ---------------------------------------------------------------------
-        self.drowsy_state = self._evaluate_drowsy_decision(
-            duration=drowsy_duration,
-            valid_samples=drowsy_valid_samples,
-            vote_ratio=drowsy_vote_ratio,
-            instantaneous=instantaneous_drowsy,
-        )
-        self.yawning_state = self._evaluate_yawning_decision(
-            duration=yawning_duration,
-            valid_samples=yawning_valid_samples,
-            vote_ratio=yawning_vote_ratio,
-            instantaneous=instantaneous_yawning,
-        )
+        self.drowsy_state = AlertState(decisions["eye"].state)
+        self.yawning_state = AlertState(decisions["mouth"].state)
+        drowsy_duration = decisions["eye"].duration
+        yawning_duration = decisions["mouth"].duration
+        # Counts describe the current independent sample, not stale votes.
+        drowsy_valid_samples = int(mp_eye is not None)
+        yawning_valid_samples = int(mp_mouth is not None)
+        drowsy_vote_ratio = float(mp_eye is True)
+        yawning_vote_ratio = float(mp_mouth is True)
 
         if self.event_recorder is not None:
             event_timestamp_ns = capture_timestamp_ns or time.monotonic_ns()
             event_metadata = {
                 "yolo_status": (
-                    "DROWSY" if instantaneous_drowsy
-                    else "YAWNING" if instantaneous_yawning else "NORMAL"
+                    "DROWSY" if yolo_eye is True else "YAWNING" if yolo_mouth is True
+                    else "NORMAL" if yolo_eye is not None or yolo_mouth is not None else "UNKNOWN"
                 ),
+                "eye_source": decisions["eye"].source,
+                "mouth_source": decisions["mouth"].source,
                 "yolo_detections": [
                     {"label": name, "confidence": confidence}
                     for name, confidence in detections
@@ -617,7 +484,7 @@ class DrowsinessPipeline:
                     {
                         "frame_id": frame_id,
                         **event_metadata,
-                        "yolo_active": active,
+                        "yolo_active": yolo_eye if event_type == "DROWSY" else yolo_mouth,
                         "local_state": local_state,
                         "face_valid": (
                             bool(mp_result.get("valid"))
@@ -664,13 +531,13 @@ class DrowsinessPipeline:
         elif self.drowsy_state == AlertState.CONFLICT or self.yawning_state == AlertState.CONFLICT:
             confirmed_alert = "CONFLICT"
             detailed_alert = "CONFLICT"
-            esp_target = None  # Khong gui ESP khi mau thuan
+            esp_target = "NORMAL" if self._active_esp_alert else None
             alert_duration = max(drowsy_duration, yawning_duration)
             event_start = self._drowsy_started_at or self._yawning_started_at
         elif self.drowsy_state == AlertState.TRACKING_LOST or self.yawning_state == AlertState.TRACKING_LOST:
             confirmed_alert = "TRACKING_LOST"
             detailed_alert = "TRACKING_LOST"
-            esp_target = None  # Khong gui ESP khi mat tracking
+            esp_target = "NORMAL" if self._active_esp_alert else None
             alert_duration = 0.0
         else:
             confirmed_alert = "NORMAL"
@@ -682,6 +549,13 @@ class DrowsinessPipeline:
             else:
                 esp_target = None
 
+        if esp_target in ("DROWSY", "YAWNING"):
+            if esp_target != self._active_esp_alert:
+                self._alert_latency_ms = max(0.0, (time.monotonic() - (monotonic_time - alert_duration)) * 1000)
+        else:
+            self._alert_latency_ms = None
+        if confirmed_alert == "NORMAL" and yolo_eye is None and yolo_mouth is None and not mp_result["valid"]:
+            confirmed_alert = "UNKNOWN"
         esp_result = None
         confirmed_at = iso_timestamp(wall_time)
 
@@ -731,6 +605,13 @@ class DrowsinessPipeline:
         self._confirmed_alert = confirmed_alert
 
         state = {
+            "yolo_error": yolo_error,
+            "yolo_eye_valid": yolo_eye is not None,
+            "yolo_mouth_valid": yolo_mouth is not None,
+            "mediapipe_reason": mp_result["reason"],
+            "eye_source": decisions["eye"].source,
+            "mouth_source": decisions["mouth"].source,
+            "tracking_lost": tracking_lost,
             "timestamp": iso_timestamp(wall_time),
             "monotonic_time": monotonic_time,
             "monitoring_started_at": iso_timestamp(self.monitoring_started_at),
@@ -754,8 +635,8 @@ class DrowsinessPipeline:
             "yawn_threshold_seconds": self.yawning_threshold,
             "drowsy_state": self.drowsy_state.value,
             "yawning_state": self.yawning_state.value,
-            "drowsy_votes_count": len(self._drowsy_votes),
-            "yawning_votes_count": len(self._yawning_votes),
+            "drowsy_votes_count": drowsy_valid_samples,
+            "yawning_votes_count": yawning_valid_samples,
             "drowsy_valid_samples": drowsy_valid_samples,
             "drowsy_vote_ratio": round(drowsy_vote_ratio, 3),
             "yawning_valid_samples": yawning_valid_samples,
@@ -805,6 +686,9 @@ class DrowsinessPipeline:
         state["pipeline_latency_ms"] = self.perf_monitor.pipeline_latency_ms
         state["mp_total_activations"] = self.perf_monitor.total_mp_activations
 
+        state["frame_age_ms"] = max(0.0, (time.monotonic() - monotonic_time) * 1000)
+        state["alert_latency_ms"] = self._alert_latency_ms
+        self.telemetry.record(state)
         return rendered, state
 
     def _update_timer(
@@ -849,7 +733,17 @@ class DrowsinessPipeline:
             metadata_file.write(json.dumps(event, ensure_ascii=False) + "\n")
         return event
 
+    def reset_tracking(self):
+        self.fusion = SensorFusion(self.drowsy_threshold, self.yawning_threshold)
+        self._drowsy_started = self._yawning_started = None
+        self._drowsy_started_at = self._yawning_started_at = None
+        self._active_esp_alert = None
+        if self.event_recorder is not None:
+            self.event_recorder.interrupt()
+        self._alert_recorded = self._conflict_recorded = False
+
     def close(self):
+        self.telemetry.close()
         if self.event_recorder is not None:
             self.event_recorder.close()
             self.event_recorder = None

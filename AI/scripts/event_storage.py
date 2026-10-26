@@ -41,6 +41,10 @@ class EventStorage:
         with self._lock:
             if target.exists():
                 return target
+            # Reserve disk space before writing; offline queues must stay bounded.
+            self.enforce_limit()
+            if self._disk_usage() >= self.max_storage_bytes:
+                raise OSError("Event storage quota exceeded")
             temporary.mkdir(parents=True, exist_ok=False)
             frames_dir = temporary / "frames"
             frames_dir.mkdir()
@@ -117,19 +121,23 @@ class EventStorage:
 
     def enforce_limit(self) -> None:
         with self._lock:
-            size = sum(path.stat().st_size for path in self.root_dir.rglob("*") if path.is_file())
+            size = self._disk_usage()
             if size <= self.max_storage_bytes:
                 return
             rows = self._connection.execute(
-                "SELECT event_id, event_dir FROM event_queue WHERE status = 'UPLOADED' ORDER BY created_at"
+                "SELECT event_id, event_dir FROM event_queue ORDER BY CASE WHEN status = 'UPLOADED' THEN 0 ELSE 1 END, created_at"
             ).fetchall()
             for event_id, event_dir in rows:
                 self._remove_tree(Path(event_dir))
                 self._connection.execute("DELETE FROM event_queue WHERE event_id = ?", (event_id,))
-                size = sum(path.stat().st_size for path in self.root_dir.rglob("*") if path.is_file())
+                print(f"[CNN STORAGE] Quota: removed oldest event {event_id}")
+                size = self._disk_usage()
                 if size <= self.max_storage_bytes:
                     break
             self._connection.commit()
+
+    def _disk_usage(self):
+        return sum(path.stat().st_size for path in self.root_dir.rglob("*") if path.is_file())
 
     @staticmethod
     def _remove_tree(path: Path) -> None:

@@ -17,9 +17,13 @@ class CameraFrameSource:
         self,
         capture: cv2.VideoCapture,
         on_frame: Optional[Callable[..., None]] = None,
+        capture_factory=None,
     ):
         self._capture = capture
         self._on_frame = on_frame
+        self._capture_factory = capture_factory
+        self.error = None
+        self._stop = threading.Event()
         self._condition = threading.Condition()
         self._latest = None
         self._latest_id = 0
@@ -39,6 +43,7 @@ class CameraFrameSource:
             return True, frame.copy(), frame_id, timestamp_ns, capture_time_utc
 
     def close(self) -> None:
+        self._stop.set()
         with self._condition:
             self._closed = True
             self._condition.notify_all()
@@ -52,20 +57,31 @@ class CameraFrameSource:
                     return
             ok, frame = self._capture.read()
             if not ok:
+                self.error = "CAMERA_DISCONNECTED"
+                if self._capture_factory is not None:
+                    self._capture.release()
+                    if self._stop.wait(1.0):
+                        return
+                    self._capture = self._capture_factory()
+                    continue
                 with self._condition:
                     self._closed = True
                     self._condition.notify_all()
                 return
             frame_id = self._latest_id + 1
+            self.error = None
             timestamp_ns = time.monotonic_ns()
             capture_time_utc = datetime.now(timezone.utc).isoformat()
             if self._on_frame is not None:
-                self._on_frame(
-                    frame,
-                    frame_id=frame_id,
-                    capture_timestamp_ns=timestamp_ns,
-                    capture_time_utc=capture_time_utc,
-                )
+                try:
+                    self._on_frame(
+                        frame,
+                        frame_id=frame_id,
+                        capture_timestamp_ns=timestamp_ns,
+                        capture_time_utc=capture_time_utc,
+                    )
+                except Exception as exc:
+                    self.error = f"SAMPLER_ERROR: {exc}"
             with self._condition:
                 if self._closed:
                     return

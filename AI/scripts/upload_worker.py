@@ -23,14 +23,17 @@ class UploadWorker:
         self.transport = transport or self._mock_transport
         self.retry_base_seconds = float(retry_base_seconds)
         self.retry_max_seconds = float(retry_max_seconds)
-        self._event_queue: queue.Queue[tuple[dict[str, Any], list[Any]]] = queue.Queue()
+        self._event_queue: queue.Queue[tuple[dict[str, Any], list[Any]]] = queue.Queue(maxsize=8)
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="cnn-upload-worker", daemon=True)
         self._thread.start()
 
     def submit_event(self, metadata: dict[str, Any], frames: list[Any]) -> None:
-        self._event_queue.put((metadata, frames))
+        try:
+            self._event_queue.put_nowait((metadata, frames))
+        except queue.Full:
+            print(f"[CNN STORAGE] Queue full; dropped event {metadata.get('event_id')}")
         self._wake.set()
 
     def wake(self) -> None:
@@ -75,8 +78,8 @@ class UploadWorker:
                 self.storage.save_event(metadata, frames)
             except (OSError, ValueError, TypeError) as exc:
                 print(f"[CNN STORAGE] {metadata.get('event_id')} deferred: {exc}")
-                self._event_queue.put((metadata, frames))
-                self._wake.set()
+                # Bounded failure: preserve camera operation and permit shutdown.
+                # A persistent disk error cannot be retried indefinitely in RAM.
             finally:
                 self._event_queue.task_done()
 

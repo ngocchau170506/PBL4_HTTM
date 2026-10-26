@@ -160,7 +160,8 @@ class EventRecorder:
                 event.recording_end_ns = timestamp_ns + int(self.post_detection_seconds * 1e9)
             self._finish_due_events(timestamp_ns)
 
-    def close(self) -> None:
+    def interrupt(self) -> None:
+        """Flush incomplete windows on camera gaps without closing the worker."""
         with self._lock:
             for event_type in list(self._active):
                 event = self._active[event_type]
@@ -168,6 +169,9 @@ class EventRecorder:
                     self._finish_event(event_type, complete=False)
                 else:
                     self._active.pop(event_type, None)
+
+    def close(self) -> None:
+        self.interrupt()
         self.upload_worker.close()
         self.storage.close()
 

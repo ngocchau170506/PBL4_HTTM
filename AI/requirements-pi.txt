@@ -1,0 +1,7 @@
+# Initial install constraints; freeze versions on the Pi after import + camera tests.
+numpy>=1.26,<3
+opencv-python>=4.8,<5
+mediapipe>=0.10,<0.11
+ultralytics>=8.3,<9
+pyserial>=3.5,<4
+psutil>=5.9,<8

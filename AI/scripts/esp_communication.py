@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import importlib
+import threading
+import time
 from typing import Optional
 
 from AI.scripts.time_utils import iso_timestamp
@@ -29,6 +31,8 @@ class EspCommunicator:
         port: Optional[str] = None,
         baudrate: int = 115200,
         timeout: float = 0.2,
+        require_ack: bool = False,
+        heartbeat_seconds: float = 5.0,
     ):
         self.mode = mode.upper()
         if self.mode not in {"MOCK", "SERIAL"}:
@@ -36,12 +40,18 @@ class EspCommunicator:
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
+        self.require_ack = require_ack
+        self.heartbeat_seconds = heartbeat_seconds
+        self._desired = None
+        self._condition = threading.Condition()
+        self._stop = False
+        self._sequence = 0
         self._serial = None
         self._last_status = None
         self.last_result: Optional[SendResult] = None
 
-        if self.mode == "SERIAL":
-            self._open_serial()
+        self._thread = threading.Thread(target=self._run, name="esp-transport", daemon=True)
+        self._thread.start()
 
     def _open_serial(self):
         if not self.port:
@@ -86,14 +96,23 @@ class EspCommunicator:
         status = status.upper()
         if status not in VALID_STATUSES:
             raise ValueError(f"Unsupported ESP status: {status}")
-        if status == self._last_status:
-            return None
+        with self._condition:
+            if self._desired is None or self._desired[0] != status:
+                self._sequence += 1
+                self._desired = (status, duration_seconds, timestamp, self._sequence)
+                self._condition.notify_all()
+        return self.last_result
+
+    def _transmit(self, status, duration_seconds, timestamp, sequence):
+        if status not in VALID_STATUSES:
+            raise ValueError(f"Unsupported ESP status: {status}")
 
         duration_ms = max(0, round(float(duration_seconds) * 1000))
         event_code = EVENT_CODES[status]
         packet_timestamp = timestamp or iso_timestamp()
         packet = f"ALERT,{event_code},{status},{packet_timestamp},{duration_ms}\n"
-        self._last_status = status
+        if self.require_ack:
+            packet = packet.rstrip() + f",{sequence}\n"
 
         if self.mode == "MOCK":
             print(f"[ESP MOCK] {packet.rstrip()}")
@@ -114,14 +133,23 @@ class EspCommunicator:
         try:
             self._serial.write(packet.encode("ascii"))
             self._serial.flush()
-            result = SendResult(packet, sent=True, acknowledged=False)
+            acknowledged = False
+            if self.require_ack:
+                deadline = time.monotonic() + self.timeout
+                while time.monotonic() < deadline:
+                    reply = self._serial.readline().decode("ascii", errors="replace").strip()
+                    if reply == f"ACK,{sequence}":
+                        acknowledged = True
+                        break
+            result = SendResult(packet, sent=True, acknowledged=acknowledged,
+                                error="ACK timeout" if self.require_ack and not acknowledged else None)
         except (OSError, ValueError) as exc:
-            self._serial = None
+            self._disconnect()
             result = SendResult(packet, sent=False, acknowledged=False, error=str(exc))
         self.last_result = result
         return result
 
-    def close(self):
+    def _disconnect(self):
         if self._serial is not None:
             try:
                 self._serial.close()
@@ -129,3 +157,40 @@ class EspCommunicator:
                 pass
             finally:
                 self._serial = None
+
+    def _run(self):
+        delivered = None
+        retry = 1.0
+        next_attempt = 0.0
+        last_send = 0.0
+        while True:
+            with self._condition:
+                if self._stop:
+                    break
+                desired = self._desired
+                now = time.monotonic()
+                due = desired is not None and (desired != delivered or now - last_send >= self.heartbeat_seconds)
+                if not due or now < next_attempt:
+                    self._condition.wait(0.1)
+                    continue
+            if self.mode == "SERIAL" and not self.connected:
+                self._open_serial()
+            result = self._transmit(*desired)
+            success = self.mode == "MOCK" or (result.sent and (not self.require_ack or result.acknowledged))
+            if success:
+                delivered = desired
+                last_send = time.monotonic()
+                retry = 1.0
+                next_attempt = 0.0
+            else:
+                next_attempt = time.monotonic() + retry
+                retry = min(retry * 2, 10.0)
+        self._disconnect()
+
+    def close(self):
+        with self._condition:
+            self._stop = True
+            self._condition.notify_all()
+        self._thread.join(timeout=max(2.0, self.timeout * 3))
+        if self._thread.is_alive():
+            raise RuntimeError("ESP worker did not stop")

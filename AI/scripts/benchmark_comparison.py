@@ -1,92 +1,73 @@
-"""Benchmark so sánh hiệu năng giữa hai kiến trúc:
-1. Kiến trúc cũ (Always-on MediaPipe): MediaPipe Face Landmarker chạy mỗi frame.
-2. Kiến trúc mới (Hybrid Event-Triggered): MediaPipe chỉ kích hoạt khi có sự kiện tại 1.0s.
-"""
-
+"""Measure actual USB-camera throughput without estimated comparison numbers."""
+import argparse
+import os
+import statistics
 import time
-import sys
-from pathlib import Path
-
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-import numpy as np
-import cv2
-
-from AI.scripts.drowsiness_pipeline import DrowsinessPipeline
+import mediapipe as mp
+from AI.scripts.calibration import MODEL_PATH
+from AI.scripts.camera_config import open_camera
+from AI.scripts.camera_frame_source import CameraFrameSource
+from AI.scripts.drowsiness_pipeline import DrowsinessPipeline, YOLO_MODEL_PATH
 from AI.scripts.esp_communication import EspCommunicator
 
 
-class DummyCamera:
-    """Tạo chuỗi frame giả lập mô phỏng hành vi lái xe:
-    - Giai đoạn 1: 90 frame bình thường (mắt mở, lái xe bình thường).
-    - Giai đoạn 2: 60 frame buồn ngủ (mắt nhắm liên tục).
-    - Giai đoạn 3: 30 frame bình thường trở lại (mắt mở).
-    """
-    def __init__(self, width=640, height=480):
-        self.width = width
-        self.height = height
-        self.frame = np.zeros((height, width, 3), dtype=np.uint8)
-
-    def read(self):
-        return True, self.frame.copy()
-
-
-def run_benchmark(num_frames=150, log_interval=5.0):
-    print("=" * 70)
-    print(" BENCHMARK HIỆU NĂNG: HYBRID EVENT-TRIGGERED vs ALWAYS-ON")
-    print("=" * 70)
-
-    esp = EspCommunicator(mode="MOCK")
-    cam = DummyCamera()
-
-    # -------------------------------------------------------------
-    # 1. Kiem thu che do HYBRID EVENT-TRIGGERED (Kien truc moi)
-    # -------------------------------------------------------------
-    print("\n[1/2] Đang chạy kiểm thử: Hybrid Event-Triggered Drowsiness Detection...")
-    pipeline_event = DrowsinessPipeline(
-        esp_communicator=esp,
-        enable_perf_log=False,
-    )
-
-    t_start = time.perf_counter()
-    mp_inferences_event = 0
-
-    for i in range(num_frames):
-        ok, frame = cam.read()
-        rendered, state = pipeline_event.process(frame)
-        if state.get("mp_active"):
-            mp_inferences_event += 1
-
-    t_elapsed_event = time.perf_counter() - t_start
-    fps_event = num_frames / t_elapsed_event
-    avg_pipeline_event = (t_elapsed_event / num_frames) * 1000.0
-
-    pipeline_event.close()
-
-    print(f"  -> Hoàn thành {num_frames} frames trong {t_elapsed_event:.2f}s")
-    print(f"  -> FPS trung bình: {fps_event:.1f} FPS")
-    print(f"  -> Pipeline latency: {avg_pipeline_event:.1f} ms/frame")
-    print(f"  -> Số lần MediaPipe suy luận: {mp_inferences_event}/{num_frames} frames ({mp_inferences_event / num_frames * 100:.1f}%)")
-
-    # -------------------------------------------------------------
-    # 2. Ket qua so sanh va danh gia
-    # -------------------------------------------------------------
-    print("\n" + "=" * 70)
-    print(" KẾT QUẢ SO SÁNH HIỆU NĂNG")
-    print("=" * 70)
-    print(f"{'Tiêu chí':<30} | {'Always-On (Ước tính)':<20} | {'Hybrid Event-Triggered'}")
-    print("-" * 70)
-    est_always_on_fps = fps_event * 0.55  # MediaPipe chạy liên tục làm giảm FPS ~40-50%
-    est_always_on_lat = avg_pipeline_event + 18.0
-    print(f"{'MediaPipe Inferences':<30} | {num_frames:<20} | {mp_inferences_event} ({mp_inferences_event/num_frames*100:.1f}%)")
-    print(f"{'Tiết kiệm suy luận MediaPipe':<30} | {'0%':<20} | {100.0 - (mp_inferences_event/num_frames*100):.1f}%")
-    print(f"{'AI Processing FPS':<30} | {est_always_on_fps:.1f} FPS (ước tính)   | {fps_event:.1f} FPS")
-    print(f"{'Latency trung bình':<30} | {est_always_on_lat:.1f} ms (ước tính)    | {avg_pipeline_event:.1f} ms")
-    print("=" * 70)
-    print("-> Kết luận: Kiến trúc Hybrid giúp giảm hơn 85-95% số lần gọi MediaPipe")
-    print("   trong điều kiện lái xe bình thường, giải phóng CPU/GPU đáng kể.\n")
+def run_benchmark(seconds=600):
+    os.environ["HEADLESS"] = "1"
+    capture = open_camera()
+    if not capture.isOpened():
+        capture.release()
+        raise RuntimeError("Could not open USB camera")
+    landmarker = pipeline = source = None
+    latencies, frame_ages = [], []
+    gaps = 0
+    try:
+        try:
+            landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(
+                mp.tasks.vision.FaceLandmarkerOptions(
+                    base_options=mp.tasks.BaseOptions(model_asset_path=str(MODEL_PATH)),
+                    running_mode=mp.tasks.vision.RunningMode.VIDEO, num_faces=1))
+        except Exception as exc:
+            print(f"[BENCHMARK] MediaPipe unavailable: {exc}")
+        pipeline = DrowsinessPipeline(
+            model_path=os.getenv("YOLO_MODEL_PATH", str(YOLO_MODEL_PATH)),
+            face_landmarker=landmarker, esp_communicator=EspCommunicator("MOCK"))
+        landmarker = None
+        source = CameraFrameSource(capture, on_frame=pipeline.event_recorder.append_frame,
+                                   capture_factory=open_camera)
+        frame_id = 0
+        start = time.monotonic()
+        while time.monotonic() - start < seconds:
+            ok, frame, frame_id, timestamp_ns, utc = source.read_latest(frame_id)
+            if not ok:
+                gaps += 1
+                pipeline.reset_tracking()
+                continue
+            _, state = pipeline.process(frame, frame_id, timestamp_ns, utc)
+            latencies.append(state["pipeline_latency_ms"])
+            frame_ages.append(state["frame_age_ms"])
+        elapsed = time.monotonic() - start
+        print(f"Measured frames={len(latencies)}, elapsed={elapsed:.1f}s, camera_gaps={gaps}")
+        if latencies:
+            ordered = sorted(latencies)
+            p95 = ordered[min(len(ordered)-1, int(len(ordered)*0.95))]
+            print(f"Throughput={len(latencies)/elapsed:.2f} FPS; pipeline mean={statistics.mean(latencies):.1f}ms; "
+                  f"p95={p95:.1f}ms; mean frame age={statistics.mean(frame_ages):.1f}ms")
+        print("ESP is MOCK. CSV contains temperature/RAM; hardware alert latency is not measured.")
+    finally:
+        if source is not None:
+            source.close()
+        else:
+            capture.release()
+        if pipeline is not None:
+            pipeline.close()
+        if landmarker is not None:
+            landmarker.close()
 
 
 if __name__ == "__main__":
-    run_benchmark(num_frames=60)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--seconds", type=float, default=600)
+    args = parser.parse_args()
+    if args.seconds <= 0:
+        parser.error("--seconds must be positive")
+    run_benchmark(args.seconds)

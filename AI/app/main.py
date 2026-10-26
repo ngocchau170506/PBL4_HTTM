@@ -1,5 +1,3 @@
-"""Single application entry point for calibration and driver monitoring."""
-
 import time
 import sys
 import os
@@ -23,10 +21,10 @@ from AI.scripts.drowsiness_pipeline import DrowsinessPipeline
 from AI.scripts.camera_frame_source import CameraFrameSource
 from AI.scripts.esp_communication import EspCommunicator
 from AI.scripts.event_recorder import EventRecorder
+from AI.scripts.camera_config import open_camera
 
 WINDOW_TITLE = "Assess the driver's condition"
 STABLE_FRAMES_REQUIRED = 15
-
 
 def _detect_alignment(frame, landmarker, timestamp):
     height, width = frame.shape[:2]
@@ -48,90 +46,114 @@ def _detect_alignment(frame, landmarker, timestamp):
     }
 
 
+class HeadlessDashboard:
+    """Keep startup/calibration automatic without OpenCV windows."""
+    def poll_action(self):
+        return None
+
+    def close(self):
+        pass
+
+    def __getattr__(self, name):
+        if name.startswith("show_"):
+            return lambda *args, **kwargs: None
+        raise AttributeError(name)
+
+
 def run():
     model_path = Path(MODEL_PATH)
-    if not model_path.is_file():
-        raise FileNotFoundError(f"Khong tim thay MediaPipe model: {model_path}")
-
-    cap = cv2.VideoCapture(0)
+    cap = open_camera()
     if not cap.isOpened():
         raise RuntimeError("Khong mo duoc camera")
 
-    dashboard = Dashboard()
+    headless = os.getenv("HEADLESS", "0") == "1"
+    dashboard = HeadlessDashboard() if headless else Dashboard()
     landmarker = None
     pipeline = None
     camera_source = None
+    esp = None
+    event_recorder = None
     try:
-        options = mp.tasks.vision.FaceLandmarkerOptions(
-            base_options=mp.tasks.BaseOptions(model_asset_path=str(model_path)),
-            running_mode=mp.tasks.vision.RunningMode.VIDEO,
-            num_faces=1,
-        )
-        landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
-        timestamp = -1
-        stable_frames = 0
-
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                raise RuntimeError("Khong doc duoc frame tu camera")
-            timestamp = max(timestamp + 1, int(time.monotonic() * 1000))
-            stable, metrics = _detect_alignment(frame, landmarker, timestamp)
-            stable_frames = stable_frames + 1 if stable else 0
-            can_continue = stable_frames >= STABLE_FRAMES_REQUIRED
-
-            status = (
-                "Can chinh thanh cong - bat dau do baseline ca nhan"
-                if can_continue
-                else "Giu dau thang, nhin tu nhien vao camera"
+        try:
+            options = mp.tasks.vision.FaceLandmarkerOptions(
+                base_options=mp.tasks.BaseOptions(model_asset_path=str(model_path)),
+                running_mode=mp.tasks.vision.RunningMode.VIDEO,
+                num_faces=1,
             )
+            landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
+        except Exception as exc:
+            print(f"[STARTUP] MediaPipe unavailable; YOLO-only mode: {exc}")
+        if landmarker is not None and os.getenv("SKIP_CALIBRATION", "0") != "1":
+            timestamp = -1
+            stable_frames = 0
+            can_continue = False
 
-            dashboard.show_alignment(frame, status, metrics, can_continue)
+            alignment_deadline = time.monotonic() + float(os.getenv("ALIGNMENT_TIMEOUT", "30"))
+            while True:
+                if time.monotonic() >= alignment_deadline:
+                    print("[CALIBRATION] Alignment timed out; use previous/default baseline")
+                    break
+                ok, frame = cap.read()
+                if not ok:
+                    raise RuntimeError("Khong doc duoc frame tu camera")
+                timestamp = max(timestamp + 1, int(time.monotonic() * 1000))
+                stable, metrics = _detect_alignment(frame, landmarker, timestamp)
+                stable_frames = stable_frames + 1 if stable else 0
+                can_continue = stable_frames >= STABLE_FRAMES_REQUIRED
 
-            action = dashboard.poll_action()
+                status = (
+                    "Can chinh thanh cong - bat dau do baseline ca nhan"
+                    if can_continue
+                    else "Giu dau thang, nhin tu nhien vao camera"
+                )
 
-            if action == "quit":
-                return
+                dashboard.show_alignment(frame, status, metrics, can_continue)
+
+                action = dashboard.poll_action()
+
+                if action == "quit":
+                    return
+
+                if can_continue:
+                    break
 
             if can_continue:
-                break
+                # GIAI DOAN 2: Do baseline ca nhan (Personal Calibration)
+                session = CalibrationSession(duration=CALIBRATION_SECONDS)
+                session.start()
 
-        # GIAI DOAN 2: Do baseline ca nhan (Personal Calibration)
-        session = CalibrationSession(duration=CALIBRATION_SECONDS)
-        session.start()
+                while not session.finished:
+                    ok, frame = cap.read()
+                    if not ok:
+                        raise RuntimeError("Khong doc duoc frame khi do baseline")
 
-        while not session.finished:
-            ok, frame = cap.read()
-            if not ok:
-                raise RuntimeError("Khong doc duoc frame khi do baseline")
+                    data = session.update(frame, landmarker)
+                    dashboard.show_calibration(frame, data)
 
-            data = session.update(frame, landmarker)
-            dashboard.show_calibration(frame, data)
+                    if dashboard.poll_action() == "quit":
+                        return
 
-            if dashboard.poll_action() == "quit":
-                return
+                # Luu ket qua vao baseline.json
+                saved = session.save(BASELINE_PATH)
+                if saved:
+                    print(f"[CALIBRATION] Luu baseline ca nhan thanh cong: {BASELINE_PATH}")
+                else:
+                    print("[CALIBRATION] Khong du mau hop le de tao baseline moi, giu baseline hien tai.")
 
-        # Luu ket qua vao baseline.json
-        saved = session.save(BASELINE_PATH)
-        if saved:
-            print(f"[CALIBRATION] Luu baseline ca nhan thanh cong: {BASELINE_PATH}")
-        else:
-            print("[CALIBRATION] Khong du mau hop le de tao baseline moi, giu baseline hien tai.")
-
-        # Thong bao hoan tat truoc khi khoi dong giam sat
-        msg_end = time.monotonic() + 1.5
-        while time.monotonic() < msg_end:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            dashboard.show_message(
-                frame,
-                "CALIBRATION COMPLETE",
-                "Do baseline ca nhan thanh cong!\nDang khoi dong he thong giam sat...",
-                can_start=False,
-            )
-            if dashboard.poll_action() == "quit":
-                return
+                # Thong bao hoan tat truoc khi khoi dong giam sat
+                msg_end = time.monotonic() + 1.5
+                while time.monotonic() < msg_end:
+                    ok, frame = cap.read()
+                    if not ok:
+                        break
+                    dashboard.show_message(
+                        frame,
+                        "CALIBRATION COMPLETE",
+                        "Do baseline ca nhan thanh cong!\nDang khoi dong he thong giam sat...",
+                        can_start=False,
+                    )
+                    if dashboard.poll_action() == "quit":
+                        return
 
         # Chuyen ownership landmarker sang pipeline.
         # Pipeline se goi landmarker.close() trong pipeline.close().
@@ -140,11 +162,14 @@ def run():
             mode=os.getenv("ESP_MODE", "MOCK"),
             port=os.getenv("ESP_PORT"),
             baudrate=int(os.getenv("ESP_BAUDRATE", "115200")),
+            require_ack=os.getenv("ESP_REQUIRE_ACK", "0") == "1",
         )
+        esp.send_status("NORMAL")
         event_recorder = EventRecorder(str(Path(__file__).resolve().parents[1] / "data"))
-        camera_source = CameraFrameSource(cap, on_frame=event_recorder.append_frame)
+        camera_source = CameraFrameSource(cap, on_frame=event_recorder.append_frame, capture_factory=open_camera)
         cap = None
         pipeline = DrowsinessPipeline(
+            model_path=os.getenv("YOLO_MODEL_PATH", str(Path(__file__).resolve().parents[1] / "models" / "best.pt")),
             esp_communicator=esp,
             face_landmarker=landmarker,
             event_recorder=event_recorder,
@@ -158,9 +183,12 @@ def run():
                 after_frame_id=last_frame_id,
             )
             if not ok:
-                raise RuntimeError(
-                    "Khong doc duoc frame khi giam sat"
-                )
+                esp.send_status("NORMAL")
+                pipeline.reset_tracking()
+                dashboard.show_message(None, "CAMERA ERROR", camera_source.error or "Waiting for camera", can_start=False)
+                if dashboard.poll_action() == "quit":
+                    return
+                continue
 
             last_frame_id = frame_id
             rendered, state = pipeline.process(
@@ -178,12 +206,18 @@ def run():
             camera_source.close()
         if pipeline is not None:
             pipeline.close()
+        if pipeline is None:
+            if event_recorder is not None:
+                event_recorder.close()
+            if esp is not None:
+                esp.close()
         if landmarker is not None:
             landmarker.close()
         if cap is not None:
             cap.release()
         dashboard.close()
-        cv2.destroyAllWindows()
+        if not headless:
+            cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":

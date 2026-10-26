@@ -146,7 +146,7 @@ class Dashboard:
         if state is None:
             cv2.imshow(self.WINDOW,dashboard_frame)
             return
-        s=state or {}; c=self._base('TEST MODE / YOLO + EVENT-TRIGGERED MEDIAPIPE / FUSION')
+        s=state or {}; c=self._base('YOLO + INDEPENDENT MEDIAPIPE / FUSION')
         self._last_state=s
         # Left: camera, then concise YOLO list.
         c[115:716,25:1000]=self._fit_frame(dashboard_frame,975,601)
@@ -167,7 +167,7 @@ class Dashboard:
         eye_state=str(s.get('drowsy_state','IDLE')).upper()
         mouth_state=str(s.get('yawning_state','IDLE')).upper()
         mp_active=bool(s.get('mp_active',False))
-        alert_color=self.RED if 'DROWSY' in alert else self.AMBER if alert in ('SUSPECTED','CONFLICT','TRACKING_LOST','YAWNING') else self.GREEN
+        alert_color=self.RED if 'DROWSY' in alert else self.AMBER if alert in ('SUSPECTED','CONFLICT','TRACKING_LOST','UNKNOWN','YAWNING') else self.GREEN
         self._text(c,f'{alert}  /  {detailed}',1037,168,.54,alert_color,2,505)
         self._text(c,f'EYE: {eye_state}     MOUTH: {mouth_state}',1037,191,.36,self.MUTED,1,505)
         self._card(c,(x1,214,1290,328),'EYE CLOSED',self.RED)
@@ -186,14 +186,14 @@ class Dashboard:
         self._text(c,f'EAR: {self._num(s.get("mp_ear"),3)}   Threshold: {self._num(s.get("ear_threshold"),3)}',1037,416,.43,self.WHITE)
         self._text(c,f'MAR: {self._num(s.get("mp_mar"),3)}   Threshold: {self._num(s.get("mar_threshold"),3)}',1037,443,.43,self.WHITE)
         self._text(c,f'MP activations: {s.get("mp_total_activations",0)}',1037,466,.36,self.MUTED)
-        self._card(c,(x1,487,x2,605),'FUSION / VALIDATION VOTES',self.PURPLE)
+        self._card(c,(x1,487,x2,605),'FUSION / MEASUREMENT SOURCE',self.PURPLE)
         for i,(label,prefix) in enumerate((('EYE','drowsy'),('YAWN','yawning'))):
             x=1037+i*270
             valid=s.get(f'{prefix}_valid_samples',0)
             ratio=self._safe_float(s.get(f'{prefix}_vote_ratio'))
-            self._text(c,f'{label}: {valid} valid votes',x,536,.43,self.WHITE,1,245)
+            self._text(c,f'{label}: {s.get("eye_source" if i==0 else "mouth_source", "NONE")}',x,536,.43,self.WHITE,1,245)
             self._progress(c,(x,547,x+239,557),ratio,self.PURPLE)
-            self._text(c,f'Closed/open vote ratio: {ratio*100:.0f}%' if i==0 else f'Yawn vote ratio: {ratio*100:.0f}%',x,584,.37,self.MUTED,1,246)
+            self._text(c,f'MP sample: {"VALID" if valid else "UNAVAILABLE"}',x,584,.37,self.MUTED,1,246)
         self._card(c,(x1,616,x2,732),'PERFORMANCE / FRAME BUFFER',self.CYAN)
         run=self._safe_float(s.get('monitoring_duration_seconds'))
         try: run_text=duration_hms(run)
