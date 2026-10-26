@@ -89,6 +89,8 @@ Luật này áp dụng cho Claude Code, Antigravity, Gemini, GPT và mọi công
 - Công cụ tự đọc file này (Claude Code): làm theo như trên.
 - Công cụ không tự đọc: MAIN dán nguyên mục 0, 1, 3, 4 và dòng `ROLE:` vào đầu phiên.
 - Chốt chặn thật không nằm ở lời hứa của AI mà ở `python workbench/gate.py` và phạm vi trong scope/\*.json. Mọi công cụ đều phải chạy được cổng này.
+- Xây dựng để agent hiểu bản chất vấn đề ngay trước khi xảy ra chứ không nhất thiết phải trong quá trình xử lý , hãy giả định các lỗi sẽ xảy ra và đưa ra các đề xuất giải pháp phù hợp cho MAIN và không để phát sinh những cấu trúc rườm rà không cần thiết .
+- Kiểm tra và giải phóng bộ nhớ nếu gặp tình trạng lỗi đè lỗi hoặc lỗi phát sinh trước/sau nhưng vẫn còn ảnh hưởng đến quá trình xử lý mà agent nhận định đúng .
 
 ## 10. Thí nghiệm hiệu năng và chất lượng (chỉ khi MAIN yêu cầu)
 
@@ -124,3 +126,6 @@ Quy tắc kết thúc:
 - Kết luận dùng cho giai đoạn sau ghi vào mục "Kết luận cho các giai đoạn sau" của EXP-xxx.md và một dòng tóm tắt vào mục "Bài học thí nghiệm" của feature-map.md.
 - Không báo "đã tối ưu" nếu thiếu số đo trước và sau, cùng điều kiện đo (máy, fps, độ phân giải, số mẫu).
 - Phát hiện kiểu lỗi mới: ghi vị trí đề xuất. ErrorCode mới = Change Request. Thêm kiểm tra phát hiện lỗi trong `src/` = PROPOSE riêng.
+- Hãy kiểm tra kỹ và đảm bảo rằng trước khi đưa ra bất cứ giải pháp nào , hãy lường trước các tình huống có thể xảy ra và đưa ra các đề xuất phù hợp , không để phát sinh những cấu trúc rườm rà không cần thiết .
+- Khi phát sinh hay tạo ra cần truy vấn để biết MAIN đang xử lí hoặc có thể kiểm tra tại các file và hiểu được agent đang và làm những gì để tránh những trường hợp lỗi chồng chất.
+- Khi đóng báo cáo cần ghi rõ ngày giờ thực hiện để có thể đối chiếu các thay đổi sau này .

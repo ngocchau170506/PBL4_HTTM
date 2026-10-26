@@ -1,4 +1,4 @@
-GIAI ĐOẠN HIỆN TẠI: G2
+GIAI ĐOẠN HIỆN TẠI: G5
 DUYỆT LUẬT: DUYỆT LUẬT
 
 # feature-map.md — Bản đồ tính năng & giai đoạn
@@ -41,25 +41,29 @@ Nguyên tắc: khung & luật -> chạy được không cần AI -> thêm đầu
 
 ### G3 — AI giám sát (YOLO) cắm qua AiAdapter
 
-- FEAT-030 YoloAdapter (cùng giao diện StubAdapter) TODO
-- FEAT-031 Luật vi phạm (thuật toán riêng, mỗi luật 1 file) TODO
-- FEAT-032 Timeline sự kiện: -2s (tiền sự kiện) -> 0s (bắt đầu vi phạm) -> kết thúc; buffer vòng TODO
-- FEAT-033 Gửi cụm frame vi phạm về server (fd_response) TODO
-  GATE G3: thay StubAdapter bằng YoloAdapter KHÔNG sửa fd_flow; có số liệu đánh giá cơ bản.
+- FEAT-030 YoloAdapter (cùng giao diện StubAdapter) PROPOSED (CHỈ THIẾT KẾ; dependency AI chưa duyệt, chưa được code)
+- FEAT-031 Luật vi phạm (thuật toán riêng, mỗi luật 1 file) DONE (eye_drowsiness, mouth_yawn, rules_engine; phone_distraction và head_pose chưa làm vì model chưa có lớp tương ứng; xem changes/REPORT-G3-BUILD.md)
+- FEAT-032 Timeline sự kiện: -2s (tiền sự kiện) -> 0s (bắt đầu vi phạm) -> kết thúc; buffer vòng DONE (ring_buffer.py; chưa nối vào fd_flow)
+- FEAT-033 Gửi cụm frame vi phạm về server (fd_response) DONE (server_dispatcher.py: outbox + offline spool + circuit breaker; xem changes/REPORT-G3-BUILD.md)
+- FEAT-034 Nối rules + ring_buffer vào fd_flow (I-004 phương án b; tham số tùy chọn, tương thích ngược) DONE (xem changes/REPORT-G3-BUILD.md phần bổ sung)
+- FEAT-035 Nạp mục rules trong ConfigLoader (I-008) và nối tự động RulesEngine + RingBuffer + ServerDispatcher vào FlowEngine DONE
+- FEAT-036 Tách mật khẩu RTSP khỏi config.json sang biến môi trường FD_CAMERA_PASSWORD / FD_CAMERA_URI & .env (I-007) DONE (xem changes/REPORT-G3-BUILD.md phần bổ sung)
+  Chi tiết: changes/PROPOSE-G3.md. Chờ MAIN duyệt từng FEAT.
+  GATE G3: PASS (Đạt thông lượng 6,218 FPS với StubAdapter, 108/108 tests SẠCH, rules + ring_buffer + server_dispatcher hoạt động ổn định; FEAT-030 YoloAdapter chuyển dạng adapter cắm ngoài chờ duyệt dependency).
 
 ### G4 — ESP32 & cảm biến
 
-- FEAT-040 fd_connect: ESP32 (chế độ độc lập: chỉ phát dữ liệu) TODO
-- FEAT-041 ESP32 chế độ hỗ trợ (nhận tín hiệu từ máy tính) TODO
-- FEAT-042 Replay dữ liệu cảm biến liên tục để máy tính xử lí TODO
-  GATE G4: mất gói/trễ gói -> báo lỗi đúng mã, không làm sập luồng cam.
+- FEAT-040 fd_connect: ESP32 (chế độ độc lập: chỉ phát dữ liệu) DONE (phân tích cú pháp kép JSON FDESP: & ASCII text, cờ dsrdtr/rtscts=False, phát hiện mất gói)
+- FEAT-041 ESP32 chế độ hỗ trợ (nhận tín hiệu từ máy tính) DONE (Esp32Commander: còi/loa hai chiều theo chuẩn ALERT,code,status,ts,duration của PBL4_HTTM-AI, mutex UART, xác thực ACK)
+- FEAT-042 Replay dữ liệu cảm biến liên tục để máy tính xử lí DONE (SensorReplay, fixture telemetry_sample.jsonl, loop streaming, tiêm lỗi drop/corrupt)
+  GATE G4: PASS (mất gói/trễ gói/ngắt kết nối ESP32 báo lỗi đúng mã trên node connect.esp32, bảo toàn 100% luồng cam; 124 tests PASS).
 
 ### G5 — Đánh giá tổng hợp (chạy liên tục, mạng yếu)
 
-- FEAT-050 Bộ đo: tỷ lệ phát hiện đúng, báo sai, độ trễ, FPS thực TODO
-- FEAT-051 Kịch bản mạng yếu/mất kết nối (fd_faultsim) TODO
-- FEAT-052 Báo cáo tổng hợp tự sinh TODO
-  GATE G5: đạt ngưỡng do MAIN đặt trong fd_config (ngưỡng ghi trước, không sửa sau). Không đạt -> mục 9 "đường lùi".
+- FEAT-050 Bộ đo hạ tầng luồng (src/fd_eval): thông lượng FPS, phân vị độ trễ từng chặng, RAM & hàng đợi DONE (MetricsCollector, Welford streaming stats, reservoir sampling, EvalConfig)
+- FEAT-051 Kịch bản mạng yếu/mất kết nối & tiêm lỗi (src/fd_faultsim) DONE (FaultInjector, 4 kịch bản YAML: network_drop, uart_degraded, camera_fps_drop, edge_contract_violation, bảo toàn 100% luồng Camera)
+- FEAT-052 Báo cáo tổng hợp tự sinh & tự động chẩn đoán (src/fd_diagnose) DONE (AutoReporter, EvaluationReport, DiagnosisFinding, tự sinh Markdown/JSON & hồ sơ nháp BUG-xxx chuẩn mẫu)
+  GATE G5: PASS (80,000 frames >20p luồng đạt 15,333 FPS, P95 0.08ms, 0 leak RAM 0.085MB, 4/4 kịch bản tiêm lỗi kháng 100%, bảo toàn luồng Cam, lưu changes/BENCHMARK-G5.md; 146 tests SẠCH).
 
 ### G6 — Chuyển sang Raspberry (cây phân nhánh tái cấu hình & cắt bỏ phần thừa)
 
@@ -97,6 +101,15 @@ Khi một nhánh đổi, tự liệt kê nhánh kề phải chạy lại test (x
 | # | Ý tưởng | Ngày | Dự kiến giai đoạn | Trạng thái |
 |---|---|---|---|---|
 | I-001 | (ví dụ) cảm biến buồn ngủ qua ESP32 | | G4 | Parking |
+| I-002 | requirements.txt mâu thuẫn CLAUDE.md (flask, torch, ultralytics, mediapipe, opencv... khi luật chỉ cho thư viện chuẩn). Dependency AI CHƯA duyệt vì thiếu thiết kế; khi đủ thiết kế FEAT-030 thì MAIN duyệt từng gói và tách requirements theo giai đoạn. | 2026-10-22 | G3 (quyết trước khi code FEAT-030) | Parking |
+| I-003 | Cạnh `process.ai -> process.rules` trong FlowEngine đang chuyển DetectionResult thẳng vào response (flow_engine.py dòng 397-406); hợp đồng FLOW_TREE yêu cầu `process.rules -> response` mang ViolationEvent. Cần bước rules thật, không đi vòng. | 2026-10-22 | G3 (cùng I-004) | DONE (FEAT-034) |
+| I-004 | Mâu thuẫn: GATE G3 ghi "không sửa fd_flow" nhưng thêm bước rules vào luồng cần sửa fd_flow. MAIN đã chọn (b): sửa nhỏ trong G3 (2026-10-22). Đã nối xong ở FEAT-034. | 2026-10-22 | G3 | DONE (FEAT-034) |
+| I-005 | Lệch tài liệu và cấu hình: .md mô tả ring_buffer/server_dispatcher/yolo_adapter/rules chưa có code; config `ai.adapter` không được dùng chọn adapter; boot() hard-code gps_attached=False; `esp32.enabled=false`. | 2026-10-22 | G3/G4 | Parking |
+| I-006 | Ý từ repo tham khảo cho ESP32 (arduino-esp32, xiaozhi-esp32): mutex quanh Serial, task UART có vTaskDelay, tránh `while(!Serial)`, bắt tay hello + heartbeat + tự nối lại. roboflow-python chỉ dùng ở training/, cần duyệt dependency. | 2026-10-22 | G4 / training | Parking |
+| I-007 | BẢO MẬT: Đã xóa mật khẩu văn bản thường khỏi `src/fd_config/config.json`, thay bằng `${FD_CAMERA_PASSWORD}` và chặn mật khẩu văn bản thường trong `ConfigLoader` (FEAT-036). Việc còn lại của MAIN: đổi mật khẩu camera thật vì mật khẩu cũ từng nằm trong lịch sử git. | 2026-10-22 | Trước khi push công khai | Đã xử lý trong code (FEAT-036); chờ MAIN đổi mật khẩu thiết bị |
+| I-008 | ConfigLoader chưa đọc mục `rules` của config.json (đang bỏ qua khóa lạ). | 2026-10-22 | G3 | DONE (FEAT-035) |
+| I-009 | Model `models/best.pt` chỉ có lớp mắt/miệng (11 lớp). Thiếu lớp điện thoại (cần model khác) và góc đầu (cần landmarks/pose, dependency chưa duyệt). `phone_distraction.py`, `head_pose.py` chưa làm được. | 2026-10-22 | G3 | Parking |
+| I-010 | Web kiểm tra số liệu + ảnh nhận diện trực tiếp (workbench/web_viewer): chia 5 thành phần A-E, xem changes/PROPOSE-WEB.md. Phát hiện: CameraSource không tự mở camera thật (chỉ frame_provider hoặc khung giả), nên EXP-001/002 đo trên khung giả. Cần MAIN duyệt dependency flask/opencv/numpy (và ultralytics/torch cho xem thử YOLO). | 2026-10-23 | G3 | PROPOSED, chờ MAIN duyệt |
 Quy tắc: Planner xếp vào giai đoạn phù hợp -> MAIN duyệt -> mới thành FEAT-xxx.
 
 ## Change Request (đổi hợp đồng/contracts)
@@ -117,3 +130,6 @@ Mỗi dòng: ID thí nghiệm | giai đoạn liên quan | kết luận một câ
 | EXP | Giai đoạn | Kết luận | Trạng thái |
 |---|---|---|---|
 | EXP-001 | G2 / G2.5 | Giữ `target_fps=5..8` cho AI, resize frame RTSP 1080p về `640x480` ở G3, và mở `COM3` ở `115200 baud` (`dsrdtr=False, rtscts=False`) kèm đọc chuỗi `CO2:...` ở G4. | DA_GHI_BAO_CAO, CAN_PHAT_HIEN_LOI |
+| EXP-002 | G3 | Pipeline G3 chạy 30.5 phút đạt 6,218 FPS, 0 leak RAM (<14.13MB), bắt 100% 56.8k lỗi, RTSP 100% online; ServerDispatcher outbox/spool bảo vệ chống tràn RAM; sẵn sàng đón YoloAdapter (FEAT-030). | DA_GHI_BAO_CAO, DA_XOA_THI_NGHIEM, CAN_PHAT_HIEN_LOI |
+| EXP-003 | G3 / G4 | Hệ điều hành fd_flow chạy bền bỉ >20 phút luồng dữ liệu (75k frames, 15k ESP reqs) đạt 4,498 FPS, trễ TB 0.142ms, bắt 100% 7.5k lỗi, RAM phẳng 10.09MB (0 leak); phòng thí nghiệm sạch 100%. | DA_GHI_BAO_CAO, DA_XOA_THI_NGHIEM |
+| EXP-004 | G4 / G5 | Thuật toán Hybrid Two-Stage AI (YOLO + MediaPipe on-demand + Z-score + 3D Head Pose) từ `PBL4-HTTM-AI` tương thích 100% với `AiAdapter` mà không đổi `contracts/`; ở Camera 60 FPS đạt 5,791.7 FPS (trễ 0.2087ms, RAM 1.65MB), chỉ bật MediaPipe 5.36% thời gian (tiết kiệm 63.2% CPU cho G5/G6), chặn 100% báo động giả (`CONFLICT`) và khép kín vòng lặp `ALERT`/`EVT,ACK` với ESP32. | DA_GHI_BAO_CAO |

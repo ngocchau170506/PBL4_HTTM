@@ -74,3 +74,18 @@ Kiểm bằng `python workbench/gate.py` (gọi check_scope). Đụng file ngoà
 4. Xong: ghi báo cáo (DA_GHI_BAO_CAO) -> xóa `workbench/experiments/EXP-xxx/` (DA_XOA_THI_NGHIEM) -> chuyển kết luận sang feature-map.md mục "Bài học thí nghiệm".
 5. Muốn áp kết quả vào `src/`: Experimenter chỉ đề xuất; việc sửa đi theo PROPOSE (hoặc CR nếu đụng contracts) với ROLE Builder/Fixer.
    Điều kiện dừng khẩn ở mục 5 vẫn áp dụng cho Experimenter.
+6. Khi Main: yêu cầu test ở mức nào và test bao lâu cần chấp hành xử và trả kết quả về báo cáo, xóa tất các mục file test để tránh sinh lỗi khi đã qua xử lí lâu dài thu về kết qua báo cáo ngay khi hoàn thành test.
+7. Việc xây dựng thuật toán hay cáu trúc hệ thống cần đưa thông tin cho MAIN để xem qua (hiểu và biết mục đích của thuật toán và cấu trúc) và tiếp nhận sự điều chỉnh của MAIN để đảm bảo hệ thống vận hành trơn tru và hiệu quả.
+8. Khi Agent báo cáo cần đưa ra cần đưa ra các nhưng cần Agent thiết kế lại đúng các phần đưa vào báo cáo : /init (thông tin khởi tạo), /plan (kế hoạch điều phối và chỉnh sửa),/compact (khai báo , thu gọn các phần cần chỉnh sửa),/context (tổng hợp các thay đổi đã thực hiện), /Usage (đưa ra ví dụ và cách sử dụng), /model (đưa ra mô hình và giải thích) , /remid (đề xuất và gợi ý chỉnh sửa), /btw (đưa ra ví dụ và cách sử dụng),/dif (đưa ra ví dụ và cách sử dụng) ,/simplify(thông tin tóm gọn và dễ hiểu cho người dùng) , /request(yêu cầu xử lý , chỉnh sửa , cập nhật) , /result (kết quả xử lý), /review (đưa ra ví dụ và cách sử dụng), /test (chạy test), /fix (sửa lỗi), /propose (đề xuất), /merge (merge code), /feedback (đưa ra phản hồi), /progress (đưa ra tiến độ), /done (hoàn thành) => thiết lập của MAIN khi MAIN yêu cầu chỉ đưa vào báo cáo không đưa vào lúc builder/planer xây dựng và thết kế .
+
+## 8. Agent không phải là công cụ theo dỏi tình huống phán đoán hay đề xuất đi sai hướng của MAIN và nêu ra cải tiến đã qua thủ nghiệm hoặc có trên CLAUDE.md.
+
+## 9. Xây dựng để agent hiểu bản chất vấn đề ngay trước khi xảy ra chứ không nhất thiết phải trong quá trình xử lý , hãy giả định các lỗi sẽ xảy ra và đưa ra các đề xuất giải pháp phù hợp cho MAIN và không để phát sinh những cấu trúc rườm rà không cần thiết .
+
+## 10. Không được tạo ra những folder , file mới để chứa code hoặc giải pháp mà không được sự cho phép của MAIN hoặc không tuân thủ các quy chuẩn tại CLAUDE.md.
+
+## 11. Thiết kế file/folder hoàn hảo tránh xung đột hoặc thưa thải khi MAIN muốn thêm mới hoặc chỉnh sửa hệ thống .
+
+## 12. Agent là người xây dựng , là Engineer để tối ưu hóa hoặc sửa lỗi cho hệ thống . Khi có những mục cần chỉnh sửa hoặc bổ sung hãy đảm bảo và kiểm tra lại các file liên quan để tránh xung đột hoặc làm sai lệch hệ thống . Khi Agent muốn sửa đổi bất kỳ file hoặc cấu trúc nào cần có sự đồng ý của MAIN để đảm bảo hệ thống vận hành trơn tru và hiệu quả trong các trường hợp Agent cần hiểu MAIN đang giao vấn đề gì và thiết ra sao khi MAIN giao chứ không báo bỏ và làm đúng trình không đưa IMPORT ngay nếu không phát sinh lỗi => MAIN đưa các <VAI> "Lần lượt" thì thiết kế lần lượt để thực hiện (không cần quá đúng quy trình trừ các phần quang trọng)
+
+## 13. Agent cần đưa ra phán đoán của mình trước khi gửi cho MAIN và MAIn sẽ đưa (có hoặc không) folder thiết kế và các tệp mới để đảm bảo hệ thống vận hành trơn tru và hiệu quả . Cần agent xử lí tệp tin trước , sau đó tổng hợp lại các thay đổi nếu không phù hợp cần đưa vào workbench để MAIN xem xét và phê duyệt .

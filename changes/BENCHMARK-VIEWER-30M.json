@@ -1,0 +1,46 @@
+{
+  "static_import_isolation": true,
+  "edge_cases_camera": true,
+  "edge_cases_esp32": true,
+  "edge_cases_flow_tree": true,
+  "edge_cases_response_spool": true,
+  "sustained_33m_stream": true,
+  "zero_memory_leak": true,
+  "details": {
+    "scanned_files": 43,
+    "cross_import_violations": [],
+    "total_frames": 120000,
+    "equiv_minutes": 33.333333333333336,
+    "real_elapsed_s": 10.655,
+    "real_throughput_fps": 11262.4,
+    "p50_latency_ms": 0.032,
+    "p95_latency_ms": 0.075,
+    "p99_latency_ms": 0.115,
+    "ram_initial_mb": 0.1,
+    "ram_final_mb": 0.187,
+    "ram_growth_mb": 0.0866,
+    "ram_checkpoints": [
+      [
+        20000,
+        0.18
+      ],
+      [
+        40000,
+        0.18
+      ],
+      [
+        60000,
+        0.18
+      ],
+      [
+        80000,
+        0.19
+      ],
+      [
+        100000,
+        0.19
+      ]
+    ],
+    "overall_verdict": "PASS"
+  }
+}

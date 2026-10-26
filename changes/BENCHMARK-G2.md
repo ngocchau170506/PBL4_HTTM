@@ -22,15 +22,16 @@
 
 Chạy dồn tải toàn lực không dùng lệnh chờ `sleep`, khảo sát các mức tải tăng dần:
 
-| Thang tải (Khung hình) | Thời gian chạy | Công suất xử lý cực đại | Độ trễ trung bình | Độ trễ P95 (95% frame) | Đỉnh RAM |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| **10,000 frames** | $1.117\text{ s}$ | **$8,950.0\text{ FPS}$** | $108.9\text{ µs}$ ($0.109\text{ ms}$) | $125.1\text{ µs}$ | $0.33\text{ MB}$ |
-| **20,000 frames** | $2.584\text{ s}$ | **$7,738.7\text{ FPS}$** | $125.9\text{ µs}$ ($0.126\text{ ms}$) | $209.6\text{ µs}$ | $0.95\text{ MB}$ |
-| **30,000 frames** | $4.059\text{ s}$ | **$7,391.2\text{ FPS}$** | $131.8\text{ µs}$ ($0.132\text{ ms}$) | $230.8\text{ µs}$ | $1.56\text{ MB}$ |
-| **40,000 frames** | $5.463\text{ s}$ | **$7,322.6\text{ FPS}$** | $133.1\text{ µs}$ ($0.133\text{ ms}$) | $229.9\text{ µs}$ | $2.19\text{ MB}$ |
-| **50,000 frames** | $7.863\text{ s}$ | **$6,359.1\text{ FPS}$** | $153.3\text{ µs}$ ($0.153\text{ ms}$) | $243.9\text{ µs}$ | $2.81\text{ MB}$ |
+| Thang tải (Khung hình) |  Thời gian chạy  | Công suất xử lý cực đại  |           Độ trễ trung bình           | Độ trễ P95 (95% frame) |     Đỉnh RAM     |
+| :--------------------: | :--------------: | :----------------------: | :-----------------------------------: | :--------------------: | :--------------: |
+|   **10,000 frames**    | $1.117\text{ s}$ | **$8,950.0\text{ FPS}$** | $108.9\text{ µs}$ ($0.109\text{ ms}$) |   $125.1\text{ µs}$    | $0.33\text{ MB}$ |
+|   **20,000 frames**    | $2.584\text{ s}$ | **$7,738.7\text{ FPS}$** | $125.9\text{ µs}$ ($0.126\text{ ms}$) |   $209.6\text{ µs}$    | $0.95\text{ MB}$ |
+|   **30,000 frames**    | $4.059\text{ s}$ | **$7,391.2\text{ FPS}$** | $131.8\text{ µs}$ ($0.132\text{ ms}$) |   $230.8\text{ µs}$    | $1.56\text{ MB}$ |
+|   **40,000 frames**    | $5.463\text{ s}$ | **$7,322.6\text{ FPS}$** | $133.1\text{ µs}$ ($0.133\text{ ms}$) |   $229.9\text{ µs}$    | $2.19\text{ MB}$ |
+|   **50,000 frames**    | $7.863\text{ s}$ | **$6,359.1\text{ FPS}$** | $153.3\text{ µs}$ ($0.153\text{ ms}$) |   $243.9\text{ µs}$    | $2.81\text{ MB}$ |
 
 ### Nhận xét đối chiếu với G1:
+
 1. **Khả năng xử lý đường truyền:** Duy trì ở mức **6,359 — 8,950 FPS** (cao hơn G1 vốn đạt ~6,138 FPS), dù G2 đã gánh thêm logic điều tiết nhịp `FpsThrottle` và máy trạng thái `BaselineCollector`.
 2. **Độ trễ trung bình toàn luồng:** Ổn định ở mức **$108.9 - 153.3\text{ µs}$ ($~0.13\text{ ms}$)**, chứng minh cấu trúc phân tầng `FLOW_TREE` của `fd_flow` có overhead cực thấp, triệt tiêu nguy cơ nghẽn CPU.
 3. **Bộ nhớ RAM:** Đỉnh RAM toàn phiên chỉ **$3.39\text{ MB}$**, mức tăng RAM giữa các mốc tải lớn bằng **$0.00\text{ KB}$** (không hề có hiện tượng rò rỉ bộ nhớ).
@@ -41,16 +42,16 @@ Chạy dồn tải toàn lực không dùng lệnh chờ `sleep`, khảo sát c�
 
 Kiểm tra khả năng lọc nhịp của [FpsThrottle](file:///e:/AI/AI/src/fd_process/sampler/fps_throttle.py) trên 5 nguồn camera khác nhau:
 
-| Nguồn Camera giả định | Nhịp gốc $\rightarrow$ Nhịp đích | Số frame vào | Số frame qua AI | Chu kỳ lý thuyết | Chu kỳ thực tế đo được | Jitter (Độ lệch chuẩn) |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Webcam thấp** | $10\text{ FPS} \rightarrow 5\text{ FPS}$ | 100 | **50 / 50** ($100\%$) | $200.0\text{ ms}$ | $200.00\text{ ms}$ | **$0.00\text{ ms}$** |
-| **Camera RTSP thật (192.168.1.210)** | $25\text{ FPS} \rightarrow 5\text{ FPS}$ | 250 | **50 / 50** ($100\%$) | $200.0\text{ ms}$ | $200.00\text{ ms}$ | **$0.00\text{ ms}$** |
-| **Camera chuẩn 30 FPS** | $30\text{ FPS} \rightarrow 6\text{ FPS}$ | 300 | **60 / 60** ($100\%$) | $166.7\text{ ms}$ | $166.66\text{ ms}$ | **$0.48\text{ ms}$** |
-| **Camera tốc độ cao 60 FPS** | $60\text{ FPS} \rightarrow 5\text{ FPS}$ | 600 | **50 / 50** ($100\%$) | $200.0\text{ ms}$ | $200.00\text{ ms}$ | **$0.00\text{ ms}$** |
-| **Camera siêu tốc 120 FPS** | $120\text{ FPS} \rightarrow 6\text{ FPS}$ | 1,200 | **60 / 60** ($100\%$) | $166.7\text{ ms}$ | $166.66\text{ ms}$ | **$0.48\text{ ms}$** |
+| Nguồn Camera giả định                |     Nhịp gốc $\rightarrow$ Nhịp đích      | Số frame vào |    Số frame qua AI    | Chu kỳ lý thuyết  | Chu kỳ thực tế đo được | Jitter (Độ lệch chuẩn) |
+| :----------------------------------- | :---------------------------------------: | :----------: | :-------------------: | :---------------: | :--------------------: | :--------------------: |
+| **Webcam thấp**                      | $10\text{ FPS} \rightarrow 5\text{ FPS}$  |     100      | **50 / 50** ($100\%$) | $200.0\text{ ms}$ |   $200.00\text{ ms}$   |  **$0.00\text{ ms}$**  |
+| **Camera RTSP thật (192.168.1.210)** | $25\text{ FPS} \rightarrow 5\text{ FPS}$  |     250      | **50 / 50** ($100\%$) | $200.0\text{ ms}$ |   $200.00\text{ ms}$   |  **$0.00\text{ ms}$**  |
+| **Camera chuẩn 30 FPS**              | $30\text{ FPS} \rightarrow 6\text{ FPS}$  |     300      | **60 / 60** ($100\%$) | $166.7\text{ ms}$ |   $166.66\text{ ms}$   |  **$0.48\text{ ms}$**  |
+| **Camera tốc độ cao 60 FPS**         | $60\text{ FPS} \rightarrow 5\text{ FPS}$  |     600      | **50 / 50** ($100\%$) | $200.0\text{ ms}$ |   $200.00\text{ ms}$   |  **$0.00\text{ ms}$**  |
+| **Camera siêu tốc 120 FPS**          | $120\text{ FPS} \rightarrow 6\text{ FPS}$ |    1,200     | **60 / 60** ($100\%$) | $166.7\text{ ms}$ |   $166.66\text{ ms}$   |  **$0.48\text{ ms}$**  |
 
-* **Độ chính xác lấy mẫu:** Đạt **$100.0\%$** trên tất cả các kịch bản.
-* **Kiểm soát Jitter:** Nhờ thuật toán khóa pha bù sai số làm tròn số nguyên $0.5\text{ ms}$, Jitter ở mọi mức FPS đều $< 0.5\text{ ms}$, bảo đảm cấp nhịp đều đặn tuyệt đối cho AI xử lý ở G3.
+- **Độ chính xác lấy mẫu:** Đạt **$100.0\%$** trên tất cả các kịch bản.
+- **Kiểm soát Jitter:** Nhờ thuật toán khóa pha bù sai số làm tròn số nguyên $0.5\text{ ms}$, Jitter ở mọi mức FPS đều $< 0.5\text{ ms}$, bảo đảm cấp nhịp đều đặn tuyệt đối cho AI xử lý ở G3.
 
 ---
 
@@ -73,11 +74,11 @@ Bơm liên tục **10,000 gói tin cảm biến** (CO2, độ rung lắc, kiểm
 
 Đo đạc thời gian từ thời điểm phát hiện vi phạm (`ViolationEvent`) đến khi `ResponseLogger` ghi nhận và kích hoạt phát tín hiệu còi/loa/buzzer:
 
-| Số lượng lượt kích hoạt | Thời gian trung bình | Phân vị P50 | Phân vị P95 | Phân vị P99 | Thời gian tối đa (Max) |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| **2,000 cảnh báo** | **$18.57\text{ µs}$ ($0.019\text{ ms}$)** | $18.70\text{ µs}$ | $23.30\text{ µs}$ | $31.50\text{ µs}$ | $91.80\text{ µs}$ ($0.092\text{ ms}$) |
+| Số lượng lượt kích hoạt |           Thời gian trung bình            |    Phân vị P50    |    Phân vị P95    |    Phân vị P99    |        Thời gian tối đa (Max)         |
+| :---------------------: | :---------------------------------------: | :---------------: | :---------------: | :---------------: | :-----------------------------------: |
+|   **2,000 cảnh báo**    | **$18.57\text{ µs}$ ($0.019\text{ ms}$)** | $18.70\text{ µs}$ | $23.30\text{ µs}$ | $31.50\text{ µs}$ | $91.80\text{ µs}$ ($0.092\text{ ms}$) |
 
-* **Đánh giá phản xạ:** Tốc độ kích hoạt cảnh báo loa đạt dưới **$0.02\text{ ms}$**, nhanh hơn yêu cầu thời gian thực hàng trăm lần (chuẩn phản xạ an toàn ô tô thường yêu cầu $\le 200\text{ ms}$).
+- **Đánh giá phản xạ:** Tốc độ kích hoạt cảnh báo loa đạt dưới **$0.02\text{ ms}$**, nhanh hơn yêu cầu thời gian thực hàng trăm lần (chuẩn phản xạ an toàn ô tô thường yêu cầu $\le 200\text{ ms}$).
 
 ---
 
@@ -99,40 +100,41 @@ Chạy luân phiên **20 tài xế khác nhau** (`driver-stress-01` $\rightarrow
 - **Khả năng cách ly hồ sơ Baseline:** **20 / 20 hồ sơ độc lập tuyệt đối**. Không có hiện tượng ghi đè chéo; khi đổi tài xế, hồ sơ cũ được bảo toàn $100\%$, tài xế mới được tạo phiên `COLLECTING` và chuyển sang `LOCKED` đúng sau $5.0\text{s}$ ($26\text{ frames}$).
 - **Kết quả bơm 1,200 lỗi xen kẽ:**
 
-| Mã lỗi thử thách | Tình huống mô phỏng | Bắt tại `fd_diagnose` | Tỷ lệ thành công |
-| :--- | :--- | :---: | :---: |
-| `E_SIG_EMPTY` | Khung hình đen hoàn toàn (`luma_mean=0`) | 200 / 200 | **100%** |
-| `E_SIG_BAD_FORMAT` | Sai chữ ký header `FDRW` / kích thước ảnh | 200 / 200 | **100%** |
-| `E_SIG_TS_DRIFT` | Lùi mốc thời gian timestamp tại tầng signal | 200 / 200 | **100%** |
-| `E_FLOW_EDGE_TYPE` | Bơm gói sai kiểu dữ liệu qua cạnh `FLOW_TREE` | 200 / 200 | **100%** |
-| `E_CONN_LOST` | Ngắt Camera đột ngột giữa luồng | 200 / 200 | **100%** |
-| `E_PROC_TIMEOUT` | Mô hình AI xử lý chậm quá `timeout_ms` | 200 / 200 | **100%** |
+| Mã lỗi thử thách   | Tình huống mô phỏng                           | Bắt tại `fd_diagnose` | Tỷ lệ thành công |
+| :----------------- | :-------------------------------------------- | :-------------------: | :--------------: |
+| `E_SIG_EMPTY`      | Khung hình đen hoàn toàn (`luma_mean=0`)      |       200 / 200       |     **100%**     |
+| `E_SIG_BAD_FORMAT` | Sai chữ ký header `FDRW` / kích thước ảnh     |       200 / 200       |     **100%**     |
+| `E_SIG_TS_DRIFT`   | Lùi mốc thời gian timestamp tại tầng signal   |       200 / 200       |     **100%**     |
+| `E_FLOW_EDGE_TYPE` | Bơm gói sai kiểu dữ liệu qua cạnh `FLOW_TREE` |       200 / 200       |     **100%**     |
+| `E_CONN_LOST`      | Ngắt Camera đột ngột giữa luồng               |       200 / 200       |     **100%**     |
+| `E_PROC_TIMEOUT`   | Mô hình AI xử lý chậm quá `timeout_ms`        |       200 / 200       |     **100%**     |
 
-* **Tổng số lỗi bắt thành công:** **1,200 / 1,200 lỗi ($100.0\%$)**. Mọi lỗi đều có đúng mã và `node_path`, ghi nhận vào [error_recorder.py](file:///e:/AI/AI/src/fd_diagnose/error_recorder.py).
-* **Khả năng tự phục hồi:** Sau mỗi sự cố, `CircuitBreaker` đưa hệ thống quay lại trạng thái `MONITOR` an toàn mà không bị crash hay rò rỉ tiến trình.
+- **Tổng số lỗi bắt thành công:** **1,200 / 1,200 lỗi ($100.0\%$)**. Mọi lỗi đều có đúng mã và `node_path`, ghi nhận vào [error_recorder.py](file:///e:/AI/AI/src/fd_diagnose/error_recorder.py).
+- **Khả năng tự phục hồi:** Sau mỗi sự cố, `CircuitBreaker` đưa hệ thống quay lại trạng thái `MONITOR` an toàn mà không bị crash hay rò rỉ tiến trình.
 
 ---
 
 ## 8. ĐỐI CHIẾU VỚI BÁO CÁO G1 & CĂN CỨ KỸ THUẬT CHO G3, G4, G6
 
-| Tiêu chí kỹ thuật | Kết quả G1 ([BENCHMARK-G1.md](file:///e:/AI/AI/changes/BENCHMARK-G1.md)) | Kết quả G2 & G2.5 (Báo cáo này) | Đánh giá & Kết luận |
-| :--- | :---: | :---: | :--- |
-| **Throughput cực đại** | $6,138.2\text{ FPS}$ | **$6,359 - 8,950\text{ FPS}$** | Tăng nhẹ, tối ưu hóa hàng đợi không bị nghẽn |
-| **Độ trễ trung bình** | $0.158\text{ ms}$ | **$0.133\text{ ms}$** | Giữ phẳng, overhead pipeline cực thấp |
-| **Phân luồng nhịp FPS** | Chưa có (chạy 1 nhịp) | **Đã có `FpsThrottle`** | Lọc chuẩn xác 5/6 FPS, Jitter $< 0.5\text{ ms}$ |
-| **Tư thế chuẩn (Baseline)** | Chưa có | **Đã có `BaselineCollector`** | Khóa `LOCKED` 5s, cách ly 20/20 tài xế |
-| **Cảm biến ESP32 (COM3)** | Chưa kết nối | **Đã kết nối qua `Esp32Source`** | Tải 5,000 req/s, chạy DEGRADED khi thiếu GPS |
-| **Cảnh báo loa (Alert)** | Chỉ ghi log chuỗi | **Đo độ trễ phản hồi loa** | $0.019\text{ ms}$ ($18.57\text{ µs}$) |
-| **Kháng lỗi dồn dập** | 1,000 / 1,000 lỗi | **1,200 / 1,200 lỗi** | Bắt trọn 100% kèm `E_PROC_TIMEOUT` |
-| **Bộ nhớ RAM** | Đỉnh $2.80\text{ MB}$, 0 leak | **Đỉnh $3.39\text{ MB}$, 0 leak** | Hoàn toàn an toàn bộ nhớ |
+| Tiêu chí kỹ thuật           | Kết quả G1 ([BENCHMARK-G1.md](file:///e:/AI/AI/changes/BENCHMARK-G1.md)) |  Kết quả G2 & G2.5 (Báo cáo này)  | Đánh giá & Kết luận                             |
+| :-------------------------- | :----------------------------------------------------------------------: | :-------------------------------: | :---------------------------------------------- |
+| **Throughput cực đại**      |                           $6,138.2\text{ FPS}$                           |  **$6,359 - 8,950\text{ FPS}$**   | Tăng nhẹ, tối ưu hóa hàng đợi không bị nghẽn    |
+| **Độ trễ trung bình**       |                            $0.158\text{ ms}$                             |       **$0.133\text{ ms}$**       | Giữ phẳng, overhead pipeline cực thấp           |
+| **Phân luồng nhịp FPS**     |                          Chưa có (chạy 1 nhịp)                           |      **Đã có `FpsThrottle`**      | Lọc chuẩn xác 5/6 FPS, Jitter $< 0.5\text{ ms}$ |
+| **Tư thế chuẩn (Baseline)** |                                 Chưa có                                  |   **Đã có `BaselineCollector`**   | Khóa `LOCKED` 5s, cách ly 20/20 tài xế          |
+| **Cảm biến ESP32 (COM3)**   |                               Chưa kết nối                               | **Đã kết nối qua `Esp32Source`**  | Tải 5,000 req/s, chạy DEGRADED khi thiếu GPS    |
+| **Cảnh báo loa (Alert)**    |                            Chỉ ghi log chuỗi                             |    **Đo độ trễ phản hồi loa**     | $0.019\text{ ms}$ ($18.57\text{ µs}$)           |
+| **Kháng lỗi dồn dập**       |                            1,000 / 1,000 lỗi                             |       **1,200 / 1,200 lỗi**       | Bắt trọn 100% kèm `E_PROC_TIMEOUT`              |
+| **Bộ nhớ RAM**              |                      Đỉnh $2.80\text{ MB}$, 0 leak                       | **Đỉnh $3.39\text{ MB}$, 0 leak** | Hoàn toàn an toàn bộ nhớ                        |
 
 ### HƯỚNG DẪN KỸ THUẬT QUAN TRỌNG CHO BƯỚC TIẾP THEO (G3 & G4):
+
 1. **Đối với G3 (AI YOLO & Luật vi phạm):**
-   * Giữ nguyên tần số cấp frame cho AI từ `FpsThrottle` ở mức **5–8 FPS**.
-   * Model YOLO (YOLOv8n / YOLOv11n) khi cắm qua `AiAdapter` chỉ cần thời gian suy luận $\le 35\text{ ms}$ là pipeline giữ vững nhịp thời gian thực 25 FPS từ camera mà CPU chỉ hoạt động $\sim 20\%$.
-   * Bộ đệm timeline `-2s .. 0s` lấy trực tiếp các khung hình 25 FPS nét cao từ tầng `fd_signal`, trong khi AI chỉ nhận khung hình lấy mẫu.
+   - Giữ nguyên tần số cấp frame cho AI từ `FpsThrottle` ở mức **5–8 FPS**.
+   - Model YOLO (YOLOv8n / YOLOv11n) khi cắm qua `AiAdapter` chỉ cần thời gian suy luận $\le 35\text{ ms}$ là pipeline giữ vững nhịp thời gian thực 25 FPS từ camera mà CPU chỉ hoạt động $\sim 20\%$.
+   - Bộ đệm timeline `-2s .. 0s` lấy trực tiếp các khung hình 25 FPS nét cao từ tầng `fd_signal`, trong khi AI chỉ nhận khung hình lấy mẫu.
 2. **Đối với G4 (ESP32 hoàn thiện phần cứng & GPS):**
-   * Cổng `COM3` đã sẵn sàng qua [esp32_source.py](file:///e:/AI/AI/src/fd_connect/esp32_source.py). Khi phần cứng lắp thêm module GPS, chỉ cần bật `gps_attached = True` trong cấu hình thì hệ thống sẽ tự động chuyển từ `DEGRADED` sang `OK` mà không cần sửa kiến trúc `FLOW_TREE`.
+   - Cổng `COM3` đã sẵn sàng qua [esp32_source.py](file:///e:/AI/AI/src/fd_connect/esp32_source.py). Khi phần cứng lắp thêm module GPS, chỉ cần bật `gps_attached = True` trong cấu hình thì hệ thống sẽ tự động chuyển từ `DEGRADED` sang `OK` mà không cần sửa kiến trúc `FLOW_TREE`.
 
 ---
 
@@ -141,15 +143,17 @@ Chạy luân phiên **20 tài xế khác nhau** (`driver-stress-01` $\rightarrow
 Thực hiện kiểm tra kết nối trực tiếp với phần cứng thật đang cắm vào máy tính:
 
 ### A. Camera RTSP thật (`192.168.1.210:554`)
+
 - **Trạng thái kết nối:** Đã kết nối và đọc hình ảnh trực tiếp thành công $50 / 50$ khung hình qua giao thức RTSP.
 - **Kích thước khung hình thật:** **$1080 \times 1920 \times 3$** (Full HD, 3 kênh màu BGR).
 - **Tốc độ truyền dẫn thực tế:** **$34.7\text{ FPS}$** qua mạng LAN nội bộ.
 - **Độ trễ trung bình đọc frame mạng:** **$28.8\text{ ms / frame}$**.
 - **Vấn đề kỹ thuật phát hiện:**
   - Khung hình gốc $1080\text{p}$ có kích thước rất lớn ($~6.22\text{ MB}$ raw/frame). Nếu đưa cả frame $1080\text{p}$ vào model AI thì GPU/CPU sẽ bị quá tải.
-  - *Giải pháp cho G3:* Sử dụng luồng phụ `stream=1` hoặc thu nhỏ kích thước (resize) về $640 \times 480$ tại tầng `fd_signal` trước khi chuyển sang AI.
+  - _Giải pháp cho G3:_ Sử dụng luồng phụ `stream=1` hoặc thu nhỏ kích thước (resize) về $640 \times 480$ tại tầng `fd_signal` trước khi chuyển sang AI.
 
 ### B. Cảm biến ESP32 thật (`COM3`)
+
 - **Trạng thái cổng Serial:** Đã mở thành công cổng `COM3`.
 - **Baudrate thực tế của Firmware:** **$115,200\text{ baud}$** (tốc độ $9,600$ baud nhận byte rác).
 - **Dữ liệu cảm biến thật đọc được:**
@@ -171,13 +175,13 @@ Thực hiện kiểm tra kết nối trực tiếp với phần cứng thật đ
 
 ## 10. BẢNG TỔNG HỢP CÁC VẤN ĐỀ ĐƯỢC LƯU LẠI ĐỂ XỬ LÝ Ở CÁC GIAI ĐOẠN SAU
 
-| STT | Vấn đề phát hiện | Thiết bị / Module | Giai đoạn xử lý tiếp theo | Giải pháp kỹ thuật dự kiến |
-| :---: | :--- | :--- | :---: | :--- |
-| **1** | Frame RTSP gốc kích thước lớn ($1080 \times 1920$) | Camera `192.168.1.210` | **G3 (AI YOLO)** | Chuyển sang luồng phụ `stream=1` hoặc resize về $640 \times 480$ ở `fd_signal` để tránh quá tải bộ nhớ. |
-| **2** | Baudrate ESP32 là $115,200$ (thay vì $9,600$) | ESP32 `COM3` | **G2.5 / G4** | Thiết lập mặc định `baudrate = 115200` trong cấu hình `esp32` để tương thích hoàn toàn. |
-| **3** | Định dạng dữ liệu cảm biến là text `CO2:...` | ESP32 `COM3` | **G2.5 / G4** | Bổ sung bộ phân tích chuỗi text `CO2:` trong `FrameNormalizer` để trích xuất trực tiếp giá trị CO2 ppm thật. |
-| **4** | Chưa có module phần cứng GPS | ESP32 `COM3` | **G4 (ESP32 hoàn thiện)** | Lắp module GPS NEO-6M/NEO-8M vào chân RX/TX của ESP32, kích hoạt `gps_attached = True` để chuyển trạng thái sang `OK`. |
-| **5** | Reset mềm ESP32 khi mở port | ESP32 `COM3` | **G4** | Bật cờ `dsrdtr=False, rtscts=False` trong driver serial để không kích hoạt chân EN/RST của ESP32 khi kết nối. |
+|  STT  | Vấn đề phát hiện                                   | Thiết bị / Module      | Giai đoạn xử lý tiếp theo | Giải pháp kỹ thuật dự kiến                                                                                             |
+| :---: | :------------------------------------------------- | :--------------------- | :-----------------------: | :--------------------------------------------------------------------------------------------------------------------- |
+| **1** | Frame RTSP gốc kích thước lớn ($1080 \times 1920$) | Camera `192.168.1.210` |     **G3 (AI YOLO)**      | Chuyển sang luồng phụ `stream=1` hoặc resize về $640 \times 480$ ở `fd_signal` để tránh quá tải bộ nhớ.                |
+| **2** | Baudrate ESP32 là $115,200$ (thay vì $9,600$)      | ESP32 `COM3`           |       **G2.5 / G4**       | Thiết lập mặc định `baudrate = 115200` trong cấu hình `esp32` để tương thích hoàn toàn.                                |
+| **3** | Định dạng dữ liệu cảm biến là text `CO2:...`       | ESP32 `COM3`           |       **G2.5 / G4**       | Bổ sung bộ phân tích chuỗi text `CO2:` trong `FrameNormalizer` để trích xuất trực tiếp giá trị CO2 ppm thật.           |
+| **4** | Chưa có module phần cứng GPS                       | ESP32 `COM3`           | **G4 (ESP32 hoàn thiện)** | Lắp module GPS NEO-6M/NEO-8M vào chân RX/TX của ESP32, kích hoạt `gps_attached = True` để chuyển trạng thái sang `OK`. |
+| **5** | Reset mềm ESP32 khi mở port                        | ESP32 `COM3`           |          **G4**           | Bật cờ `dsrdtr=False, rtscts=False` trong driver serial để không kích hoạt chân EN/RST của ESP32 khi kết nối.          |
 
 ---
 
@@ -205,4 +209,3 @@ Thực hiện theo chỉ đạo trực tiếp của MAIN về việc chạy ki�
   - **Kích hoạt cảnh báo loa:** Trung bình **$81.17\text{ µs}$ ($0.081\text{ ms}$)** | P50: $78.3\text{ µs}$ | P95: $104.9\text{ µs}$ | P99: $155.7\text{ µs}$.
   - **Cổng suy luận AI (`run_ai`):** Trung bình **$14.08\text{ µs}$ ($0.014\text{ ms}$)** | P50: $12.7\text{ µs}$ | P95: $22.6\text{ µs}$ | P99: $31.4\text{ µs}$.
 - Dữ liệu chi tiết 31 mốc kiểm tra định kỳ được lưu trữ đầy đủ tại [BENCHMARK-G2-30M-DATA.json](file:///e:/AI/AI/changes/BENCHMARK-G2-30M-DATA.json).
-

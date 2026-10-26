@@ -1,0 +1,12 @@
+id: FI-051-FPS
+loai: camera_fps_drop
+mo_ta: Sut giam FPS Camera dot ngot gay troi nhip timestamp va phat canh bao E_SIG_TS_DRIFT
+muc_tieu_node: signal
+ma_loi_ky_vong:
+  - E_SIG_TS_DRIFT
+  - E_SIG_EMPTY
+tong_buoc: 18
+buoc_bat_dau_loi: 4
+buoc_hoi_phuc: 14
+drift_delta_ms: 3500
+co_lap_luong_cam: false

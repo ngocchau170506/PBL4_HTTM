@@ -4,7 +4,7 @@
   "camera": {
     "source": "rtsp",
     "index": 0,
-    "uri": "rtsp://192.168.1.210:554/user=admin_password=tlJwpbo6_channel=1_stream=0&protocol=unicast&onvif=ture.sdp?real_stream",
+    "uri": "rtsp://192.168.1.210:554/user=admin_password=${FD_CAMERA_PASSWORD}_channel=1_stream=0&protocol=unicast&onvif=ture.sdp?real_stream",
     "fps": 25,
     "width": 640,
     "height": 480
@@ -27,5 +27,28 @@
   "response": {
     "pre_event_ms": 2000,
     "buffer_frames": 50
+  },
+  "rules": {
+    "_status": "CHUA_XAC_DINH: ngưỡng và độ tin cậy là giá trị tạm của Builder, MAIN sẽ tự thiết kế rồi thay. Không dùng làm số liệu đánh giá.",
+    "min_conf": 0.5,
+    "max_gap_ms": 600,
+    "eye_drowsiness": {
+      "trigger_ms": 1500,
+      "closed_labels": ["Eyeclosed", "closed", "close", "asleep", "Drowsy eye"],
+      "open_labels": ["Attentive eye", "open"]
+    },
+    "mouth_yawn": {
+      "trigger_ms": 2500,
+      "yawn_labels": ["Yawn", "yawn", "Open-Mouth"],
+      "no_yawn_labels": ["noYawn"]
+    }
+  },
+  "eval": {
+    "min_throughput_fps": 3000,
+    "max_p95_latency_ms": 1.0,
+    "max_p99_latency_ms": 5.0,
+    "max_queue_depth": 100,
+    "max_ram_growth_mb": 5.0,
+    "sustained_test_duration_s": 30
   }
 }

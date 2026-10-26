@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import time
 from typing import Any, Dict, Optional, Tuple, Type, Union
 
@@ -32,8 +33,13 @@ from fd_flow.queue_manager import EdgeQueueManager
 from fd_process.ai.adapter_base import run_ai
 from fd_process.ai.stub_adapter import StubAdapter
 from fd_process.baseline.baseline_collector import BaselineCollector
+from fd_process.rules.eye_drowsiness import EyeDrowsinessRule
+from fd_process.rules.mouth_yawn import MouthYawnRule
+from fd_process.rules.rules_engine import RulesEngine, RulesOutput
 from fd_process.sampler.fps_throttle import FpsThrottle
 from fd_response.local_alert import ResponseLogger
+from fd_response.ring_buffer import FrameRingBuffer
+from fd_response.server_dispatcher import ServerDispatcher
 from fd_signal.frame_normalizer import FrameNormalizer
 
 PACKET_CLASS_MAP: Dict[str, Type[Any]] = {
@@ -47,6 +53,32 @@ PACKET_CLASS_MAP: Dict[str, Type[Any]] = {
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def build_rules_from_config(cfg: SystemConfig) -> RulesEngine:
+    """Dựng RulesEngine (eye_drowsiness + mouth_yawn) từ SystemConfig đã kiểm tra hợp lệ."""
+    if cfg.rules is None:
+        raise ValueError("SystemConfig thiếu mục rules")
+    rc = cfg.rules
+    eye = EyeDrowsinessRule(
+        closed_labels=frozenset(rc.eye_drowsiness.closed_labels),
+        open_labels=frozenset(rc.eye_drowsiness.open_labels),
+        min_conf=rc.min_conf,
+        trigger_ms=rc.eye_drowsiness.trigger_ms,
+        max_gap_ms=rc.max_gap_ms,
+    )
+    yawn = MouthYawnRule(
+        yawn_labels=frozenset(rc.mouth_yawn.yawn_labels),
+        no_yawn_labels=frozenset(rc.mouth_yawn.no_yawn_labels),
+        min_conf=rc.min_conf,
+        trigger_ms=rc.mouth_yawn.trigger_ms,
+        max_gap_ms=rc.max_gap_ms,
+    )
+    return RulesEngine(
+        rules=(eye, yawn),
+        pre_event_ms=cfg.response.pre_event_ms,
+        history_frames=cfg.response.buffer_frames,
+    )
 
 
 class FlowEngine:
@@ -67,6 +99,10 @@ class FlowEngine:
         diagnose_recorder: Optional[ErrorRecorder] = None,
         max_queue_depth: int = 32,
         enforce_sampler: bool = False,
+        rules_engine: Optional[RulesEngine] = None,
+        ring_buffer: Optional[FrameRingBuffer] = None,
+        server_dispatcher: Optional[ServerDispatcher] = None,
+        enable_rules_from_config: bool = False,
     ) -> None:
         self._config_loader = config_loader or ConfigLoader()
         self._config: Optional[SystemConfig] = None
@@ -81,7 +117,11 @@ class FlowEngine:
         self._queues = EdgeQueueManager(max_depth_per_edge=max_queue_depth)
         self._breaker = CircuitBreaker()
         self._enforce_sampler = enforce_sampler
-
+        self._rules = rules_engine
+        self._ring = ring_buffer
+        self._dispatcher = server_dispatcher
+        self._enable_rules_from_config = bool(enable_rules_from_config)
+        self._last_clip: Optional[Tuple[int, ...]] = None
         self._edges: Dict[Tuple[NodeId, NodeId], FlowEdge] = {
             (e.src, e.dst): e for e in FLOW_TREE
         }
@@ -124,6 +164,23 @@ class FlowEngine:
     @property
     def queues(self) -> EdgeQueueManager:
         return self._queues
+
+    @property
+    def rules(self) -> Optional[RulesEngine]:
+        return self._rules
+
+    @property
+    def ring_buffer(self) -> Optional[FrameRingBuffer]:
+        return self._ring
+
+    @property
+    def dispatcher(self) -> Optional[ServerDispatcher]:
+        return self._dispatcher
+
+    @property
+    def last_clip(self) -> Optional[Tuple[int, ...]]:
+        """frame_id của cụm vi phạm vừa đóng gần nhất (từ -pre_event_ms tới hết sự kiện)."""
+        return self._last_clip
 
     def health(self) -> Health:
         state = self._breaker.system_state
@@ -183,6 +240,15 @@ class FlowEngine:
                 uri=cfg_res.esp32.uri,
                 gps_attached=False,
             )
+
+        if self._enable_rules_from_config:
+            if self._rules is None and cfg_res.rules is not None:
+                self._rules = build_rules_from_config(cfg_res)
+            if self._ring is None:
+                self._ring = FrameRingBuffer(
+                    capacity=cfg_res.response.buffer_frames,
+                    pre_event_ms=cfg_res.response.pre_event_ms,
+                )
 
         open_err = self._camera.open(trace_id=f"{trace_id}-cam")
         if open_err is not None:
@@ -277,6 +343,101 @@ class FlowEngine:
         elif profile.state == "LOCKED" and cur_sys == "BASELINE":
             self._breaker.transition_to("MONITOR")
 
+    def _push_ring(self, sig: SignalPacket) -> None:
+        """Đưa khung đã lấy mẫu vào buffer vòng (nếu có). Lỗi buffer đi vào fd_diagnose, không chặn luồng."""
+        if self._ring is None:
+            return
+        err = self._ring.push(sig)
+        if err is not None:
+            self._dispatch_error(err)
+
+    def _drive_timeline(self, out: RulesOutput) -> Tuple[ViolationEvent, ...]:
+        """Đồng bộ pha buffer vòng theo kết quả luật và ghép tiền sự kiện (-2s) vào ViolationEvent.
+
+        Luật đo thời gian theo DetectionResult.ts_ms, buffer đo theo ts của SignalPacket. Hai nguồn
+        giờ khác nhau, nên khóa nối là frame_id: t0 của buffer lấy từ ts của khung đầu sự kiện.
+        """
+        ring = self._ring
+        if ring is None:
+            return out.violations
+
+        if not out.violations:
+            if out.suspects and ring.phase == "WATCHING":
+                ring.mark_suspect()
+            elif not out.suspects:
+                if ring.phase == "SUSPECT":
+                    ring.clear_suspect()
+                elif ring.phase == "ACTIVE":
+                    self._last_clip = ring.close_violation()
+                    ring.reset()
+            return ()
+
+        if ring.phase == "WATCHING":
+            ring.mark_suspect()
+        merged_events = []
+        for ev in out.violations:
+            first_ts = ring.ts_of(ev.frame_ids[0]) if ev.frame_ids else None
+            if first_ts is None:
+                self._dispatch_error(
+                    ErrorEvent(
+                        trace_id=ev.trace_id,
+                        ts_ms=_now_ms(),
+                        source="response",
+                        code="E_RESP_BUFFER_OVERRUN",
+                        node_path="response.ring_buffer",
+                        err_class="performance",
+                        message="Khung đầu sự kiện đã rời buffer vòng, không ghép được tiền sự kiện",
+                        recoverable=True,
+                    )
+                )
+                merged_events.append(ev)
+                continue
+            if ring.phase == "SUSPECT":
+                ring.begin_violation(first_ts)
+            pre = ring.pre_event_frames()
+            merged_events.append(
+                dataclasses.replace(
+                    ev,
+                    t0_ms=first_ts,
+                    frame_ids=tuple(sorted(set(pre) | set(ev.frame_ids))),
+                )
+            )
+        return tuple(merged_events)
+
+    def _finish_rules_stage(
+        self, det: DetectionResult, trace_id: str
+    ) -> Optional[ErrorEvent]:
+        """Chặng cuối: process.rules -> response.
+
+        Không gắn rules_engine: giữ hành vi G1/G2, response nhận thẳng DetectionResult.
+        Có rules_engine: response chỉ nhận ViolationEvent qua cạnh process.rules -> response.
+        """
+        if self._rules is None:
+            resp_res = self._response.handle(det)
+            if isinstance(resp_res, ErrorEvent):
+                return self._dispatch_error(resp_res)
+            return None
+
+        out = self._rules.process(det)
+        if isinstance(out, ErrorEvent):
+            return self._dispatch_error(out)
+
+        for ev in self._drive_timeline(out):
+            edge_err = self.send_across_edge("process.rules", "response", ev, trace_id)
+            if edge_err is not None:
+                return edge_err
+            vio_pkt = self._queues.dequeue("process.rules", "response")
+            resp_res = self._response.handle(vio_pkt)
+            if isinstance(resp_res, ErrorEvent):
+                return self._dispatch_error(resp_res)
+            if self._dispatcher is not None:
+                disp_err = self._dispatcher.enqueue(
+                    vio_pkt, clip_frame_ids=vio_pkt.frame_ids
+                )
+                if disp_err is not None:
+                    return self._dispatch_error(disp_err)
+        return None
+
     def poll_esp32(
         self, trace_id: str = "flow-esp32"
     ) -> Union[Optional[Dict[str, float]], ErrorEvent]:
@@ -370,6 +531,7 @@ class FlowEngine:
             return self._dispatch_error(sampled_or_err)
         if sampled_or_err is None:
             return None
+        self._push_ring(sampled_or_err)
 
         edge_err = self.send_across_edge(
             "process.sampler", "process.baseline", sampled_or_err, trace_id
@@ -399,9 +561,9 @@ class FlowEngine:
             return edge_err
         rules_in_pkt = self._queues.dequeue("process.ai", "process.rules")
 
-        resp_res = self._response.handle(rules_in_pkt)
-        if isinstance(resp_res, ErrorEvent):
-            return self._dispatch_error(resp_res)
+        resp_err = self._finish_rules_stage(rules_in_pkt, trace_id)
+        if resp_err is not None:
+            return resp_err
 
         return rules_in_pkt
 
@@ -441,6 +603,7 @@ class FlowEngine:
         if edge_err is not None:
             return edge_err
         sampled_pkt = self._queues.dequeue("signal", "process.sampler")
+        self._push_ring(sampled_pkt)
 
         edge_err = self.send_across_edge("process.sampler", "process.ai", sampled_pkt, trace_id)
         if edge_err is not None:
@@ -456,9 +619,9 @@ class FlowEngine:
             return edge_err
         rules_in_pkt = self._queues.dequeue("process.ai", "process.rules")
 
-        resp_res = self._response.handle(rules_in_pkt)
-        if isinstance(resp_res, ErrorEvent):
-            return self._dispatch_error(resp_res)
+        resp_err = self._finish_rules_stage(rules_in_pkt, trace_id)
+        if resp_err is not None:
+            return resp_err
 
         return rules_in_pkt
 

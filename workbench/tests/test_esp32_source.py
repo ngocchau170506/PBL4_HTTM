@@ -76,6 +76,107 @@ class Esp32SourceG25Test(unittest.TestCase):
         )
         self.assertIsInstance(det, L.DetectionResult)
 
+    def test_ascii_telemetry_line_parsing_and_normalization(self):
+        ascii_line = b"CO2:435.5,ADC:1250,GPS_FIX:1,SPD:48.5,LAT:16.074,LON:108.223,SEQ:7\n"
+        esp = Esp32Source(enabled=True, uri="COM3", gps_attached=True, packet_provider=lambda _: ascii_line)
+        self.assertIsNone(esp.open(trace_id="esp-ascii-open"))
+        raw = esp.read_packet(trace_id="esp-ascii-read")
+        self.assertIsInstance(raw, L.RawPacket)
+        assert isinstance(raw, L.RawPacket)
+        self.assertTrue(raw.payload.startswith(b"FDESP:"))
+        self.assertIsNotNone(esp.last_telemetry)
+        assert esp.last_telemetry is not None
+        self.assertEqual(esp.last_telemetry["co2_ppm"], 435.5)
+        self.assertEqual(esp.last_telemetry["speed_kmh"], 48.5)
+
+    def test_packet_loss_detection_via_sequence_gap(self):
+        packets = [
+            encode_esp32_telemetry(co2_ppm=400.0, seq=1),
+            encode_esp32_telemetry(co2_ppm=405.0, seq=5),
+        ]
+        provider = lambda seq: packets[seq - 1] if seq <= len(packets) else None
+        esp = Esp32Source(enabled=True, uri="COM3", gps_attached=True, packet_provider=provider)
+        self.assertIsNone(esp.open(trace_id="loss-open"))
+        esp.read_packet(trace_id="loss-read-1")
+        self.assertEqual(esp.packet_loss_count, 0)
+        esp.read_packet(trace_id="loss-read-2")
+        self.assertEqual(esp.packet_loss_count, 3)
+
+    def test_corrupted_payload_emits_e_sig_bad_format(self):
+        esp = Esp32Source(enabled=True, uri="COM3", gps_attached=True, packet_provider=lambda _: b"INVALID_GARBAGE")
+        self.assertIsNone(esp.open(trace_id="bad-open"))
+        res = esp.read_packet(trace_id="bad-read")
+        self.assertIsInstance(res, L.ErrorEvent)
+        self.assertEqual(res.code, "E_SIG_BAD_FORMAT")
+        self.assertEqual(esp.health(), "DEGRADED")
+
+    def test_boot_noise_filtering_and_hardware_safety_flags(self):
+        noisy_json = b"\xff\xfeets Jun 8 2016 00:22:57\r\nFDESP:{\"seq\":1,\"co2_ppm\":418.5,\"gps_ready\":1.0}\n"
+        noisy_ascii = b"\x00\xffrst:0x1 (POWERON_RESET)CO2:440.0,ADC:1180,GPS_FIX:1,SPD:52.0,SEQ:2\r\n"
+        stream = [noisy_json, noisy_ascii]
+        esp = Esp32Source(
+            enabled=True,
+            uri="COM3",
+            baudrate=115200,
+            gps_attached=True,
+            packet_provider=lambda seq: stream[seq - 1] if seq <= len(stream) else None,
+        )
+        self.assertFalse(esp.dsrdtr)
+        self.assertFalse(esp.rtscts)
+        self.assertEqual(esp.baudrate, 115200)
+        self.assertIsNone(esp.open(trace_id="noise-open"))
+
+        pkt1 = esp.read_packet(trace_id="noise-read-1")
+        self.assertIsInstance(pkt1, L.RawPacket)
+        assert esp.last_telemetry is not None
+        self.assertEqual(esp.last_telemetry["co2_ppm"], 418.5)
+
+        pkt2 = esp.read_packet(trace_id="noise-read-2")
+        self.assertIsInstance(pkt2, L.RawPacket)
+        assert esp.last_telemetry is not None
+        self.assertEqual(esp.last_telemetry["co2_ppm"], 440.0)
+        self.assertEqual(esp.last_telemetry["speed_kmh"], 52.0)
+
+    def test_parse_1000_dual_format_telemetry_messages_and_reconnect_recovery(self):
+        def dual_provider(seq: int) -> bytes:
+            if seq % 2 == 1:
+                return encode_esp32_telemetry(
+                    co2_ppm=400.0 + (seq % 50),
+                    vibration_g=0.03,
+                    gps_attached=True,
+                    gps_lat=16.074,
+                    gps_lon=108.223,
+                    speed_kmh=40.0,
+                    seq=seq,
+                )
+            return (
+                f"CO2:{400.0 + (seq % 50):.1f},ADC:1200,GPS_FIX:1,"
+                f"SPD:45.0,LAT:16.074,LON:108.223,SEQ:{seq}\n"
+            ).encode("utf-8")
+
+        esp = Esp32Source(enabled=True, uri="COM3", gps_attached=True, packet_provider=dual_provider)
+        self.assertIsNone(esp.open(trace_id="esp-1000-open"))
+
+        for i in range(1, 1001):
+            res = esp.read_packet(trace_id=f"esp-1000-{i}")
+            self.assertIsInstance(res, L.RawPacket)
+
+        self.assertEqual(esp.packet_count, 1000)
+        self.assertEqual(esp.packet_loss_count, 0)
+        self.assertEqual(esp.health(), "OK")
+
+        esp.simulate_disconnect()
+        lost = esp.read_packet(trace_id="esp-lost-after-1000")
+        self.assertIsInstance(lost, L.ErrorEvent)
+        assert isinstance(lost, L.ErrorEvent)
+        self.assertEqual(lost.code, "E_CONN_LOST")
+        self.assertEqual(esp.health(), "DOWN")
+
+        self.assertIsNone(esp.reconnect(trace_id="esp-reconnect-ok"))
+        self.assertEqual(esp.health(), "OK")
+        recovered = esp.read_packet(trace_id="esp-read-after-reconnect")
+        self.assertIsInstance(recovered, L.RawPacket)
+
     def test_self_test(self):
         esp = Esp32Source(enabled=True, uri="COM3", gps_attached=False)
         ok, detail = esp.self_test()

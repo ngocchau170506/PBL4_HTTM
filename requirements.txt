@@ -1,11 +1,7 @@
-flask>=3.0.0
-flask-socketio>=5.3.6
-opencv-python>=4.8.0
-numpy>=1.24.0
-ultralytics>=8.0.0
-torch>=2.0.0
-torchvision
-mediapipe>=0.10.0
-pyserial>=3.5
-requests>=2.31.0
-
+# Chỉ dùng thư viện chuẩn của Python cho tới khi MAIN duyệt từng gói (CLAUDE.md mục 4).
+# Danh sách gói dự kiến theo giai đoạn nằm ở features/dependencies.md (CHƯA DUYỆT).
+# Không thêm gói vào file này khi chưa có MAIN duyệt và giai đoạn tương ứng chưa mở.
+# Lưu ý về Qt/PyQt:
+# - PyQt6: Đã có sẵn (dist-info trong venv).
+# - PySide6: Cần cài thêm (bao gồm cả Qt Charts).
+# Vì vậy ưu tiên sử dụng PyQt6 nếu không có lý do đặc biệt phải dùng PySide6.
