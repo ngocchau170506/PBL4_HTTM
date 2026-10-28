@@ -1,11 +1,25 @@
 import { create } from "zustand";
-import { getFleetStatus, getViolations } from "../mock";
+import dataService from "../services/dataService";
 
 export const useFleetStore = create((set, get) => ({
-  vehicles: getFleetStatus(),
-  violations: getViolations(),
+  vehicles: [],
+  violations: [],
+  disputes: [],
   selectedVehicle: null,
   activeAlert: null,
+
+  syncFleetData: async () => {
+    const [vehicles, violations, disputes] = await Promise.all([
+      dataService.getVehicles(),
+      dataService.getViolations(),
+      dataService.getDisputes(),
+    ]);
+    set({
+      vehicles: vehicles || [],
+      violations: violations || [],
+      disputes: disputes || [],
+    });
+  },
 
   setSelectedVehicle: (vehicle) => set({ selectedVehicle: vehicle }),
 
@@ -32,34 +46,10 @@ export const useFleetStore = create((set, get) => ({
   },
 
   addNewViolation: (newViolation) => {
-    set((state) => ({
-      violations: [newViolation, ...state.violations],
+    const currentViolations = get().violations;
+    set({
+      violations: [newViolation, ...currentViolations],
       activeAlert: newViolation,
-    }));
-  },
-
-  startSimulation: () => {
-    const interval = setInterval(() => {
-      const state = get();
-      if (!state.vehicles || state.vehicles.length === 0) return;
-
-      const randomVehicle = state.vehicles[0];
-      const newLat =
-        (randomVehicle.telemetry?.vi_do || 16.068) +
-        (Math.random() - 0.5) * 0.002;
-      const newLng =
-        (randomVehicle.telemetry?.kinh_do || 108.212) +
-        (Math.random() - 0.5) * 0.002;
-
-      state.updateTelemetry({
-        vehicle_id: randomVehicle.id,
-        vi_do_gps: newLat,
-        kinh_do_gps: newLng,
-        toc_do_kmh: Math.floor(55 + Math.random() * 15),
-        co2_ppm: Math.floor(750 + Math.random() * 200),
-        marker_color: "GREEN",
-      });
-    }, 4000);
-    return () => clearInterval(interval);
+    });
   },
 }));

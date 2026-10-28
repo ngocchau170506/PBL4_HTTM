@@ -175,7 +175,7 @@ export default function AdminAiConfigPage() {
             <div>
               <div className="mb-1.5 flex justify-between text-xs">
                 <span className="text-brand-text-primary font-bold">
-                  Nhắm mắt ngủ gật (`MICROSLEEP`)
+                  Nhắm mắt ngủ gật
                 </span>
                 <span className="text-alert-danger font-black">
                   {config.microsleep_eye_closed_sec} giây
@@ -241,7 +241,7 @@ export default function AdminAiConfigPage() {
               />
               <p className="text-brand-text-subtle text-[11px]">
                 Bỏ qua <b>{config.mq135_warmup_sec}s (3 phút)</b> đầu làm nóng
-                cảm biến để chống báo giả (SRS NFR_3).
+                cảm biến để chống báo giả
               </p>
             </div>
           </div>
@@ -260,7 +260,7 @@ export default function AdminAiConfigPage() {
               </div>
               <div>
                 <h2 className="text-brand-text-primary text-sm font-bold">
-                  2. Hậu kiểm AI Cloud (`ai_confidence_score`)
+                  2. Hậu kiểm AI Cloud
                 </h2>
                 <p className="text-brand-text-muted text-[11px]">
                   Phân nhánh Tự động duyệt / Duyệt tay / Bác bỏ
@@ -271,7 +271,7 @@ export default function AdminAiConfigPage() {
             <div>
               <div className="mb-1.5 flex justify-between text-xs">
                 <span className="text-brand-text-primary font-bold">
-                  Ngưỡng AI Tự động Xác nhận (`CONFIRMED`)
+                  Ngưỡng AI Tự động Xác nhận
                 </span>
                 <span className="text-alert-safe font-black">
                   &ge; {Math.round(config.auto_confirm_min * 100)}%
@@ -311,7 +311,7 @@ export default function AdminAiConfigPage() {
               />
               <p className="text-brand-text-subtle mt-1 text-[11px]">
                 Dưới {Math.round(config.manual_review_min * 100)}% hệ thống tự
-                động bác bỏ (`REJECTED` - Báo động giả).
+                động bác bỏ
               </p>
             </div>
 
