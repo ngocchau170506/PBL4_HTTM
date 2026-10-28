@@ -13,10 +13,17 @@ import InputField from "../../../components/common/InputField";
 import SelectField from "../../../components/common/SelectField";
 import dataService from "../../../services/dataService";
 
-export default function CreateShiftModal({ isOpen, onClose, onAddShift }) {
+export default function CreateShiftModal({
+  isOpen,
+  onClose,
+  onAddShift,
+  shifts: propShifts,
+}) {
   const [drivers, setDrivers] = useState([]);
   const [vehicles, setVehicles] = useState([]);
   const [routes, setRoutes] = useState([]);
+  const [existingShifts, setExistingShifts] = useState([]);
+
   const [driverId, setDriverId] = useState("");
   const [vehicleId, setVehicleId] = useState("");
   const [routeId, setRouteId] = useState("");
@@ -27,32 +34,84 @@ export default function CreateShiftModal({ isOpen, onClose, onAddShift }) {
   useEffect(() => {
     if (!isOpen) return;
     const fetchOptions = async () => {
-      const [dList, vList, rList] = await Promise.all([
+      const [dList, vList, rList, sList] = await Promise.all([
         dataService.getDrivers(),
         dataService.getVehicles(),
         dataService.getRoutes(),
+        dataService.getShifts(),
       ]);
-      setDrivers(dList);
-      setVehicles(vList);
-      setRoutes(rList);
-      if (dList.length) setDriverId(dList[0].id);
-      if (vList.length) setVehicleId(vList[0].id);
-      if (rList.length) setRouteId(rList[0].id);
+      setDrivers(dList || []);
+      setVehicles(vList || []);
+      setRoutes(rList || []);
+      setExistingShifts(propShifts || sList || []);
+      if (dList?.length) setDriverId(dList[0].id);
+      if (vList?.length) setVehicleId(vList[0].id);
+      if (rList?.length) setRouteId(rList[0].id);
     };
     fetchOptions();
-  }, [isOpen]);
+  }, [isOpen, propShifts]);
 
   if (!isOpen) return null;
 
   const selectedDriver = drivers.find((d) => d.id === Number(driverId));
   const selectedVehicle = vehicles.find((v) => v.id === Number(vehicleId));
   const selectedRoute = routes.find((r) => r.id === Number(routeId));
+
+  // 1. Kiểm tra Tài xế đình chỉ & Xe bảo dưỡng
   const driverScore = selectedDriver?.diem_uy_tin ?? 100;
   const isDriverSuspended =
     driverScore <= 20 || selectedDriver?.cap_canh_bao === "SUSPENDED_RED";
   const isVehicleMaintenance = selectedVehicle?.trang_thai === "MAINTENANCE";
-  const isHardBlocked = isDriverSuspended || isVehicleMaintenance;
-  const startHour = new Date(startTime).getHours();
+
+  // 2. Kiểm tra Trùng lịch ca chạy & Khoảng nghỉ tối thiểu 10 tiếng
+  const newStart = new Date(startTime);
+  const newEnd = new Date(
+    newStart.getTime() + Number(durationHours || 1) * 3600000,
+  );
+
+  const activeShiftStatuses = ["SCHEDULED", "ACCEPTED", "IN_PROGRESS"];
+  let overlapConflictMsg = null;
+  let restTimeConflictMsg = null;
+
+  for (const s of existingShifts) {
+    if (!activeShiftStatuses.includes(s.trang_thai)) continue;
+    const exStart = new Date(s.thoi_gian_bat_dau_du_kien);
+    const exEnd = new Date(s.thoi_gian_ket_thuc_du_kien);
+    const sameDriver = Number(s.driver_id || s.driver?.id) === Number(driverId);
+    const sameVehicle =
+      Number(s.vehicle_id || s.vehicle?.id) === Number(vehicleId);
+
+    // (a) Kiểm tra giao thoa trùng giờ (Overlap: newStart < exEnd && newEnd > exStart)
+    if ((sameDriver || sameVehicle) && newStart < exEnd && newEnd > exStart) {
+      overlapConflictMsg = sameDriver
+        ? `Tài xế ${selectedDriver?.user?.ho_ten} đang bị trùng lịch với Ca #${s.id} (${exStart.toLocaleString("vi-VN")})!`
+        : `Xe ${selectedVehicle?.bien_so_xe} đang bị trùng lịch chạy ở Ca #${s.id}!`;
+      break;
+    }
+
+    // (b) Kiểm tra khoảng nghỉ giữa 2 ca liên tiếp của cùng tài xế < 10 giờ
+    if (sameDriver) {
+      const gapAfterExistingHours = (newStart - exEnd) / 3600000;
+      const gapBeforeExistingHours = (exStart - newEnd) / 3600000;
+
+      if (gapAfterExistingHours >= 0 && gapAfterExistingHours < 10) {
+        restTimeConflictMsg = `Thời gian nghỉ sau Ca #${s.id} chỉ có ${gapAfterExistingHours.toFixed(1)} giờ (Bắt buộc tối thiểu >= 10 giờ theo SRS 4.1)!`;
+        break;
+      }
+      if (gapBeforeExistingHours >= 0 && gapBeforeExistingHours < 10) {
+        restTimeConflictMsg = `Thời gian nghỉ trước Ca #${s.id} chỉ có ${gapBeforeExistingHours.toFixed(1)} giờ (Bắt buộc tối thiểu >= 10 giờ theo SRS 4.1)!`;
+        break;
+      }
+    }
+  }
+
+  const isHardBlocked =
+    isDriverSuspended ||
+    isVehicleMaintenance ||
+    Boolean(overlapConflictMsg) ||
+    Boolean(restTimeConflictMsg);
+
+  const startHour = newStart.getHours();
   const isWeakHour = startHour >= 12 && startHour <= 15;
   const isLongDuration = Number(durationHours) >= 5;
 
@@ -86,11 +145,6 @@ export default function CreateShiftModal({ isOpen, onClose, onAddShift }) {
       return;
     }
 
-    const startISO = new Date(startTime).toISOString();
-    const endISO = new Date(
-      new Date(startTime).getTime() + durationHours * 3600000,
-    ).toISOString();
-
     const alerts = [];
     if (isWeakHour)
       alerts.push({
@@ -108,8 +162,8 @@ export default function CreateShiftModal({ isOpen, onClose, onAddShift }) {
       driver_id: Number(driverId),
       vehicle_id: Number(vehicleId),
       route_id: Number(routeId),
-      thoi_gian_bat_dau_du_kien: startISO,
-      thoi_gian_ket_thuc_du_kien: endISO,
+      thoi_gian_bat_dau_du_kien: newStart.toISOString(),
+      thoi_gian_ket_thuc_du_kien: newEnd.toISOString(),
       trang_thai: "SCHEDULED",
       canh_bao_khi_tao: alerts,
       ly_do_override: overrideReason,
@@ -126,10 +180,23 @@ export default function CreateShiftModal({ isOpen, onClose, onAddShift }) {
     onClose();
   };
 
+  // Xác định thông điệp lỗi HARD_BLOCK chi tiết nhất
+  const getHardBlockReason = () => {
+    if (isDriverSuspended) {
+      return `Tài xế ${selectedDriver?.user?.ho_ten} đang bị đình chỉ (Điểm: ${driverScore} <= 20). Không thể giao ca!`;
+    }
+    if (isVehicleMaintenance) {
+      return `Xe ${selectedVehicle?.bien_so_xe} đang trong xưởng bảo dưỡng!`;
+    }
+    if (overlapConflictMsg) return overlapConflictMsg;
+    if (restTimeConflictMsg) return restTimeConflictMsg;
+    return "";
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md">
-      <div className="card-glass border-brand-border animate-fade-in-up w-full max-w-lg overflow-hidden rounded-3xl border shadow-2xl">
-        <div className="border-brand-border-dark bg-brand-dark/80 flex items-center justify-between border-b px-6 py-4">
+    <div className="fixed inset-0 z-9999 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md">
+      <div className="card-glass border-brand-border animate-fade-in-up max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-3xl border shadow-2xl">
+        <div className="border-brand-border-dark bg-brand-dark/90 sticky top-0 z-10 flex items-center justify-between border-b px-6 py-4 backdrop-blur-md">
           <div className="flex items-center gap-2.5">
             <div className="border-brand-primary/40 bg-brand-blue-night text-brand-blue-sky flex h-9 w-9 items-center justify-center rounded-xl border">
               <CalendarClock className="h-5 w-5" />
@@ -139,7 +206,8 @@ export default function CreateShiftModal({ isOpen, onClose, onAddShift }) {
                 Lập Ca Phân Bổ Mới
               </h3>
               <p className="text-brand-text-muted text-[11px]">
-                Hệ thống kiểm tra Smart Scheduling tự động
+                Kiểm tra Smart Scheduling: Điểm uy tín, Trùng lịch & Nghỉ &ge;
+                10h
               </p>
             </div>
           </div>
@@ -204,9 +272,7 @@ export default function CreateShiftModal({ isOpen, onClose, onAddShift }) {
                 <span>CHẶN CỨNG (HARD_BLOCK - HTTP 422)</span>
               </div>
               <p className="mt-1 text-[11px] leading-relaxed">
-                {isDriverSuspended
-                  ? `Tài xế ${selectedDriver?.user?.ho_ten} đang bị đình chỉ (Điểm: ${driverScore} <= 20). Không thể giao ca!`
-                  : `Xe ${selectedVehicle?.bien_so_xe} đang trong xưởng bảo dưỡng!`}
+                {getHardBlockReason()}
               </p>
             </div>
           ) : isWeakHour || isLongDuration ? (
@@ -233,7 +299,10 @@ export default function CreateShiftModal({ isOpen, onClose, onAddShift }) {
           ) : (
             <div className="flex items-center gap-2 rounded-2xl border border-emerald-500/30 bg-emerald-950/20 p-3 text-emerald-400">
               <CheckCircle2 className="h-4 w-4 shrink-0" />
-              <span>Lịch phân ca hoàn toàn phù hợp nhịp sinh học</span>
+              <span>
+                Lịch phân ca hoàn toàn hợp lệ (Không trùng ca, đảm bảo nghỉ &ge;
+                10h)
+              </span>
             </div>
           )}
 
