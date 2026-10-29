@@ -18,14 +18,15 @@ model User {
   passwordHash String   @map("password_hash")
   hoTen        String   @map("ho_ten")
   sdt          String?
-  role         String   @default("DRIVER") // "ADMIN" | "MANAGER" | "DRIVER"
-  trangThai    String   @default("ACTIVE") @map("trang_thai") // "ACTIVE" | "INACTIVE" | "BANNED"
+  role         String   @default("DRIVER") // "ADMIN" | "MANAGER" | "DISPATCHER" | "DRIVER"
+  trangThai    String   @default("ACTIVE") @map("trang_thai") // "ACTIVE" | "INACTIVE" | "BANNED" | "LOCKED"
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   driver                 Driver?
   createdShifts          Shift[]                   @relation("ShiftCreator")
   reviewedViolations     Violation[]               @relation("ViolationReviewer")
+  resolvedDisputes       Dispute[]                 @relation("DisputeResolver")
   auditLogs              AuditLog[]
 
   @@map("users")
@@ -34,8 +35,10 @@ model User {
 model Driver {
   userId         Int      @id @map("user_id")
   bangLai        String   @unique @map("bang_lai")
+  hangBangLai    String?  @default("FC") @map("hang_bang_lai")
   uyTin          Int      @default(100) @map("uy_tin") // Quỹ điểm uy tín (Default 100, max 100, min 0)
-  trangThaiTaiXe String   @default("AVAILABLE") @map("trang_thai_tai_xe") // "AVAILABLE" | "ON_TRIP" | "OFFLINE" | "SUSPENDED"
+  capCanhBao     String   @default("NORMAL") @map("cap_canh_bao") // "NORMAL" | "WARNING_YELLOW" | "SUSPENDED_RED"
+  trangThaiTaiXe String   @default("AVAILABLE") @map("trang_thai_tai_xe") // "AVAILABLE" | "ON_TRIP" | "OFF_DUTY" | "SUSPENDED"
   createdAt      DateTime @default(now()) @map("created_at")
 
   user              User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -45,6 +48,7 @@ model Driver {
   scoreLogs         DriverScoreLog[]
   biometricProfiles DriverBiometricProfile[]
   calibrationData   DriverCalibrationData[]
+  disputes          Dispute[]
 
   @@map("drivers")
 }
@@ -54,11 +58,12 @@ model Driver {
 // ==========================================
 
 model Vehicle {
-  id        Int      @id @default(autoincrement())
-  bienSo    String   @unique @map("bien_so")
-  loaiXe    String?  @map("loai_xe") // "Xe Tải 5 Tấn", "Xe Container", "Xe Bán Tải"
-  trangThai String   @default("AVAILABLE") @map("trang_thai") // "AVAILABLE" | "IN_USE" | "MAINTENANCE"
-  createdAt DateTime @default(now()) @map("created_at")
+  id          Int      @id @default(autoincrement())
+  bienSo      String   @unique @map("bien_so")
+  loaiXe      String?  @map("loai_xe") // "Xe Tải 5 Tấn", "Xe Container", "Xe Bán Tải"
+  taiTrongTan Float?   @default(15.0) @map("tai_trong_tan")
+  trangThai   String   @default("AVAILABLE") @map("trang_thai") // "AVAILABLE" | "ACTIVE" | "IN_USE" | "MAINTENANCE"
+  createdAt   DateTime @default(now()) @map("created_at")
 
   iotDevice IotDevice?
   shifts    Shift[]
@@ -68,11 +73,18 @@ model Vehicle {
 }
 
 model IotDevice {
-  id         Int      @id @default(autoincrement())
-  macAddress String   @unique @map("mac_address")
-  phienBan   String?  @map("phien_ban")
-  vehicleId  Int?     @unique @map("vehicle_id")
-  createdAt  DateTime @default(now()) @map("created_at")
+  id              Int       @id @default(autoincrement())
+  macAddress      String    @unique @map("mac_address")
+  phienBan        String?   @map("phien_ban")
+  maThietBi       String?   @map("ma_thiet_bi") // e.g. "IOT-DN-01"
+  cpuSerial       String?   @map("cpu_serial")
+  cpuTempC        Float?    @map("cpu_temp_c")
+  freeStorageMb   Int?      @map("free_storage_mb")
+  aiModelVersion  String?   @default("yolo26n-v1.1") @map("ai_model_version")
+  trangThaiKetNoi String    @default("ONLINE") @map("trang_thai_ket_noi") // "ONLINE" | "OFFLINE"
+  lastHeartbeatAt DateTime? @map("last_heartbeat_at")
+  vehicleId       Int?      @unique @map("vehicle_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
 
   vehicle Vehicle?     @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
   logs    IotDataLog[]
@@ -98,18 +110,19 @@ model Route {
 // ==========================================
 
 model Shift {
-  id                        Int      @id @default(autoincrement())
-  driverId                  Int      @map("driver_id")
-  vehicleId                 Int      @map("vehicle_id")
-  routeId                   Int      @map("route_id")
-  thoiGianBatDauDuKien     DateTime @map("thoi_gian_bat_dau_du_kien")
-  thoiGianKetThucDuKien    DateTime @map("thoi_gian_ket_thuc_du_kien")
-  trangThai                 String   @default("SCHEDULED") @map("trang_thai") // "SCHEDULED" | "ACCEPTED" | "DECLINED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED"
-  lyDoTuChoi                String?  @map("ly_do_tu_choi")
-  createdBy                 Int      @map("created_by")
-  canhBaoKhiTao             String?  @map("canh_bao_khi_tao") // JSON string warnings (e.g. biological weak window, max drive time)
-  createdAt                 DateTime @default(now()) @map("created_at")
-  updatedAt                 DateTime @updatedAt @map("updated_at")
+  id                    Int      @id @default(autoincrement())
+  driverId              Int      @map("driver_id")
+  vehicleId             Int      @map("vehicle_id")
+  routeId               Int      @map("route_id")
+  thoiGianBatDauDuKien DateTime @map("thoi_gian_bat_dau_du_kien")
+  thoiGianKetThucDuKien DateTime @map("thoi_gian_ket_thuc_du_kien")
+  trangThai             String   @default("SCHEDULED") @map("trang_thai") // "SCHEDULED" | "ACCEPTED" | "DECLINED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED"
+  lyDoTuChoi            String?  @map("ly_do_tu_choi")
+  lyDoOverride          String?  @map("ly_do_override")
+  createdBy             Int      @map("created_by")
+  canhBaoKhiTao         String?  @map("canh_bao_khi_tao") // JSON string warnings (e.g. biological weak window, max drive time)
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
 
   driver          Driver                  @relation(fields: [driverId], references: [userId], onDelete: Cascade)
   vehicle         Vehicle                 @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
@@ -161,27 +174,34 @@ model IotDataLog {
 }
 
 model Violation {
-  id                       Int       @id @default(autoincrement())
-  driverId                 Int       @map("driver_id")
-  tripId                   Int       @map("trip_id")
-  loaiViPham               String    @map("loai_vi_pham") // "NGỦ GẬT (AI)", "DÙNG ĐIỆN THOẠI (AI)", "NGÁP DÀI", "NỒNG ĐỘ CO2 CAO", "QUÁ TỐC ĐỘ"
-  diemTru                  Int       @map("diem_tru")
-  videoUrl                 String?   @map("video_url")
-  videoDuration            Int?      @map("video_duration")
-  trangThai                String    @default("PENDING_VERIFICATION") @map("trang_thai") // "PENDING_UPLOAD" | "PENDING_VERIFICATION" | "CONFIRMED" | "REJECTED" | "PENDING_MANUAL_REVIEW" | "MANUALLY_CONFIRMED" | "MANUALLY_REJECTED"
-  aiConfidenceScore        Float     @default(0.90) @map("ai_confidence_score")
-  tramDungChanGoiY         String?   @map("tram_dung_chan_goi_y") // JSON string e.g. {"tenTram": "Trạm Đèo Hải Vân", "kmConLai": 4.2, "phutConLai": 5}
-  reviewedBy               Int?      @map("reviewed_by")
-  reviewedAt               DateTime? @map("reviewed_at")
-  thoiGianBatDauTheoDoi   DateTime  @default(now()) @map("thoi_gian_bat_dau_theo_doi")
-  thoiGianChotViPham       DateTime  @default(now()) @map("thoi_gian_chot_vi_pham")
-  thoiGianViPham           DateTime  @default(now()) @map("thoi_gian_vi_pham")
-  moTa                     String?   @map("mo_ta")
+  id                     Int       @id @default(autoincrement())
+  clientEventId          String?   @map("client_event_id")
+  driverId               Int       @map("driver_id")
+  tripId                 Int       @map("trip_id")
+  loaiViPham             String    @map("loai_vi_pham") // "MICROSLEEP", "PHONE_DISTRACTION", "YAWNING_FATIGUE", "HIGH_CO2", "DEVICE_TAMPERING", "BUON_NGU"
+  maLoai                 String?   @map("ma_loai")
+  tenLoai                String?   @map("ten_loai")
+  diemTru                Int       @map("diem_tru") // hoặc điểm bị trừ thực tế sau khi áp trần
+  videoUrl               String?   @map("video_url")
+  videoDuration          Int?      @map("video_duration")
+  trangThai              String    @default("PENDING_VERIFICATION") @map("trang_thai") // "PENDING_VERIFICATION" | "CONFIRMED" | "REJECTED" | "PENDING_MANUAL_REVIEW" | "MANUALLY_CONFIRMED" | "MANUALLY_REJECTED"
+  trangThaiDiem          String    @default("APPLIED") @map("trang_thai_diem") // "APPLIED" | "NOT_APPLIED" | "CAPPED" | "REFUNDED"
+  nguonQuyetDinh         String?   @map("nguon_quyet_dinh") // "AI" | "SYSTEM_RULE" | "DISPATCHER"
+  ghiChuDuyet            String?   @map("ghi_chu_duyet")
+  aiConfidenceScore      Float     @default(0.90) @map("ai_confidence_score")
+  tramDungChanGoiY       String?   @map("tram_dung_chan_goi_y") // JSON string e.g. {"tenTram": "Trạm Đèo Hải Vân", "kmConLai": 4.2, "phutConLai": 5}
+  reviewedBy             Int?      @map("reviewed_by")
+  reviewedAt             DateTime? @map("reviewed_at")
+  thoiGianBatDauTheoDoi DateTime  @default(now()) @map("thoi_gian_bat_dau_theo_doi")
+  thoiGianChotViPham     DateTime  @default(now()) @map("thoi_gian_chot_vi_pham")
+  thoiGianViPham         DateTime  @default(now()) @map("thoi_gian_vi_pham")
+  moTa                   String?   @map("mo_ta")
 
   driver    Driver           @relation(fields: [driverId], references: [userId], onDelete: Cascade)
   trip      Trip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
   reviewer  User?            @relation("ViolationReviewer", fields: [reviewedBy], references: [id], onDelete: SetNull)
   scoreLogs DriverScoreLog[]
+  disputes  Dispute[]
 
   @@map("violations")
 }
@@ -190,17 +210,39 @@ model Violation {
 // NHÓM 4: BỔ SUNG NGHIỆP VỤ THEO SRS
 // ==========================================
 
+model Dispute {
+  id               Int       @id @default(autoincrement())
+  violationId      Int       @map("violation_id")
+  driverId         Int       @map("driver_id")
+  maLyDo           String    @map("ma_ly_do") // "FALSE_DETECTION" | "SENSOR_ERROR" | "OTHER"
+  tenLyDo          String?   @map("ten_ly_do")
+  noiDungGiaiTrinh String    @map("noi_dung_giai_trinh")
+  trangThai        String    @default("OPEN") @map("trang_thai") // "OPEN" | "APPROVED" | "REJECTED"
+  khieuNaiLuc      DateTime  @default(now()) @map("khieu_nai_luc")
+  resolvedBy       Int?      @map("resolved_by")
+  resolvedAt       DateTime? @map("resolved_at")
+  phanHoi          String?   @map("phan_hoi")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  violation Violation @relation(fields: [violationId], references: [id], onDelete: Cascade)
+  driver    Driver    @relation(fields: [driverId], references: [userId], onDelete: Cascade)
+  resolver  User?     @relation("DisputeResolver", fields: [resolvedBy], references: [id], onDelete: SetNull)
+
+  @@map("disputes")
+}
+
 model DriverScoreLog {
-  id              Int      @id @default(autoincrement())
-  driverId        Int      @map("driver_id")
-  loaiThayDoi     String   @map("loai_thay_doi") // "TRU_DIEM" | "CONG_DIEM"
-  soDiemThayDoi   Int      @map("so_diem_thay_doi")
-  diemTruoc       Int      @map("diem_truoc")
-  diemSau         Int      @map("diem_sau")
-  lyDo            String   @map("ly_do")
-  violationId     Int?     @map("violation_id")
-  tripId          Int?     @map("trip_id")
-  createdAt       DateTime @default(now()) @map("created_at")
+  id            Int      @id @default(autoincrement())
+  driverId      Int      @map("driver_id")
+  loaiThayDoi   String   @map("loai_thay_doi") // "TRU_DIEM" | "CONG_DIEM" | "HOAN_DIEM_KHIEU_NAI" | "CONG_DIEM_THUONG"
+  soDiemThayDoi Int      @map("so_diem_thay_doi")
+  diemTruoc     Int      @map("diem_truoc")
+  diemSau       Int      @map("diem_sau")
+  lyDo          String   @map("ly_do")
+  violationId   Int?     @map("violation_id")
+  tripId        Int?     @map("trip_id")
+  createdAt     DateTime @default(now()) @map("created_at")
 
   driver    Driver     @relation(fields: [driverId], references: [userId], onDelete: Cascade)
   violation Violation? @relation(fields: [violationId], references: [id], onDelete: SetNull)
@@ -210,16 +252,17 @@ model DriverScoreLog {
 }
 
 model DriverBiometricProfile {
-  id                                  Int      @id @default(autoincrement())
-  driverId                            Int      @map("driver_id")
-  khungGioYeuSinhHoc                 String   @map("khung_gio_yeu_sinh_hoc") // JSON string e.g. ["13:00-15:00", "01:00-04:00"]
-  thoiGianLaiToiDaKhuyenNghi          Int      @map("thoi_gian_lai_toi_da_khuyen_nghi") // Minutes e.g. 240 (4 hours)
-  thoiGianLaiTrungBinhTruocMetMoi    Int      @map("thoi_gian_lai_trung_binh_truoc_met_moi") // Minutes e.g. 180 (3 hours)
-  tanSuatViPham30Ngay                 String   @map("tan_suat_vi_pham_30_ngay") // JSON string e.g. {"EYES_CLOSED": 2, "PHONE": 1}
-  isDefaultProfile                    Boolean  @default(true) @map("is_default_profile")
-  kyTinhToanTu                        DateTime @map("ky_tinh_toan_tu")
-  kyTinhToanDen                       DateTime @map("ky_tinh_toan_den")
-  createdAt                           DateTime @default(now()) @map("created_at")
+  id                              Int      @id @default(autoincrement())
+  driverId                        Int      @map("driver_id")
+  khungGioYeuSinhHoc              String   @map("khung_gio_yeu_sinh_hoc") // JSON string e.g. ["13:00-15:00", "01:00-04:00"]
+  thoiGianLaiToiDaKhuyenNghi      Int      @map("thoi_gian_lai_toi_da_khuyen_nghi") // Minutes e.g. 240 (4 hours)
+  thoiGianLaiTrungBinhTruocMetMoi Int      @map("thoi_gian_lai_trung_binh_truoc_met_moi") // Minutes e.g. 180 (3 hours)
+  tanSuatViPham30Ngay             String   @map("tan_suat_vi_pham_30_ngay") // JSON string e.g. {"MICROSLEEP": 2, "PHONE_DISTRACTION": 1}
+  danhGiaChung                    String?  @map("danh_gia_chung")
+  isDefaultProfile                Boolean  @default(true) @map("is_default_profile")
+  kyTinhToanTu                    DateTime @map("ky_tinh_toan_tu")
+  kyTinhToanDen                   DateTime @map("ky_tinh_toan_den")
+  createdAt                       DateTime @default(now()) @map("created_at")
 
   driver Driver @relation(fields: [driverId], references: [userId], onDelete: Cascade)
 
@@ -227,14 +270,14 @@ model DriverBiometricProfile {
 }
 
 model DriverCalibrationData {
-  id                 Int      @id @default(autoincrement())
-  driverId           Int      @map("driver_id")
-  tripId             Int?     @map("trip_id")
-  shiftId            Int?     @map("shift_id")
-  vectorDacTrung     String   @map("vector_dac_trung") // JSON string representation of face calibration vector
+  id                Int      @id @default(autoincrement())
+  driverId          Int      @map("driver_id")
+  tripId            Int?     @map("trip_id")
+  shiftId           Int?     @map("shift_id")
+  vectorDacTrung    String   @map("vector_dac_trung") // JSON string representation of face calibration vector
   thoiGianHieuChuan DateTime @default(now()) @map("thoi_gian_hieu_chuan")
-  ketQua             String   @default("SUCCESS") @map("ket_qua") // "SUCCESS" | "FAILED"
-  createdAt          DateTime @default(now()) @map("created_at")
+  ketQua            String   @default("SUCCESS") @map("ket_qua") // "SUCCESS" | "FAILED"
+  createdAt         DateTime @default(now()) @map("created_at")
 
   driver Driver @relation(fields: [driverId], references: [userId], onDelete: Cascade)
   trip   Trip?  @relation(fields: [tripId], references: [id], onDelete: SetNull)
@@ -243,18 +286,46 @@ model DriverCalibrationData {
   @@map("driver_calibration_data")
 }
 
+model SystemConfig {
+  id                     Int      @id @default(autoincrement())
+  fleetScope             String   @default("GLOBAL") @map("fleet_scope")
+  microsleepEyeClosedSec Float    @default(1.5) @map("microsleep_eye_closed_sec")
+  headDownSec            Float    @default(1.0) @map("head_down_sec")
+  yawnCountThreshold     Int      @default(3) @map("yawn_count_threshold")
+  phoneUseSec            Float    @default(3.0) @map("phone_use_sec")
+  co2WarningThresholdPpm Float    @default(1000) @map("co2_warning_threshold_ppm")
+  mq135WarmupSec         Int      @default(180) @map("mq135_warmup_sec")
+  autoConfirmMin         Float    @default(0.85) @map("auto_confirm_min")
+  manualReviewMin        Float    @default(0.60) @map("manual_review_min")
+  weightLandmarks        Float    @default(0.4) @map("weight_landmarks")
+  weightCnn              Float    @default(0.4) @map("weight_cnn")
+  weightEdge             Float    @default(0.2) @map("weight_edge")
+  penaltyCapPerTrip      Int      @default(30) @map("penalty_cap_per_trip")
+  penaltyCapPerDay       Int      @default(50) @map("penalty_cap_per_day")
+  manualReviewSlaHours   Int      @default(24) @map("manual_review_sla_hours")
+  disputeWindowHours     Int      @default(48) @map("dispute_window_hours")
+  minRestHours           Float    @default(8.0) @map("min_rest_hours")
+  timezone               String   @default("Asia/Ho_Chi_Minh") @map("timezone")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  @@map("system_configs")
+}
+
 model AuditLog {
   id           Int      @id @default(autoincrement())
-  userId       Int      @map("user_id")
+  userId       Int?     @map("user_id")
+  userName     String?  @map("user_name")
+  actorType    String   @default("USER") @map("actor_type") // "USER" | "SYSTEM"
   hanhDong     String   @map("hanh_dong") // e.g. "BAN_DRIVER", "MANUAL_VERIFY_VIOLATION", "CREATE_SHIFT", "OVERRIDE_SCORE"
-  doiTuongLoai String   @map("doi_tuong_loai") // e.g. "USER", "VIOLATION", "SHIFT", "DRIVER"
-  doiTuongId   Int      @map("doi_tuong_id")
+  doiTuongLoai String   @map("doi_tuong_loai") // e.g. "USER", "VIOLATION", "SHIFT", "DRIVER", "DISPUTE"
+  doiTuongId   String   @map("doi_tuong_id")
   giaTriTruoc  String?  @map("gia_tri_truoc") // JSON string
   giaTriSau    String?  @map("gia_tri_sau") // JSON string
   lyDo         String?  @map("ly_do")
+  ipAddress    String?  @map("ip_address")
   createdAt    DateTime @default(now()) @map("created_at")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@map("audit_logs")
 }

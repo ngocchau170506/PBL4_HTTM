@@ -1,7 +1,8 @@
 import prisma from '../../common/prisma.js';
 import { sendViolationEmailAlert } from '../../common/email.service.js';
 import { logAuditAction } from '../../common/audit.service.js';
-import { getSystemConfig } from '../auth/auth.service.js';
+import { getAiConfig } from '../configs/configs.service.js';
+import { formatDriver } from '../drivers/drivers.service.js';
 import {
   VIOLATION_TYPES,
   getViolationTypeById,
@@ -11,18 +12,45 @@ import {
 
 export { getAllViolationTypes };
 
-const enrichViolationRecord = (v) => {
-  const type = getViolationTypeByCode(v.loaiViPham);
+export const enrichViolationRecord = (v) => {
+  const type = getViolationTypeByCode(v.loaiViPham) || getViolationTypeByCode(v.maLoai);
+  const code = v.maLoai || (type ? type.code : v.loaiViPham);
+  const name = v.tenLoai || (type ? type.name : v.loaiViPham);
+  const icon = type ? type.icon : '⚠️';
+
   return {
     ...v,
     violationTypeId: type ? type.id : null,
-    typeCode: type ? type.code : v.loaiViPham,
-    typeName: type ? type.name : v.loaiViPham,
-    typeIcon: type ? type.icon : '⚠️',
+    violation_type_id: type ? type.id : null,
+    typeCode: code,
+    typeName: name,
+    typeIcon: icon,
+    ma_loai: code,
+    ten_loai: name,
+    diem_bi_tru: v.diemTru,
+    video_url: v.videoUrl,
+    video_duration: v.videoDuration,
+    trang_thai_xac_thuc: v.trangThai,
+    trang_thai_diem: v.trangThaiDiem || 'APPLIED',
+    nguon_quyet_dinh: v.nguonQuyetDinh || 'AI',
+    ghi_chu_duyet: v.ghiChuDuyet,
+    ai_confidence_score: v.aiConfidenceScore,
+    thoi_gian_chot_vi_pham: v.thoiGianChotViPham,
+    thoi_gian_vi_pham: v.thoiGianViPham,
+    driver_id: v.driverId,
+    trip_id: v.tripId,
+    driver: v.driver ? formatDriver(v.driver) : null,
+    vehicle: v.trip?.vehicle
+      ? {
+          ...v.trip.vehicle,
+          bien_so_xe: v.trip.vehicle.bienSo,
+          loai_xe: v.trip.vehicle.loaiXe,
+        }
+      : null,
   };
 };
 
-export const getAllViolations = async ({ driverId, tripId, status }) => {
+export const getAllViolations = async ({ driverId, tripId, status } = {}) => {
   const where = {};
   if (driverId) where.driverId = parseInt(driverId, 10);
   if (tripId) where.tripId = parseInt(tripId, 10);
@@ -51,34 +79,41 @@ export const createViolationRecord = async ({
   videoDuration,
   aiConfidenceScore,
   moTa,
+  clientEventId,
 }) => {
   const parsedDriverId = parseInt(driverId, 10);
   const parsedTripId = parseInt(tripId, 10);
 
-  // Chuẩn hóa loại vi phạm theo từ điển constants (ID & Code)
   const resolvedType = getViolationTypeById(violationTypeId) || getViolationTypeByCode(loaiViPham);
-  const standardCode = resolvedType ? resolvedType.code : (loaiViPham || 'BUON_NGU');
-  const ptsToDeduct = parseInt(
-    diemTru !== undefined ? diemTru : (resolvedType?.defaultPoints ?? 5),
+  const standardCode = resolvedType ? resolvedType.code : (loaiViPham || 'MICROSLEEP');
+  const standardName = resolvedType ? resolvedType.name : standardCode;
+  const rawPts = parseInt(
+    diemTru !== undefined ? diemTru : (resolvedType?.defaultPoints ?? 10),
     10
   );
   const confidence = aiConfidenceScore !== undefined ? parseFloat(aiConfidenceScore) : 0.90;
 
-  // Lấy ngưỡng tự động từ Cấu hình hệ thống (Dynamic Configuration)
-  const config = await getSystemConfig();
-  const confirmThreshold = config.aiConfidenceConfirmThreshold ?? 0.85;
-  const rejectThreshold = config.aiConfidenceRejectThreshold ?? 0.60;
+  // Lấy cấu hình hệ thống động
+  const config = await getAiConfig();
+  const confirmThreshold = config.auto_confirm_min ?? 0.85;
+  const rejectThreshold = config.manual_review_min ?? 0.60;
+  const capPerTrip = Number(config.penalty_cap_per_trip ?? 30);
+  const capPerDay = Number(config.penalty_cap_per_day ?? 50);
 
   let initialStatus = 'PENDING_VERIFICATION';
+  let decisionSource = 'AI';
   if (confidence >= confirmThreshold) {
     initialStatus = 'CONFIRMED';
+    decisionSource = 'AI';
   } else if (confidence < rejectThreshold) {
     initialStatus = 'REJECTED';
+    decisionSource = 'AI';
   } else {
     initialStatus = 'PENDING_MANUAL_REVIEW';
+    decisionSource = null;
   }
 
-  // Fetch trip route rest stops
+  // Rest stop guidance
   const tripData = await prisma.trip.findUnique({
     where: { id: parsedTripId },
     include: { route: true, vehicle: true, driver: { include: { user: true } } },
@@ -94,7 +129,7 @@ export const createViolationRecord = async ({
           tenTram: nextStop.ten,
           kmConLai: 4.2,
           phutConLai: 5,
-          thongBaoGiongNoi: `Cảnh báo an toàn! Còn khoảng 4.2 km (5 phút) nữa sẽ đến ${nextStop.ten}. Vui lòng giảm tốc độ và dừng xe nghỉ ngơi hoặc đổi ca lái!`,
+          thongBaoGiongNoi: `Cảnh báo an toàn! Còn khoảng 4.2 km nữa sẽ đến ${nextStop.ten}. Vui lòng giảm tốc độ và dừng nghỉ!`,
         };
       }
     } catch (e) {
@@ -104,30 +139,68 @@ export const createViolationRecord = async ({
 
   if (!restStopGuidance) {
     restStopGuidance = {
-      tenTram: 'Trạm Dừng Chân Nam Hải Vân (Km 25)',
+      tenTram: 'Trạm Dừng Nghỉ Nam Hải Vân (Km 22)',
       kmConLai: 4.2,
       phutConLai: 5,
-      thongBaoGiongNoi: 'Cảnh báo buồn ngủ! Còn 4.2 km (khoảng 5 phút) nữa sẽ đến Trạm Dừng Chân Nam Hải Vân. Vui lòng giảm tốc độ để dừng xe nghỉ ngơi hoặc đổi ca lái!',
+      thongBaoGiongNoi: 'Cảnh báo an toàn! Còn 4.2 km nữa sẽ đến Trạm Dừng Nghỉ Nam Hải Vân.',
     };
   }
 
-  // Dùng prisma.$transaction đảm bảo tính toàn vẹn (Atomic Database Transaction)
+  // Dùng prisma.$transaction đảm bảo tính toàn vẹn kèm CAPPING
   const result = await prisma.$transaction(async (tx) => {
+    let actualDeducted = rawPts;
+    let pointStatus = initialStatus === 'CONFIRMED' ? 'APPLIED' : 'NOT_APPLIED';
+
+    if (initialStatus === 'CONFIRMED' && rawPts > 0) {
+      // Tính toán áp trần (Penalty Capping)
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+
+      const [tripLogs, dayLogs] = await Promise.all([
+        tx.driverScoreLog.findMany({
+          where: { driverId: parsedDriverId, tripId: parsedTripId, loaiThayDoi: 'TRU_DIEM' },
+        }),
+        tx.driverScoreLog.findMany({
+          where: { driverId: parsedDriverId, loaiThayDoi: 'TRU_DIEM', createdAt: { gte: startOfDay } },
+        }),
+      ]);
+
+      const deductedInTrip = tripLogs.reduce((sum, l) => sum + Math.abs(l.soDiemThayDoi), 0);
+      const deductedInDay = dayLogs.reduce((sum, l) => sum + Math.abs(l.soDiemThayDoi), 0);
+
+      const remainingTripQuota = Math.max(0, capPerTrip - deductedInTrip);
+      const remainingDayQuota = Math.max(0, capPerDay - deductedInDay);
+      const allowedQuota = Math.min(remainingTripQuota, remainingDayQuota);
+
+      if (rawPts > allowedQuota) {
+        actualDeducted = allowedQuota;
+        pointStatus = 'CAPPED';
+      } else {
+        actualDeducted = rawPts;
+        pointStatus = 'APPLIED';
+      }
+    }
+
     const violation = await tx.violation.create({
       data: {
+        clientEventId: clientEventId || null,
         driverId: parsedDriverId,
         tripId: parsedTripId,
         loaiViPham: standardCode,
-        diemTru: ptsToDeduct,
+        maLoai: standardCode,
+        tenLoai: standardName,
+        diemTru: actualDeducted,
         videoUrl: videoUrl || null,
-        videoDuration: videoDuration ? parseInt(videoDuration, 10) : null,
+        videoDuration: videoDuration ? parseInt(videoDuration, 10) : 10,
         trangThai: initialStatus,
+        trangThaiDiem: pointStatus,
+        nguonQuyetDinh: decisionSource,
         aiConfidenceScore: confidence,
         tramDungChanGoiY: JSON.stringify(restStopGuidance),
         thoiGianBatDauTheoDoi: new Date(Date.now() - 30 * 1000),
         thoiGianChotViPham: new Date(),
         thoiGianViPham: new Date(),
-        moTa: moTa || `Khởi tạo vi phạm ${standardCode} (AI Confidence: ${(confidence * 100).toFixed(0)}%).`,
+        moTa: moTa || `YOLO26 phát hiện ${standardName} (AI Confidence: ${(confidence * 100).toFixed(0)}%).`,
       },
       include: {
         driver: { include: { user: true } },
@@ -136,26 +209,34 @@ export const createViolationRecord = async ({
     });
 
     let updatedDriver = violation.driver;
-    // CHỈ trừ điểm khi trạng thái là CONFIRMED và có điểm trừ
-    if (initialStatus === 'CONFIRMED' && ptsToDeduct > 0) {
+    if (initialStatus === 'CONFIRMED' && actualDeducted > 0) {
       const currentUyTin = violation.driver.uyTin;
-      const newUyTin = Math.max(0, currentUyTin - ptsToDeduct);
+      const newUyTin = Math.max(0, currentUyTin - actualDeducted);
+
+      let newWarning = 'NORMAL';
+      if (newUyTin <= 20) newWarning = 'SUSPENDED_RED';
+      else if (newUyTin <= 65) newWarning = 'WARNING_YELLOW';
 
       updatedDriver = await tx.driver.update({
         where: { userId: parsedDriverId },
-        data: { uyTin: newUyTin },
+        data: {
+          uyTin: newUyTin,
+          capCanhBao: newWarning,
+          trangThaiTaiXe: newUyTin <= 20 ? 'OFF_DUTY' : violation.driver.trangThaiTaiXe,
+        },
         include: { user: true },
       });
 
-      // Ghi nhận lịch sử biến động điểm
       await tx.driverScoreLog.create({
         data: {
           driverId: parsedDriverId,
           loaiThayDoi: 'TRU_DIEM',
-          soDiemThayDoi: ptsToDeduct,
+          soDiemThayDoi: -actualDeducted,
           diemTruoc: currentUyTin,
           diemSau: newUyTin,
-          lyDo: `Xác thực vi phạm tự động: ${resolvedType ? resolvedType.name : standardCode}`,
+          lyDo: pointStatus === 'CAPPED'
+            ? `[Áp trần CAPPED] Vi phạm ${standardCode}: Trừ ${actualDeducted}/${rawPts} điểm`
+            : `Tự động trừ điểm: ${standardName}`,
           violationId: violation.id,
           tripId: parsedTripId,
         },
@@ -165,14 +246,13 @@ export const createViolationRecord = async ({
     return { violation: enrichViolationRecord(violation), updatedDriver };
   });
 
-  // Gửi Email Alert nếu vi phạm được xác nhận
   if (initialStatus === 'CONFIRMED') {
     sendViolationEmailAlert({
-      driverName: result.violation.driver.user.hoTen,
-      driverEmail: result.violation.driver.user.username + '@gmail.com',
-      bienSo: result.violation.trip.vehicle.bienSo,
-      loaiViPham: result.violation.loaiViPham,
-      diemTru: ptsToDeduct,
+      driverName: result.violation.driver?.user?.hoTen || 'Tài xế',
+      driverEmail: (result.violation.driver?.user?.username || 'driver') + '@gmail.com',
+      bienSo: result.violation.trip?.vehicle?.bienSo || 'Xe IoT',
+      loaiViPham: result.violation.ten_loai || standardCode,
+      diemTru: result.violation.diemTru,
       uyTinConLai: result.updatedDriver.uyTin,
       tocDo: 'N/A',
       videoUrl: result.violation.videoUrl,
@@ -183,9 +263,17 @@ export const createViolationRecord = async ({
   return result;
 };
 
-export const reviewViolationManual = async (violationId, { action, lyDo, reviewerId }) => {
+export const reviewViolationManual = async (
+  violationId,
+  { action, decision, lyDo, notes, ghi_chu_duyet, trang_thai_xac_thuc, reviewerId }
+) => {
   const id = parseInt(violationId, 10);
   const pReviewerId = parseInt(reviewerId, 10);
+
+  const rawDecision = (action || decision || trang_thai_xac_thuc || '').toUpperCase();
+  const noteText = lyDo || notes || ghi_chu_duyet || '';
+
+  const isConfirm = rawDecision.includes('CONFIRM');
 
   const violation = await prisma.violation.findUnique({
     where: { id },
@@ -197,69 +285,100 @@ export const reviewViolationManual = async (violationId, { action, lyDo, reviewe
 
   if (!violation) throw new Error('Bản ghi vi phạm không tồn tại.');
 
-  if (action === 'CONFIRM') {
-    if (violation.trangThai === 'CONFIRMED' || violation.trangThai === 'MANUALLY_CONFIRMED') {
-      throw new Error('Vi phạm này đã được xác nhận trước đó.');
-    }
-  } else if (action === 'REJECT') {
-    if (violation.trangThai === 'REJECTED' || violation.trangThai === 'MANUALLY_REJECTED') {
-      throw new Error('Vi phạm này đã bị từ chối trước đó.');
-    }
-  }
+  const oldStatus = violation.trangThai;
+  const newStatus = isConfirm ? 'CONFIRMED' : 'REJECTED';
 
-  const newStatus = action === 'CONFIRM' ? 'MANUALLY_CONFIRMED' : 'MANUALLY_REJECTED';
+  const config = await getAiConfig();
+  const capPerTrip = Number(config.penalty_cap_per_trip ?? 30);
+  const capPerDay = Number(config.penalty_cap_per_day ?? 50);
 
-  // Chạy toàn bộ xử lý duyệt vi phạm và hoàn/trừ điểm trong Transaction
   const { updatedViolation, updatedDriver } = await prisma.$transaction(async (tx) => {
     let currentDriver = await tx.driver.findUnique({
       where: { userId: violation.driverId },
       include: { user: true },
     });
 
-    if (action === 'CONFIRM') {
-      // Trừ điểm chỉ khi trước đó CHƯA bị trừ (tức chưa CONFIRMED)
-      const currentUyTin = currentDriver.uyTin;
-      const newUyTin = Math.max(0, currentUyTin - violation.diemTru);
+    let actualDeducted = 0;
+    let pointStatus = violation.trangThaiDiem || 'APPLIED';
 
-      currentDriver = await tx.driver.update({
-        where: { userId: violation.driverId },
-        data: { uyTin: newUyTin },
-        include: { user: true },
-      });
+    if (isConfirm) {
+      if (violation.trangThai !== 'CONFIRMED') {
+        const rawPts = violation.diemTru || 10;
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
 
-      await tx.driverScoreLog.create({
-        data: {
-          driverId: violation.driverId,
-          loaiThayDoi: 'TRU_DIEM',
-          soDiemThayDoi: violation.diemTru,
-          diemTruoc: currentUyTin,
-          diemSau: newUyTin,
-          lyDo: `Xác thực thủ công bởi Quản lý: ${violation.loaiViPham}. ${lyDo || ''}`,
-          violationId: violation.id,
-          tripId: violation.tripId,
-        },
-      });
+        const [tripLogs, dayLogs] = await Promise.all([
+          tx.driverScoreLog.findMany({
+            where: { driverId: violation.driverId, tripId: violation.tripId, loaiThayDoi: 'TRU_DIEM' },
+          }),
+          tx.driverScoreLog.findMany({
+            where: { driverId: violation.driverId, loaiThayDoi: 'TRU_DIEM', createdAt: { gte: startOfDay } },
+          }),
+        ]);
 
-      // Send Email Alert
-      sendViolationEmailAlert({
-        driverName: currentDriver.user.hoTen,
-        driverEmail: currentDriver.user.username + '@gmail.com',
-        bienSo: violation.trip.vehicle.bienSo,
-        loaiViPham: violation.loaiViPham,
-        diemTru: violation.diemTru,
-        uyTinConLai: currentDriver.uyTin,
-        tocDo: 'N/A',
-        videoUrl: violation.videoUrl,
-      }).catch((e) => console.error(e));
-    } else if (action === 'REJECT') {
-      // Nếu trước đó đã bị auto-confirm trừ điểm -> HOÀN LẠI ĐIỂM (False Alarm Refund)
-      if (violation.trangThai === 'CONFIRMED' && violation.diemTru > 0) {
+        const deductedInTrip = tripLogs.reduce((sum, l) => sum + Math.abs(l.soDiemThayDoi), 0);
+        const deductedInDay = dayLogs.reduce((sum, l) => sum + Math.abs(l.soDiemThayDoi), 0);
+
+        const remainingTripQuota = Math.max(0, capPerTrip - deductedInTrip);
+        const remainingDayQuota = Math.max(0, capPerDay - deductedInDay);
+        const allowedQuota = Math.min(remainingTripQuota, remainingDayQuota);
+
+        let isCapped = false;
+        if (rawPts > allowedQuota) {
+          actualDeducted = allowedQuota;
+          isCapped = true;
+          pointStatus = 'CAPPED';
+        } else {
+          actualDeducted = rawPts;
+          pointStatus = 'APPLIED';
+        }
+
         const currentUyTin = currentDriver.uyTin;
-        const refundedUyTin = Math.min(100, currentUyTin + violation.diemTru);
+        const newUyTin = Math.max(0, currentUyTin - actualDeducted);
+        let newWarning = 'NORMAL';
+        if (newUyTin <= 20) newWarning = 'SUSPENDED_RED';
+        else if (newUyTin <= 65) newWarning = 'WARNING_YELLOW';
 
         currentDriver = await tx.driver.update({
           where: { userId: violation.driverId },
-          data: { uyTin: refundedUyTin },
+          data: {
+            uyTin: newUyTin,
+            capCanhBao: newWarning,
+            trangThaiTaiXe: newUyTin <= 20 ? 'OFF_DUTY' : currentDriver.trangThaiTaiXe,
+          },
+          include: { user: true },
+        });
+
+        await tx.driverScoreLog.create({
+          data: {
+            driverId: violation.driverId,
+            loaiThayDoi: 'TRU_DIEM',
+            soDiemThayDoi: -actualDeducted,
+            diemTruoc: currentUyTin,
+            diemSau: newUyTin,
+            lyDo: isCapped
+              ? `[Áp trần CAPPED] Vi phạm ${violation.maLoai || violation.loaiViPham}: Trừ ${actualDeducted}/${rawPts}đ`
+              : `Thẩm định vi phạm thủ công: ${violation.tenLoai || violation.loaiViPham}. ${noteText}`,
+            violationId: violation.id,
+            tripId: violation.tripId,
+          },
+        });
+      }
+    } else {
+      // Nếu REJECT: Bác bỏ vi phạm (hoàn lại điểm nếu trước đó đã bị auto-confirm trừ điểm)
+      if (violation.trangThai === 'CONFIRMED' && violation.diemTru > 0) {
+        const currentUyTin = currentDriver.uyTin;
+        const refundedUyTin = Math.min(100, currentUyTin + violation.diemTru);
+        let newWarning = 'NORMAL';
+        if (refundedUyTin <= 20) newWarning = 'SUSPENDED_RED';
+        else if (refundedUyTin <= 65) newWarning = 'WARNING_YELLOW';
+
+        currentDriver = await tx.driver.update({
+          where: { userId: violation.driverId },
+          data: {
+            uyTin: refundedUyTin,
+            capCanhBao: newWarning,
+          },
           include: { user: true },
         });
 
@@ -270,37 +389,44 @@ export const reviewViolationManual = async (violationId, { action, lyDo, reviewe
             soDiemThayDoi: violation.diemTru,
             diemTruoc: currentUyTin,
             diemSau: refundedUyTin,
-            lyDo: `Hoàn điểm do Quản lý bác bỏ vi phạm (False Alarm): ${violation.loaiViPham}. ${lyDo || ''}`,
+            lyDo: `Hoàn điểm do Điều phối viên bác bỏ vi phạm (False Alarm): ${violation.loaiViPham}. ${noteText}`,
             violationId: violation.id,
             tripId: violation.tripId,
           },
         });
       }
+      pointStatus = 'NOT_APPLIED';
     }
 
     const updatedV = await tx.violation.update({
       where: { id },
       data: {
         trangThai: newStatus,
+        trangThaiDiem: pointStatus,
+        nguonQuyetDinh: 'DISPATCHER',
+        ghiChuDuyet: noteText,
         reviewedBy: pReviewerId,
         reviewedAt: new Date(),
-        moTa: (violation.moTa || '') + ` | Xét duyệt thủ công: ${newStatus}. Lý do: ${lyDo || 'N/A'}`,
+        moTa: (violation.moTa || '') + ` | Thẩm định bởi Quản lý: ${newStatus}. ${noteText}`,
       },
-      include: { driver: { include: { user: true } }, reviewer: true },
+      include: {
+        driver: { include: { user: true } },
+        trip: { include: { vehicle: true } },
+        reviewer: true,
+      },
     });
 
     return { updatedViolation: updatedV, updatedDriver: currentDriver };
   });
 
-  // Audit Log Entry
   logAuditAction({
     userId: pReviewerId,
-    hanhDong: 'MANUAL_REVIEW_VIOLATION',
+    hanhDong: isConfirm ? 'CONFIRM_VIOLATION' : 'REJECT_VIOLATION',
     doiTuongLoai: 'VIOLATION',
-    doiTuongId: id,
-    giaTriTruoc: { trangThai: violation.trangThai },
-    giaTriSau: { trangThai: newStatus },
-    lyDo: lyDo || `Duyệt thủ công: ${newStatus}`,
+    doiTuongId: String(id),
+    giaTriTruoc: { trangThai: oldStatus },
+    giaTriSau: { trangThai: newStatus, ghiChuDuyet: noteText },
+    lyDo: noteText || `Thẩm định: ${newStatus}`,
   });
 
   return { violation: enrichViolationRecord(updatedViolation), updatedDriver };

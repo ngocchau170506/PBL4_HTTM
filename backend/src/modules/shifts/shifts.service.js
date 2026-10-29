@@ -1,34 +1,85 @@
 import prisma from '../../common/prisma.js';
 import { logAuditAction } from '../../common/audit.service.js';
-import { getSystemConfig } from '../auth/auth.service.js';
+import { getAiConfig } from '../configs/configs.service.js';
+import { formatDriver } from '../drivers/drivers.service.js';
+import { formatVehicle, formatRoute } from '../assets/assets.service.js';
 
-export const getAllShifts = async ({ driverId, status }) => {
+export const formatShift = (s) => {
+  let parsedWarnings = [];
+  try {
+    parsedWarnings = s.canhBaoKhiTao ? JSON.parse(s.canhBaoKhiTao) : [];
+  } catch (e) {
+    parsedWarnings = [];
+  }
+
+  return {
+    ...s,
+    driver_id: s.driverId,
+    vehicle_id: s.vehicleId,
+    route_id: s.routeId,
+    thoi_gian_bat_dau_du_kien: s.thoiGianBatDauDuKien,
+    thoi_gian_ket_thuc_du_kien: s.thoiGianKetThucDuKien,
+    trang_thai: s.trangThai,
+    ly_do_override: s.lyDoOverride,
+    canh_bao_khi_tao: parsedWarnings,
+    driver: s.driver ? formatDriver(s.driver) : null,
+    vehicle: s.vehicle ? formatVehicle(s.vehicle) : null,
+    route: s.route ? formatRoute(s.route) : null,
+  };
+};
+
+export const getAllShifts = async ({ driverId, status } = {}) => {
   const where = {};
   if (driverId) where.driverId = parseInt(driverId, 10);
   if (status) where.trangThai = status;
 
-  return prisma.shift.findMany({
+  const shifts = await prisma.shift.findMany({
     where,
     include: {
       driver: { include: { user: true } },
-      vehicle: true,
+      vehicle: { include: { iotDevice: true } },
       route: true,
       creator: true,
       trip: true,
     },
     orderBy: { thoiGianBatDauDuKien: 'desc' },
   });
+
+  return shifts.map(formatShift);
 };
 
-export const createShift = async ({ driverId, vehicleId, routeId, thoiGianBatDauDuKien, thoiGianKetThucDuKien, createdBy }) => {
-  const pDriverId = parseInt(driverId, 10);
-  const pVehicleId = parseInt(vehicleId, 10);
-  const pRouteId = parseInt(routeId, 10);
-  const pCreatedBy = parseInt(createdBy, 10);
-  const startTime = new Date(thoiGianBatDauDuKien);
-  const endTime = new Date(thoiGianKetThucDuKien);
+export const createShift = async ({
+  driverId,
+  driver_id,
+  vehicleId,
+  vehicle_id,
+  routeId,
+  route_id,
+  thoiGianBatDauDuKien,
+  thoi_gian_bat_dau_du_kien,
+  startTime: rawStart,
+  thoiGianKetThucDuKien,
+  thoi_gian_ket_thuc_du_kien,
+  endTime: rawEnd,
+  durationHours,
+  ly_do_override,
+  createdBy,
+}) => {
+  const pDriverId = parseInt(driverId || driver_id, 10);
+  const pVehicleId = parseInt(vehicleId || vehicle_id, 10);
+  const pRouteId = parseInt(routeId || route_id, 10);
+  const pCreatedBy = parseInt(createdBy || 1, 10);
 
-  if (isNaN(startTime.getTime()) || isNaN(endTime.getTime())) {
+  const startStr = thoiGianBatDauDuKien || thoi_gian_bat_dau_du_kien || rawStart;
+  let endStr = thoiGianKetThucDuKien || thoi_gian_ket_thuc_du_kien || rawEnd;
+
+  const startTime = new Date(startStr);
+  let endTime = endStr ? new Date(endStr) : null;
+  if (!endTime && durationHours) {
+    endTime = new Date(startTime.getTime() + Number(durationHours) * 3600000);
+  }
+
+  if (isNaN(startTime.getTime()) || !endTime || isNaN(endTime.getTime())) {
     throw new Error('Thời gian ca làm việc không hợp lệ.');
   }
 
@@ -36,13 +87,23 @@ export const createShift = async ({ driverId, vehicleId, routeId, thoiGianBatDau
     throw new Error('Thời gian bắt đầu ca phải diễn ra trước thời gian kết thúc.');
   }
 
-  const warnings = [];
+  // 1. Kiểm tra Tài xế đình chỉ
+  const driver = await prisma.driver.findUnique({ where: { userId: pDriverId } });
+  if (driver && (driver.uyTin <= 20 || driver.capCanhBao === 'SUSPENDED_RED')) {
+    throw new Error('CHẶN: Tài xế này đang bị đình chỉ công tác (Điểm uy tín <= 20 hoặc Báo động đỏ). Không thể xếp ca.');
+  }
 
-  // Lấy cấu hình hệ thống động
-  const config = await getSystemConfig();
-  const minRestHours = config.minRestHours ?? 8.0;
+  // 2. Kiểm tra Xe bảo dưỡng
+  const vehicle = await prisma.vehicle.findUnique({ where: { id: pVehicleId } });
+  if (vehicle && vehicle.trangThai === 'MAINTENANCE') {
+    throw new Error('CHẶN: Phương tiện này đang trong xưởng bảo dưỡng. Không thể xếp ca.');
+  }
 
-  // 1. Kiểm tra trùng lặp ca trực của Tài xế (Driver Overlap Check)
+  // 3. Lấy cấu hình hệ thống động
+  const config = await getAiConfig();
+  const minRestHours = config.min_rest_hours ?? 8.0;
+
+  // 4. Kiểm tra trùng lặp ca trực của Tài xế (Driver Overlap Check)
   const overlappingDriverShift = await prisma.shift.findFirst({
     where: {
       driverId: pDriverId,
@@ -55,7 +116,7 @@ export const createShift = async ({ driverId, vehicleId, routeId, thoiGianBatDau
     throw new Error('CHẶN: Tài xế này đã có một ca làm việc khác trùng với khoảng thời gian đã chọn.');
   }
 
-  // 2. Kiểm tra trùng lặp lịch phương tiện (Vehicle Overlap Check)
+  // 5. Kiểm tra trùng lặp lịch phương tiện (Vehicle Overlap Check)
   const overlappingVehicleShift = await prisma.shift.findFirst({
     where: {
       vehicleId: pVehicleId,
@@ -68,7 +129,7 @@ export const createShift = async ({ driverId, vehicleId, routeId, thoiGianBatDau
     throw new Error('CHẶN: Phương tiện này đã được xếp vào một ca làm việc khác trong khoảng thời gian đã chọn.');
   }
 
-  // 3. Kiểm tra khoảng thời gian nghỉ tối thiểu (trước và sau ca)
+  // 6. Kiểm tra khoảng thời gian nghỉ tối thiểu
   const prevShift = await prisma.shift.findFirst({
     where: {
       driverId: pDriverId,
@@ -101,7 +162,8 @@ export const createShift = async ({ driverId, vehicleId, routeId, thoiGianBatDau
     }
   }
 
-  // 4. Kiểm tra Hồ sơ Sinh học (Biometric Profile Check)
+  // 7. Kiểm tra Hồ sơ Sinh học (Biometric Profile Check)
+  const warnings = [];
   const profile = await prisma.driverBiometricProfile.findFirst({
     where: { driverId: pDriverId },
     orderBy: { createdAt: 'desc' },
@@ -113,7 +175,6 @@ export const createShift = async ({ driverId, vehicleId, routeId, thoiGianBatDau
       warnings.push(`CẢNH BÁO: Tổng thời gian lái ca dự kiến (${(shiftMinutes / 60).toFixed(1)}h) vượt mức khuyến nghị sinh học (${(profile.thoiGianLaiToiDaKhuyenNghi / 60).toFixed(1)}h).`);
     }
 
-    // Check biological weak window
     const startHour = startTime.getHours();
     if ((startHour >= 13 && startHour <= 15) || (startHour >= 1 && startHour <= 4)) {
       warnings.push(`LƯU Ý: Ca rơi vào khung giờ yếu sinh học của tài xế (${startHour}:00h). Nhắc nhở tài xế nghỉ ngơi đầy đủ.`);
@@ -129,29 +190,32 @@ export const createShift = async ({ driverId, vehicleId, routeId, thoiGianBatDau
       thoiGianKetThucDuKien: endTime,
       trangThai: 'SCHEDULED',
       createdBy: pCreatedBy,
+      lyDoOverride: ly_do_override || null,
       canhBaoKhiTao: JSON.stringify(warnings),
     },
     include: {
       driver: { include: { user: true } },
-      vehicle: true,
+      vehicle: { include: { iotDevice: true } },
       route: true,
     },
   });
 
-  // Log Audit Action
+  const hasOverride = Boolean(ly_do_override?.trim());
   logAuditAction({
     userId: pCreatedBy,
-    hanhDong: 'CREATE_SHIFT',
+    hanhDong: hasOverride ? 'CREATE_SHIFT_OVERRIDE' : 'CREATE_SHIFT',
     doiTuongLoai: 'SHIFT',
-    doiTuongId: shift.id,
+    doiTuongId: String(shift.id),
     giaTriSau: shift,
-    lyDo: warnings.length > 0 ? warnings.join(' | ') : 'Tạo ca làm việc mới.',
+    lyDo: hasOverride
+      ? `Ghi đè cảnh báo Smart Scheduling: "${ly_do_override}"`
+      : warnings.length > 0 ? warnings.join(' | ') : 'Tạo ca làm việc mới.',
   });
 
-  return { shift, warnings };
+  return formatShift(shift);
 };
 
-export const respondToShift = async (shiftId, { trangThai, lyDoTuChoi }) => {
+export const respondToShift = async (shiftId, { trangThai, trang_thai, lyDoTuChoi, ly_do_tu_choi }) => {
   const id = parseInt(shiftId, 10);
   const shift = await prisma.shift.findUnique({ where: { id } });
   if (!shift) throw new Error('Ca làm việc không tồn tại.');
@@ -160,11 +224,14 @@ export const respondToShift = async (shiftId, { trangThai, lyDoTuChoi }) => {
     throw new Error('Không thể chỉnh sửa ca làm việc khi đã bắt đầu hoặc hoàn thành.');
   }
 
+  const newStatus = trangThai || trang_thai;
+  const reason = lyDoTuChoi || ly_do_tu_choi;
+
   const updatedShift = await prisma.shift.update({
     where: { id },
     data: {
-      trangThai,
-      lyDoTuChoi: lyDoTuChoi || null,
+      trangThai: newStatus,
+      lyDoTuChoi: reason || null,
     },
     include: {
       driver: { include: { user: true } },
@@ -173,16 +240,5 @@ export const respondToShift = async (shiftId, { trangThai, lyDoTuChoi }) => {
     },
   });
 
-  return updatedShift;
-};
-
-export const getShiftById = async (id) => {
-  return prisma.shift.findUnique({
-    where: { id: parseInt(id, 10) },
-    include: {
-      driver: { include: { user: true } },
-      vehicle: true,
-      route: true,
-    },
-  });
+  return formatShift(updatedShift);
 };

@@ -1,8 +1,24 @@
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import prisma from '../../common/prisma.js';
+import { getAiConfig, updateAiConfig } from '../configs/configs.service.js';
 
 const JWT_SECRET = process.env.ACCESS_JWT_SECRET || 'pbl4_access_token_secret_key_2026_super_secure_node_jwt_auth_key';
+
+export const formatUser = (user) => ({
+  id: user.id,
+  username: user.username,
+  hoTen: user.hoTen,
+  ho_ten: user.hoTen,
+  name: user.hoTen,
+  sdt: user.sdt,
+  so_dien_thoai: user.sdt,
+  role: user.role,
+  vai_tro: user.role,
+  trangThai: user.trangThai,
+  trang_thai: user.trangThai,
+  driver: user.driver,
+});
 
 export const registerUser = async ({ username, password, hoTen, sdt, bangLai }) => {
   const existingUser = await prisma.user.findUnique({ where: { username } });
@@ -21,15 +37,14 @@ export const registerUser = async ({ username, password, hoTen, sdt, bangLai }) 
       sdt,
       role: 'DRIVER',
       trangThai: 'ACTIVE',
-      driver: { create: { bangLai: bangLai || 'B2', uyTin: 100, trangThaiTaiXe: 'AVAILABLE' } },
+      driver: { create: { bangLai: bangLai || `BL-${Date.now()}`, uyTin: 100, trangThaiTaiXe: 'AVAILABLE' } },
     },
     include: {
       driver: true,
     },
   });
 
-  delete newUser.passwordHash;
-  return newUser;
+  return formatUser(newUser);
 };
 
 export const loginUser = async ({ username, password }) => {
@@ -61,18 +76,14 @@ export const loginUser = async ({ username, password }) => {
     driverId: user.driver?.userId || null,
   };
 
-  const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1d' });
+  const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
 
+  const formatted = formatUser(user);
   return {
-    user: {
-      id: user.id,
-      username: user.username,
-      hoTen: user.hoTen,
-      sdt: user.sdt,
-      role: user.role,
-      driver: user.driver,
-    },
+    user: formatted,
     token,
+    accessToken: token,
+    access_token: token,
   };
 };
 
@@ -95,8 +106,7 @@ export const getUserProfile = async (userId) => {
     throw new Error('Không tìm thấy người dùng.');
   }
 
-  delete user.passwordHash;
-  return user;
+  return formatUser(user);
 };
 
 export const getAllUsers = async () => {
@@ -104,19 +114,18 @@ export const getAllUsers = async () => {
     include: {
       driver: true,
     },
-    orderBy: { createdAt: 'desc' },
+    orderBy: { id: 'asc' },
   });
-  return users.map(u => { const { passwordHash, ...rest } = u; return rest; });
+
+  return users.map(formatUser);
 };
 
-export const updateUserStatus = async (userId, { trangThai, role }, adminId) => {
+export const updateUser = async (userId, data, adminId) => {
   const pUserId = parseInt(userId, 10);
   const oldUser = await prisma.user.findUnique({ where: { id: pUserId } });
-  if (!oldUser) throw new Error('Người dùng không tồn tại.');
-
-  const data = {};
-  if (trangThai) data.trangThai = trangThai;
-  if (role) data.role = role;
+  if (!oldUser) {
+    throw new Error('Không tìm thấy người dùng để cập nhật.');
+  }
 
   const updatedUser = await prisma.user.update({
     where: { id: pUserId },
@@ -130,47 +139,20 @@ export const updateUserStatus = async (userId, { trangThai, role }, adminId) => 
       userId: adminId,
       hanhDong: 'UPDATE_USER_ACCOUNT',
       doiTuongLoai: 'USER',
-      doiTuongId: pUserId,
+      doiTuongId: String(pUserId),
       giaTriTruoc: { trangThai: oldUser.trangThai, role: oldUser.role },
       giaTriSau: { trangThai: updatedUser.trangThai, role: updatedUser.role },
       lyDo: `Quản trị viên cập nhật tài khoản: ${oldUser.username}`,
     });
   }
 
-  return updatedUser;
-};
-
-// In-memory System Configuration Store (can be persisted to file / DB)
-let systemConfig = {
-  aiConfidenceConfirmThreshold: 0.85,
-  aiConfidenceRejectThreshold: 0.60,
-  co2PpmThreshold: 1000,
-  minRestHours: 8,
-  eyeClosedDurationSeconds: 2,
-  yawnDurationSeconds: 3,
+  return formatUser(updatedUser);
 };
 
 export const getSystemConfig = async () => {
-  return systemConfig;
+  return getAiConfig();
 };
 
 export const updateSystemConfig = async (newConfig, adminId) => {
-  const oldConfig = { ...systemConfig };
-  systemConfig = { ...systemConfig, ...newConfig };
-
-  if (adminId) {
-    const { logAuditAction } = await import('../../common/audit.service.js');
-    logAuditAction({
-      userId: adminId,
-      hanhDong: 'UPDATE_SYSTEM_CONFIG',
-      doiTuongLoai: 'SYSTEM',
-      doiTuongId: 1,
-      giaTriTruoc: oldConfig,
-      giaTriSau: systemConfig,
-      lyDo: 'Quản trị viên cập nhật tham số AI & Cảm biến hệ thống',
-    });
-  }
-
-  return systemConfig;
+  return updateAiConfig(newConfig, { id: adminId });
 };
-

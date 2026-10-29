@@ -43,7 +43,15 @@ export const requireRole = (...roles) => {
       return res.status(401).json({ message: 'Yêu cầu đăng nhập.' });
     }
 
-    if (req.user.role !== 'ADMIN' && !roles.includes(req.user.role)) {
+    const userRole = (req.user.role || '').toUpperCase();
+    const effectiveRoles = roles.map((r) => r.toUpperCase());
+
+    // Chấp nhận tương đương giữa DISPATCHER và MANAGER
+    if (effectiveRoles.includes('MANAGER') || effectiveRoles.includes('DISPATCHER')) {
+      effectiveRoles.push('MANAGER', 'DISPATCHER');
+    }
+
+    if (userRole !== 'ADMIN' && !effectiveRoles.includes(userRole)) {
       return res.status(403).json({ message: `Bạn không có quyền truy cập. Yêu cầu vai trò: ${roles.join(' hoặc ')}.` });
     }
 

@@ -8,9 +8,11 @@ router.use(requireAuth);
 
 router.get('/types', getViolationTypes);
 router.get('/', getViolations);
-router.get('/drivers-score', requireRole('MANAGER', 'ADMIN'), getDriversScore);
-router.post('/', requireRole('MANAGER', 'ADMIN'), createViolation);
-router.post('/:id/review', requireRole('MANAGER', 'ADMIN'), reviewViolation);
+router.get('/drivers-score', requireRole('MANAGER', 'DISPATCHER', 'ADMIN'), getDriversScore);
+router.post('/', requireRole('MANAGER', 'DISPATCHER', 'ADMIN'), createViolation);
+
+// Hỗ trợ cả POST và PATCH cho duyệt vi phạm
+router.post('/:id/review', requireRole('MANAGER', 'DISPATCHER', 'ADMIN'), reviewViolation);
+router.patch('/:id/review', requireRole('MANAGER', 'DISPATCHER', 'ADMIN'), reviewViolation);
 
 export default router;
-
