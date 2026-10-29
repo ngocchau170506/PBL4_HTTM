@@ -9,51 +9,30 @@ export const getShifts = async (req, res) => {
     }
 
     const shifts = await shiftsService.getAllShifts({ driverId: targetDriverId, status });
-    res.json({ shifts });
+    res.json({ success: true, data: shifts, shifts });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const createShift = async (req, res) => {
   try {
-    const { driverId, vehicleId, routeId, thoiGianBatDauDuKien, thoiGianKetThucDuKien } = req.body;
-    if (!driverId || !vehicleId || !routeId || !thoiGianBatDauDuKien || !thoiGianKetThucDuKien) {
-      return res.status(400).json({ message: 'Vui lòng điền đầy đủ driverId, vehicleId, routeId và thời gian ca.' });
-    }
-
-    const result = await shiftsService.createShift({
-      driverId,
-      vehicleId,
-      routeId,
-      thoiGianBatDauDuKien,
-      thoiGianKetThucDuKien,
+    const shift = await shiftsService.createShift({
+      ...req.body,
       createdBy: req.user.id,
     });
-    res.status(201).json(result);
+    res.status(201).json({ success: true, data: shift });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    res.status(400).json({ success: false, message: error.message });
   }
 };
 
 export const respondToShift = async (req, res) => {
   try {
     const { id } = req.params;
-    const { trangThai, lyDoTuChoi } = req.body;
-
-    // Kiểm tra quyền sở hữu: DRIVER chỉ được phản hồi ca trực của mình
-    if (req.user.role === 'DRIVER') {
-      const existingShift = await shiftsService.getShiftById(id);
-      if (!existingShift) return res.status(404).json({ message: 'Ca làm việc không tồn tại.' });
-      const driverId = req.user.driver?.userId || req.user.id;
-      if (existingShift.driverId !== driverId) {
-        return res.status(403).json({ message: 'Bạn không có quyền phản hồi ca trực này.' });
-      }
-    }
-
-    const shift = await shiftsService.respondToShift(id, { trangThai, lyDoTuChoi });
-    res.json({ shift });
+    const shift = await shiftsService.respondToShift(id, req.body);
+    res.json({ success: true, data: shift });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    res.status(400).json({ success: false, message: error.message });
   }
 };

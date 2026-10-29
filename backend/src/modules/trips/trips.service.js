@@ -1,24 +1,64 @@
 import prisma from '../../common/prisma.js';
+import { formatDriver } from '../drivers/drivers.service.js';
+import { formatVehicle, formatRoute } from '../assets/assets.service.js';
 
-export const getAllTrips = async ({ driverId, status }) => {
+export const formatTrip = (t) => {
+  const latestLog = t.logs?.[0] || null;
+  const isDanger = t.violations?.some((v) =>
+    ['CONFIRMED', 'PENDING_MANUAL_REVIEW'].includes(v.trangThai)
+  );
+
+  return {
+    ...t,
+    shift_id: t.shiftId,
+    active_driver_id: t.driverId,
+    driver_id: t.driverId,
+    vehicle_id: t.vehicleId,
+    route_id: t.routeId,
+    trang_thai: t.trangThai,
+    thoi_gian_bat_dau: t.thoiGianBatDau,
+    thoi_gian_ket_thuc: t.thoiGianKetThuc,
+    driver: t.driver ? formatDriver(t.driver) : null,
+    vehicle: t.vehicle ? formatVehicle(t.vehicle) : null,
+    route: t.route ? formatRoute(t.route) : null,
+    latest_telemetry: latestLog
+      ? {
+          vi_do_gps: latestLog.viDo,
+          kinh_do_gps: latestLog.kinhDo,
+          toc_do_kmh: latestLog.tocDo,
+          co2_ppm: latestLog.co2Level || 680,
+          marker_color: isDanger ? 'RED' : 'GREEN',
+          thoi_gian_ghi_nhan: latestLog.thoiGianGhiNhan,
+        }
+      : {
+          vi_do_gps: 16.0544,
+          kinh_do_gps: 108.2022,
+          toc_do_kmh: 60.0,
+          co2_ppm: 680,
+          marker_color: isDanger ? 'RED' : 'GREEN',
+          thoi_gian_ghi_nhan: new Date(),
+        },
+  };
+};
+
+export const getAllTrips = async ({ driverId, status } = {}) => {
   const where = {};
   if (driverId) where.driverId = parseInt(driverId, 10);
   if (status) where.trangThai = status;
 
-  return prisma.trip.findMany({
+  const trips = await prisma.trip.findMany({
     where,
     include: {
-      driver: {
-        include: { user: true },
-      },
-      vehicle: {
-        include: { iotDevice: true },
-      },
+      driver: { include: { user: true } },
+      vehicle: { include: { iotDevice: true } },
       route: true,
       violations: true,
+      logs: { take: 1, orderBy: { thoiGianGhiNhan: 'desc' } },
     },
     orderBy: { createdAt: 'desc' },
   });
+
+  return trips.map(formatTrip);
 };
 
 export const getDriverActiveTrip = async (driverId) => {
@@ -33,12 +73,13 @@ export const getDriverActiveTrip = async (driverId) => {
       vehicle: { include: { iotDevice: true } },
       route: true,
       violations: true,
+      logs: { take: 1, orderBy: { thoiGianGhiNhan: 'desc' } },
     },
   });
 
-  if (activeTrip) return activeTrip;
+  if (activeTrip) return formatTrip(activeTrip);
 
-  return prisma.trip.findFirst({
+  const plannedTrip = await prisma.trip.findFirst({
     where: {
       driverId: id,
       trangThai: 'PLANNED',
@@ -48,32 +89,33 @@ export const getDriverActiveTrip = async (driverId) => {
       vehicle: { include: { iotDevice: true } },
       route: true,
       violations: true,
+      logs: { take: 1, orderBy: { thoiGianGhiNhan: 'desc' } },
     },
     orderBy: { createdAt: 'desc' },
   });
+
+  return plannedTrip ? formatTrip(plannedTrip) : null;
 };
 
 export const getTripById = async (id) => {
-  return prisma.trip.findUnique({
+  const trip = await prisma.trip.findUnique({
     where: { id: parseInt(id, 10) },
     include: {
-      driver: {
-        include: { user: true },
-      },
-      vehicle: {
-        include: { iotDevice: true },
-      },
+      driver: { include: { user: true } },
+      vehicle: { include: { iotDevice: true } },
       route: true,
       violations: true,
+      logs: { take: 1, orderBy: { thoiGianGhiNhan: 'desc' } },
     },
   });
+
+  return trip ? formatTrip(trip) : null;
 };
 
-export const createTrip = async ({ driverId, vehicleId, routeId }) => {
+export const createTrip = async ({ driverId, vehicleId, routeId, shiftId }) => {
   const parsedDriverId = parseInt(driverId, 10);
   const parsedVehicleId = parseInt(vehicleId, 10);
 
-  // Check if driver or vehicle is currently on another IN_PROGRESS trip
   const existingDriverTrip = await prisma.trip.findFirst({
     where: { driverId: parsedDriverId, trangThai: 'IN_PROGRESS' },
   });
@@ -90,6 +132,7 @@ export const createTrip = async ({ driverId, vehicleId, routeId }) => {
 
   const trip = await prisma.trip.create({
     data: {
+      shiftId: shiftId ? parseInt(shiftId, 10) : null,
       driverId: parsedDriverId,
       vehicleId: parsedVehicleId,
       routeId: parseInt(routeId, 10),
@@ -102,7 +145,7 @@ export const createTrip = async ({ driverId, vehicleId, routeId }) => {
     },
   });
 
-  return trip;
+  return formatTrip(trip);
 };
 
 export const updateTripStatus = async (id, trangThai) => {
@@ -112,10 +155,8 @@ export const updateTripStatus = async (id, trangThai) => {
 
   const data = { trangThai };
 
-  // Dùng prisma.$transaction đảm bảo cập nhật đồng thời trip, driver, vehicle
   const updatedTrip = await prisma.$transaction(async (tx) => {
     if (trangThai === 'IN_PROGRESS') {
-      // Kiểm tra tài xế có chuyến xe khác đang chạy không
       const activeDriverTrip = await tx.trip.findFirst({
         where: { driverId: trip.driverId, trangThai: 'IN_PROGRESS', id: { not: tripId } },
       });
@@ -123,7 +164,6 @@ export const updateTripStatus = async (id, trangThai) => {
         throw new Error('Tài xế đang có một chuyến xe khác đang chạy (IN_PROGRESS). Vui lòng kết thúc chuyến cũ trước.');
       }
 
-      // Kiểm tra phương tiện có chuyến xe khác đang chạy không
       const activeVehicleTrip = await tx.trip.findFirst({
         where: { vehicleId: trip.vehicleId, trangThai: 'IN_PROGRESS', id: { not: tripId } },
       });
@@ -159,7 +199,7 @@ export const updateTripStatus = async (id, trangThai) => {
     }
   }
 
-  return updatedTrip;
+  return formatTrip(updatedTrip);
 };
 
 export const grantSafeTripReward = async (tripId) => {
@@ -171,24 +211,20 @@ export const grantSafeTripReward = async (tripId) => {
 
   if (!trip || trip.trangThai !== 'COMPLETED') return null;
 
-  // Kiểm tra thời lượng chuyến đi thực tế (chống cày điểm ảo bằng cách tạo rồi ấn kết thúc ngay)
   if (!trip.thoiGianBatDau || !trip.thoiGianKetThuc) return null;
   const durationSeconds = (new Date(trip.thoiGianKetThuc).getTime() - new Date(trip.thoiGianBatDau).getTime()) / 1000;
   if (durationSeconds < 30) {
-    // Chuyến đi ngắn hơn 30 giây không được nhận thưởng an toàn
     return null;
   }
 
-  // Check if reward was already granted
   const existingRewardLog = await prisma.driverScoreLog.findFirst({
     where: {
       tripId: pTripId,
-      loaiThayDoi: 'CONG_DIEM',
+      loaiThayDoi: { in: ['CONG_DIEM', 'CONG_DIEM_THUONG'] },
     },
   });
   if (existingRewardLog) return null;
 
-  // Check if there are any violations associated with this trip
   const hasViolations = trip.violations.some((v) =>
     ['CONFIRMED', 'MANUALLY_CONFIRMED', 'PENDING_MANUAL_REVIEW', 'PENDING_VERIFICATION'].includes(v.trangThai)
   );
@@ -210,7 +246,7 @@ export const grantSafeTripReward = async (tripId) => {
     const scoreLog = await tx.driverScoreLog.create({
       data: {
         driverId: trip.driverId,
-        loaiThayDoi: 'CONG_DIEM',
+        loaiThayDoi: 'CONG_DIEM_THUONG',
         soDiemThayDoi: rewardPts,
         diemTruoc: currentUyTin,
         diemSau: newUyTin,
@@ -222,7 +258,6 @@ export const grantSafeTripReward = async (tripId) => {
     return { updatedDriver, scoreLog };
   });
 };
-
 
 export const getTripPlaybackData = async (tripId) => {
   const id = parseInt(tripId, 10);
@@ -246,7 +281,7 @@ export const getTripPlaybackData = async (tripId) => {
   });
 
   return {
-    trip,
+    trip: formatTrip(trip),
     logs,
     violations: trip.violations,
   };

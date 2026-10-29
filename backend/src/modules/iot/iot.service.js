@@ -1,6 +1,6 @@
 import prisma from '../../common/prisma.js';
 import { createViolationRecord } from '../violations/violations.service.js';
-import { getSystemConfig } from '../auth/auth.service.js';
+import { getAiConfig } from '../configs/configs.service.js';
 import { resolveViolationFromFlag } from '../../common/constants/violationTypes.js';
 
 let ioInstance = null;
@@ -57,34 +57,46 @@ export const processIotDataPacket = async ({ tripId, deviceId, kinhDo, viDo, toc
     });
   }
 
-  // Broadcast Real-time Telemetry event (including CO2 & AI flags) via Socket.io
+  const isDangerFlag = Boolean(aiViolationFlag) || (co2 !== null && co2 > 1000);
+
+  // Broadcast Real-time Telemetry event via Socket.io (hỗ trợ cả gps_update và telemetry:update cho Frontend Zustand store)
   if (ioInstance) {
-    ioInstance.emit('gps_update', {
+    const telemetryPayload = {
       logId: logEntry.id,
       tripId: parsedTripId,
+      trip_id: parsedTripId,
       deviceId: parsedDeviceId,
+      vehicle_id: tripInfo?.vehicle?.id || parsedDeviceId,
+      bien_so_xe: tripInfo?.vehicle?.bienSo || 'Xe IoT',
+      active_driver_name: tripInfo?.driver?.user?.hoTen || 'Tài xế',
       lat,
       lng,
+      vi_do_gps: lat,
+      kinh_do_gps: lng,
       speed,
+      toc_do_kmh: speed,
       co2Level: co2,
+      co2_ppm: co2 || 450,
+      marker_color: isDangerFlag ? 'RED' : 'GREEN',
       aiViolationFlag: aiViolationFlag || null,
       timestamp: logEntry.thoiGianGhiNhan,
+      thoi_gian_ghi_nhan: logEntry.thoiGianGhiNhan,
       vehicle: tripInfo?.vehicle || null,
       driver: tripInfo?.driver || null,
       route: tripInfo?.route || null,
-    });
+    };
+
+    ioInstance.emit('gps_update', telemetryPayload);
+    ioInstance.emit('telemetry:update', telemetryPayload);
   }
 
   // 4. AUTO DEDUCT POINTS & AI SAFETY TRIGGER LOGIC
   if (tripInfo && tripInfo.driver) {
     const driverId = tripInfo.driverId;
-    let loaiViPham = null;
-    let diemTru = 0;
     let videoUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
-    let moTa = '';
 
-    const config = await getSystemConfig();
-    const co2Threshold = config.co2PpmThreshold || 1000;
+    const config = await getAiConfig();
+    const co2Threshold = config.co2_warning_threshold_ppm || 1000;
 
     // Chuẩn hóa loại lỗi thông qua bộ từ điển VIOLATION_TYPES
     const detectedType = resolveViolationFromFlag({
@@ -110,7 +122,6 @@ export const processIotDataPacket = async ({ tripId, deviceId, kinhDo, viDo, toc
       if (!recentViolation) {
         console.log(`🚨 [AI/IOT TRIGGER] [ID ${detectedType.id}] ${detectedType.code} (${detectedType.name}) - Vehicle ${tripInfo.vehicle.bienSo} - Driver ${tripInfo.driver.user.hoTen}`);
 
-        // Gọi createViolationRecord chuẩn hóa (đã bao gồm ID, Code chuẩn, atomic transaction, trừ điểm uy tín, ghi score log, và gửi email)
         const { violation: newViolation, updatedDriver } = await createViolationRecord({
           driverId,
           tripId: parsedTripId,
@@ -118,19 +129,21 @@ export const processIotDataPacket = async ({ tripId, deviceId, kinhDo, viDo, toc
           loaiViPham: detectedType.code,
           diemTru: detectedType.defaultPoints,
           videoUrl,
-          videoDuration: 15,
-          aiConfidenceScore: 0.95, // Hardware AI Edge triggers have high confidence
+          videoDuration: 10,
+          aiConfidenceScore: 0.95,
           moTa: `${detectedType.icon} ${detectedType.description}`,
         });
 
         // Broadcast violation alert event via Socket.io
         if (ioInstance) {
-          ioInstance.emit('violation_detected', {
+          const alertPayload = {
             violation: newViolation,
             driver: tripInfo.driver,
             vehicle: tripInfo.vehicle,
             updatedUyTin: updatedDriver.uyTin,
-          });
+          };
+          ioInstance.emit('violation_detected', alertPayload);
+          ioInstance.emit('new_violation', newViolation);
         }
       }
     }

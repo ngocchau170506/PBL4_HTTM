@@ -9,73 +9,63 @@ export const getTrips = async (req, res) => {
     }
 
     const trips = await tripsService.getAllTrips({ driverId: targetDriverId, status });
-    res.json({ trips });
+    res.json({ success: true, data: trips, trips });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const getMyActiveTrip = async (req, res) => {
   try {
     const driverId = req.user.driver?.userId || req.user.id;
-    const trip = await tripsService.getDriverActiveTrip(driverId);
-    res.json({ trip });
+    const activeTrip = await tripsService.getDriverActiveTrip(driverId);
+    res.json({ success: true, data: activeTrip, trip: activeTrip });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const getTripById = async (req, res) => {
   try {
     const trip = await tripsService.getTripById(req.params.id);
-    if (!trip) return res.status(404).json({ message: 'Chuyến xe không tồn tại.' });
-    res.json({ trip });
+    if (!trip) {
+      return res.status(404).json({ success: false, message: 'Chuyến xe không tồn tại.' });
+    }
+    res.json({ success: true, data: trip, trip });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const createTrip = async (req, res) => {
   try {
-    const { driverId, vehicleId, routeId } = req.body;
-    if (!driverId || !vehicleId || !routeId) {
-      return res.status(400).json({ message: 'Vui lòng cung cấp driverId, vehicleId và routeId.' });
-    }
-    const trip = await tripsService.createTrip({ driverId, vehicleId, routeId });
-    res.status(201).json({ trip });
+    const trip = await tripsService.createTrip(req.body);
+    res.status(201).json({ success: true, data: trip, trip });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    res.status(400).json({ success: false, message: error.message });
   }
 };
 
 export const updateTripStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { trangThai } = req.body;
-
-    // Kiểm tra quyền sở hữu: DRIVER chỉ được cập nhật chuyến xe của mình
-    if (req.user.role === 'DRIVER') {
-      const trip = await tripsService.getTripById(id);
-      if (!trip) return res.status(404).json({ message: 'Chuyến xe không tồn tại.' });
-      const driverId = req.user.driver?.userId || req.user.id;
-      if (trip.driverId !== driverId) {
-        return res.status(403).json({ message: 'Bạn không có quyền cập nhật chuyến xe này.' });
-      }
+    const { trangThai, trang_thai } = req.body;
+    const status = trangThai || trang_thai;
+    if (!status) {
+      return res.status(400).json({ success: false, message: 'Vui lòng cung cấp trạng thái mới cho chuyến xe.' });
     }
-
-    const trip = await tripsService.updateTripStatus(id, trangThai);
-    res.json({ trip });
+    const trip = await tripsService.updateTripStatus(id, status);
+    res.json({ success: true, data: trip, trip });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    res.status(400).json({ success: false, message: error.message });
   }
 };
 
 export const getPlayback = async (req, res) => {
   try {
-    const { id } = req.params;
-    const playbackData = await tripsService.getTripPlaybackData(id);
-    res.json(playbackData);
+    const playbackData = await tripsService.getTripPlaybackData(req.params.id);
+    res.json({ success: true, data: playbackData });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    res.status(404).json({ success: false, message: error.message });
   }
 };
