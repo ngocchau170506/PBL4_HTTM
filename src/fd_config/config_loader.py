@@ -52,6 +52,10 @@ class BaselineConfig:
 class AiConfig:
     adapter: str
     timeout_ms: int
+    model_path: str = "AI/models/best.pt"
+    landmarker_path: str = "AI/models/face_landmarker.task"
+    confidence_threshold: float = 0.25
+    fallback_mode: bool = True
 
 
 @dataclass(frozen=True)
@@ -433,6 +437,9 @@ class ConfigLoader:
         if esp_uri is not None and not isinstance(esp_uri, str):
             self._health = "DOWN"
             return _cfg_error(trace_id, "esp32.uri phải là chuỗi hoặc null")
+        env_esp_uri = env_map.get("FD_ESP32_URI", "").strip() or env_map.get("FD_ESP32_PORT", "").strip()
+        if env_esp_uri:
+            esp_uri = env_esp_uri
         if esp_enabled and (not esp_uri or not esp_uri.strip()):
             self._health = "DOWN"
             return _cfg_error(trace_id, "esp32.uri bắt buộc phải có khi esp32.enabled=true")
@@ -482,6 +489,30 @@ class ConfigLoader:
         if err:
             self._health = "DOWN"
             return _cfg_error(trace_id, err)
+
+        ai_model_path = ai_raw.get("model_path", "AI/models/best.pt")
+        if not isinstance(ai_model_path, str) or not ai_model_path.strip():
+            self._health = "DOWN"
+            return _cfg_error(trace_id, "ai.model_path phải là chuỗi không rỗng")
+
+        ai_landmarker_path = ai_raw.get("landmarker_path", "AI/models/face_landmarker.task")
+        if not isinstance(ai_landmarker_path, str) or not ai_landmarker_path.strip():
+            self._health = "DOWN"
+            return _cfg_error(trace_id, "ai.landmarker_path phải là chuỗi không rỗng")
+
+        ai_conf = ai_raw.get("confidence_threshold", 0.25)
+        if (
+            isinstance(ai_conf, bool)
+            or not isinstance(ai_conf, (int, float))
+            or not (0.0 < float(ai_conf) <= 1.0)
+        ):
+            self._health = "DOWN"
+            return _cfg_error(trace_id, "ai.confidence_threshold phải là số trong nửa khoảng (0, 1]")
+
+        ai_fallback = ai_raw.get("fallback_mode", True)
+        if not isinstance(ai_fallback, bool):
+            self._health = "DOWN"
+            return _cfg_error(trace_id, "ai.fallback_mode phải là kiểu bool")
 
         resp_raw = raw.get("response")
         if not isinstance(resp_raw, dict):
@@ -536,6 +567,10 @@ class ConfigLoader:
             ai=AiConfig(
                 adapter=ai_adapter,
                 timeout_ms=ai_raw["timeout_ms"],
+                model_path=ai_model_path.strip(),
+                landmarker_path=ai_landmarker_path.strip(),
+                confidence_threshold=float(ai_conf),
+                fallback_mode=ai_fallback,
             ),
             response=ResponseConfig(
                 pre_event_ms=resp_raw["pre_event_ms"],

@@ -26,12 +26,14 @@ from contracts.logic import (
 from contracts.state import BaselineProfile
 from fd_config.config_loader import ConfigLoader, SystemConfig
 from fd_connect.camera_source import CameraSource
+from fd_connect.esp32_commander import Esp32Commander
 from fd_connect.esp32_source import Esp32Source
 from fd_diagnose.error_recorder import ErrorRecorder
 from fd_flow.circuit_breaker import CircuitBreaker
 from fd_flow.queue_manager import EdgeQueueManager
 from fd_process.ai.adapter_base import run_ai
 from fd_process.ai.stub_adapter import StubAdapter
+from fd_process.ai.yolo_adapter import YoloAdapter
 from fd_process.baseline.baseline_collector import BaselineCollector
 from fd_process.rules.eye_drowsiness import EyeDrowsinessRule
 from fd_process.rules.mouth_yawn import MouthYawnRule
@@ -102,15 +104,18 @@ class FlowEngine:
         rules_engine: Optional[RulesEngine] = None,
         ring_buffer: Optional[FrameRingBuffer] = None,
         server_dispatcher: Optional[ServerDispatcher] = None,
+        esp32_commander: Optional[Esp32Commander] = None,
         enable_rules_from_config: bool = False,
     ) -> None:
         self._config_loader = config_loader or ConfigLoader()
         self._config: Optional[SystemConfig] = None
         self._camera = camera
         self._esp32 = esp32
+        self._esp32_commander = esp32_commander
         self._normalizer = normalizer
         self._sampler = sampler
         self._baseline = baseline
+        self._custom_ai_adapter = ai_adapter is not None
         self._ai_adapter: AiAdapter = ai_adapter or StubAdapter()
         self._response = response_logger or ResponseLogger(max_logs=50)
         self._diagnose = diagnose_recorder or ErrorRecorder(max_events=200)
@@ -128,6 +133,15 @@ class FlowEngine:
         self._ai_timeout_ms: int = 500
         self._health: Health = "OK"
         self._booted: bool = False
+        self._mode: str = "sim"
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    @property
+    def is_embedded(self) -> bool:
+        return self._mode == "rasp"
 
     @property
     def camera(self) -> Optional[CameraSource]:
@@ -207,7 +221,16 @@ class FlowEngine:
             return self._dispatch_error(cfg_res)
 
         self._config = cfg_res
+        self._mode = cfg_res.mode
         self._ai_timeout_ms = cfg_res.ai.timeout_ms
+
+        if self._mode == "rasp":
+            if self._queues.max_depth > 16:
+                self._queues = EdgeQueueManager(max_depth_per_edge=16)
+            if self._diagnose.max_capacity > 100:
+                self._diagnose = ErrorRecorder(max_events=100)
+            if getattr(self._response, "_max_logs", 50) > 25:
+                self._response = ResponseLogger(max_logs=25)
 
         if self._camera is None:
             self._camera = CameraSource(
@@ -241,6 +264,13 @@ class FlowEngine:
                 gps_attached=False,
             )
 
+        if self._esp32_commander is None and cfg_res.esp32.enabled:
+            self._esp32_commander = Esp32Commander(
+                enabled=cfg_res.esp32.enabled,
+                serial_mutex=self._esp32.serial_mutex,
+                transport_sender=self._esp32.send_command_bytes,
+            )
+
         if self._enable_rules_from_config:
             if self._rules is None and cfg_res.rules is not None:
                 self._rules = build_rules_from_config(cfg_res)
@@ -258,6 +288,17 @@ class FlowEngine:
             esp_err = self._esp32.open(trace_id=f"{trace_id}-esp32")
             if esp_err is not None:
                 self._dispatch_error(esp_err)
+
+        if not self._custom_ai_adapter:
+            if cfg_res.ai.adapter == "yolo":
+                self._ai_adapter = YoloAdapter(
+                    model_path=cfg_res.ai.model_path,
+                    landmarker_path=cfg_res.ai.landmarker_path,
+                    conf_threshold=cfg_res.ai.confidence_threshold,
+                    fallback_mode=cfg_res.ai.fallback_mode,
+                )
+            else:
+                self._ai_adapter = StubAdapter()
 
         try:
             self._ai_adapter.load()
@@ -430,12 +471,31 @@ class FlowEngine:
             resp_res = self._response.handle(vio_pkt)
             if isinstance(resp_res, ErrorEvent):
                 return self._dispatch_error(resp_res)
+
+            if self._esp32_commander is not None:
+                self._esp32_commander.handle_violation(vio_pkt)
+
             if self._dispatcher is not None:
+                clip_images = None
+                if self._ring is not None and hasattr(self._ring, "get_clip_images"):
+                    clip_images = self._ring.get_clip_images(vio_pkt.frame_ids)
+                latest_sensor = (
+                    self._normalizer.latest_sensor
+                    if self._normalizer is not None
+                    else None
+                )
                 disp_err = self._dispatcher.enqueue(
-                    vio_pkt, clip_frame_ids=vio_pkt.frame_ids
+                    vio_pkt,
+                    clip_frame_ids=vio_pkt.frame_ids,
+                    evidence_frames=clip_images,
+                    telemetry=latest_sensor,
                 )
                 if disp_err is not None:
                     return self._dispatch_error(disp_err)
+
+        if out.ended and not out.suspects and self._esp32_commander is not None:
+            self._esp32_commander.handle_recovery(trace_id=trace_id)
+
         return None
 
     def poll_esp32(
@@ -624,6 +684,12 @@ class FlowEngine:
             return resp_err
 
         return rules_in_pkt
+
+    def trim_memory(self) -> None:
+        """Giải phóng bộ đệm không sử dụng để bảo toàn trần RAM trên bo mạch nhúng."""
+        self._queues.clear_all()
+        if self._ring is not None and hasattr(self._ring, "reset"):
+            self._ring.reset()
 
     def self_test(self) -> Tuple[bool, str]:
         boot_err = self.boot(trace_id="flow-selftest-boot")

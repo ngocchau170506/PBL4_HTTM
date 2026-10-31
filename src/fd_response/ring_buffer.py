@@ -1,17 +1,25 @@
-"""Bộ nhớ vòng khung hình cho timeline vi phạm -2s -> 0s -> kết thúc (FEAT-032).
+"""Bộ nhớ vòng khung hình cho timeline vi phạm -2s -> 0s -> kết thúc (FEAT-032 & FEAT-062).
 
-- Chỉ lưu (frame_id, ts_ms), không giữ ảnh thô, nên RAM cố định theo capacity.
+- Lưu trữ (frame_id, ts_ms, image) cố định bộ nhớ theo capacity (cắt tỉa deque tự động).
+- Hỗ trợ lưu trữ mảng ảnh thật hoặc thumbnail thu nhỏ (mặc định 224x224) từ Frame Cache Hướng 2.
+- Trích xuất cụm ảnh bằng chứng vi phạm (-2.0s đến +1.0s) đóng gói gửi ServerDispatcher.
 - Pha vi phạm đi đúng VIOLATION_TRANSITIONS trong contracts/state.py.
 - Không import chéo từ các fd_* khác (Luật R2).
 """
 from __future__ import annotations
 
-import time
 from collections import deque
-from typing import Deque, Optional, Tuple
+import sys
+import time
+from typing import Any, Deque, Dict, List, Optional, Sequence, Tuple
 
-from contracts.logic import ErrorEvent, Health, NodeId, SignalPacket
+from contracts.logic import ErrorEvent, Health, NodeId, SignalPacket, ViolationEvent
 from contracts.state import VIOLATION_TRANSITIONS, ViolationPhase
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 _NODE_PATH = "response.ring_buffer"
 
@@ -34,18 +42,26 @@ def _err(trace_id: str, code, err_class, message: str, recoverable: bool) -> Err
 
 
 class FrameRingBuffer:
-    """Thực thi NodeContract cho node response (phần timeline)."""
+    """Thực thi NodeContract cho node response (phần timeline và đệm ảnh bằng chứng)."""
 
     node_id: NodeId = "response"
 
-    def __init__(self, capacity: int, pre_event_ms: int) -> None:
+    def __init__(
+        self,
+        capacity: int,
+        pre_event_ms: int,
+        store_images: bool = True,
+        image_size: Optional[Tuple[int, int]] = (224, 224),
+    ) -> None:
         if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 1:
             raise ValueError("capacity phải là số nguyên >= 1")
         if isinstance(pre_event_ms, bool) or not isinstance(pre_event_ms, int) or pre_event_ms < 0:
             raise ValueError("pre_event_ms phải là số nguyên >= 0")
         self._capacity: int = capacity
         self._pre_ms: int = pre_event_ms
-        self._frames: Deque[Tuple[int, int]] = deque(maxlen=capacity)
+        self._store_images: bool = bool(store_images)
+        self._image_size: Optional[Tuple[int, int]] = image_size
+        self._frames: Deque[Tuple[int, int, Any]] = deque(maxlen=capacity)
         self._phase: ViolationPhase = "WATCHING"
         self._t0_ms: Optional[int] = None
         self._health: Health = "OK"
@@ -74,8 +90,12 @@ class FrameRingBuffer:
     def health(self) -> Health:
         return self._health
 
-    def push(self, packet: SignalPacket) -> Optional[ErrorEvent]:
-        """Thêm 1 khung vào buffer. Trả ErrorEvent nếu khung sai hoặc làm mất khung còn cần giữ."""
+    def push(
+        self,
+        packet: SignalPacket,
+        image: Optional[Any] = None,
+    ) -> Optional[ErrorEvent]:
+        """Thêm 1 khung vào buffer kèm mảng ảnh (nếu có). Trả ErrorEvent nếu khung sai hoặc bị tràn."""
         if not isinstance(packet, SignalPacket):
             self._health = "DEGRADED"
             return _err("NO_TRACE", "E_SIG_BAD_FORMAT", "contract",
@@ -96,8 +116,7 @@ class FrameRingBuffer:
         overrun: Optional[ErrorEvent] = None
         if len(self._frames) == self._capacity and self._phase == "ACTIVE":
             oldest_ts = self._frames[0][1]
-            assert self._t0_ms is not None
-            if oldest_ts >= self._t0_ms - self._pre_ms:
+            if self._t0_ms is not None and oldest_ts >= self._t0_ms - self._pre_ms:
                 self._overrun_count += 1
                 self._health = "DEGRADED"
                 overrun = _err(
@@ -105,7 +124,26 @@ class FrameRingBuffer:
                     f"capacity={self._capacity} quá nhỏ: đẩy mất khung ts={oldest_ts} còn thuộc sự kiện",
                     True,
                 )
-        self._frames.append((packet.frame_id, packet.ts_ms))
+
+        # Lấy mảng ảnh từ cache dùng chung nếu không truyền trực tiếp
+        resolved_img = image
+        if resolved_img is None and self._store_images:
+            shared = sys.modules.get("_shared_frame_cache")
+            if isinstance(shared, dict):
+                resolved_img = shared.get(packet.frame_id)
+
+        # Thu nhỏ kích thước ảnh để bảo vệ bộ nhớ nếu cấu hình image_size
+        if resolved_img is not None and self._image_size and cv2 is not None and hasattr(resolved_img, "shape"):
+            try:
+                target_w, target_h = self._image_size
+                h, w = resolved_img.shape[:2]
+                if (w, h) != (target_w, target_h):
+                    resolved_img = cv2.resize(resolved_img, (target_w, target_h))
+            except Exception as rz_err:
+                # Giữ nguyên ảnh nếu resize gặp lỗi
+                _ = rz_err
+
+        self._frames.append((packet.frame_id, packet.ts_ms, resolved_img))
         if overrun is None and self._health == "DEGRADED" and self._phase != "ACTIVE":
             self._health = "OK"
         return overrun
@@ -133,7 +171,8 @@ class FrameRingBuffer:
 
     def ts_of(self, frame_id: int) -> Optional[int]:
         """ts_ms của khung còn nằm trong buffer; None nếu khung đã bị đẩy ra hoặc chưa từng vào."""
-        for fid, ts in reversed(self._frames):
+        for item in reversed(self._frames):
+            fid, ts = item[0], item[1]
             if fid == frame_id:
                 return ts
         return None
@@ -143,15 +182,45 @@ class FrameRingBuffer:
         if self._t0_ms is None:
             return ()
         lo = self._t0_ms - self._pre_ms
-        return tuple(fid for fid, ts in self._frames if lo <= ts <= self._t0_ms)
+        return tuple(item[0] for item in self._frames if lo <= item[1] <= self._t0_ms)
 
     def close_violation(self) -> Tuple[int, ...]:
-        """ACTIVE -> CLOSED; trả frame_id từ t0 - pre_event_ms tới khung mới nhất."""
+        """ACTIVE -> CLOSED; trả danh sách frame_id từ t0 - pre_event_ms tới khung mới nhất."""
         self._move("CLOSED")
         assert self._t0_ms is not None
         lo = self._t0_ms - self._pre_ms
-        clip = tuple(fid for fid, ts in self._frames if ts >= lo)
+        clip = tuple(item[0] for item in self._frames if item[1] >= lo)
         return clip
+
+    def get_clip_images(
+        self,
+        clip_ids: Optional[Sequence[int]] = None,
+    ) -> Tuple[Tuple[int, int, Any], ...]:
+        """Trích xuất danh sách các bộ (frame_id, ts_ms, image) thuộc cụm sự kiện vi phạm."""
+        if clip_ids is None:
+            return tuple(self._frames)
+        wanted = set(clip_ids)
+        return tuple(item for item in self._frames if item[0] in wanted)
+
+    def extract_evidence_package(self, violation: ViolationEvent) -> Dict[str, Any]:
+        """Đóng gói đầy đủ thông tin bằng chứng vi phạm kèm ảnh phục vụ điều phối gửi."""
+        clip_tuples = self.get_clip_images(violation.frame_ids)
+        frames_summary = []
+        for fid, ts, img in clip_tuples:
+            frames_summary.append({
+                "frame_id": fid,
+                "ts_ms": ts,
+                "has_image": img is not None,
+            })
+        return {
+            "trace_id": violation.trace_id,
+            "rule": violation.rule,
+            "t0_ms": violation.t0_ms,
+            "pre_ms": violation.pre_ms,
+            "frame_ids": list(violation.frame_ids),
+            "frame_count": len(violation.frame_ids),
+            "frames": frames_summary,
+        }
 
     def reset(self) -> None:
         """CLOSED -> WATCHING, xóa t0 để sẵn sàng cho sự kiện mới. Buffer khung vẫn chạy tiếp."""

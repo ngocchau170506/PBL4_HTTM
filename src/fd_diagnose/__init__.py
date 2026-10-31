@@ -5,10 +5,13 @@ from fd_diagnose.auto_reporter import (
     EvaluationReport,
 )
 from fd_diagnose.error_recorder import ErrorRecorder
+from fd_diagnose.hardware_monitor import HardwareMonitor, HardwareSnapshot
 
 __all__ = [
     "AutoReporter",
     "DiagnosisFinding",
     "ErrorRecorder",
     "EvaluationReport",
+    "HardwareMonitor",
+    "HardwareSnapshot",
 ]

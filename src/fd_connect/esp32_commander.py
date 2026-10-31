@@ -15,7 +15,7 @@ import threading
 import time
 from typing import Callable, Deque, List, Optional, Tuple, Union
 
-from contracts.logic import ErrorCode, ErrorEvent, Health, NodeId
+from contracts.logic import ErrorCode, ErrorEvent, Health, NodeId, ViolationEvent
 
 EVENT_CODES = {
     "NORMAL": "00",
@@ -23,7 +23,10 @@ EVENT_CODES = {
     "YAWNING": "02",
 }
 
-ALLOWED_CONTROL_COMMANDS = ("CONNECT", "STOP", "PING", "SLEEP", "MUTE")
+ALLOWED_CONTROL_COMMANDS = (
+    "CONNECT", "STOP", "PING", "SLEEP", "MUTE",
+    "VOICE:1", "VOICE:2", "VOICE:3", "VOICE:4", "VOICE:5",
+)
 
 
 def _now_ms() -> int:
@@ -70,6 +73,7 @@ class Esp32Commander:
         require_i2s: bool = False,
         serial_mutex: Optional[threading.Lock] = None,
         transport_sender: Optional[Callable[[str], Optional[str]]] = None,
+        reconnect_interval_sec: float = 3.0,
     ) -> None:
         self._enabled = bool(enabled)
         self._ack_timeout_ms = max(50, int(ack_timeout_ms))
@@ -77,6 +81,8 @@ class Esp32Commander:
         self._require_i2s = bool(require_i2s)
         self._mutex = serial_mutex or threading.Lock()
         self._transport_sender = transport_sender
+        self._reconnect_interval_sec = max(0.1, float(reconnect_interval_sec))
+        self._last_reconnect_attempt_s: float = 0.0
         self._queue: Deque[AlertCommand] = deque()
 
         self._health: Health = "OK" if self._enabled else "DOWN"
@@ -109,7 +115,28 @@ class Esp32Commander:
     def total_timeout(self) -> int:
         return self._total_timeout
 
+    @property
+    def reconnect_interval_sec(self) -> float:
+        return self._reconnect_interval_sec
+
+    def try_reconnect(self, trace_id: str = "esp-reconnect") -> bool:
+        """Thử gửi lệnh PING để kiểm tra và phục hồi trạng thái từ DEGRADED về OK."""
+        if not self._enabled:
+            return False
+        now_s = time.monotonic()
+        if now_s - self._last_reconnect_attempt_s < self._reconnect_interval_sec:
+            return False
+        self._last_reconnect_attempt_s = now_s
+
+        res = self.send_control("PING", trace_id=trace_id)
+        if isinstance(res, AckReceipt) and res.success:
+            self._health = "OK"
+            return True
+        return False
+
     def health(self) -> Health:
+        if self._health == "DEGRADED" and self._enabled:
+            self.try_reconnect(trace_id="esp-auto-health-probe")
         return self._health
 
     def _make_error(
@@ -140,6 +167,17 @@ class Esp32Commander:
     def format_firmware_legacy_packet(self, cmd: AlertCommand) -> str:
         """Định dạng bản tin lệnh tương thích trực tiếp firmware esp32_firmware.ino."""
         return f"ALERT:{cmd.level}:{cmd.duration_ms}\n"
+
+    def format_voice_packet(self, cmd: AlertCommand) -> str:
+        """Định dạng bản tin lệnh phát giọng nói tiếng Việt trong voice_clips.h trên ESP32."""
+        status_clean = cmd.status.strip().upper()
+        if status_clean == "DROWSY":
+            return "VOICE:1\n"
+        if status_clean == "YAWNING":
+            return "VOICE:2\n"
+        if status_clean == "NORMAL":
+            return "STOP\n"
+        return f"VOICE:{cmd.level}\n"
 
     def send_alert(
         self, cmd: AlertCommand, use_standard_format: bool = True
@@ -304,6 +342,68 @@ class Esp32Commander:
             if res is not None:
                 results.append(res)
         return tuple(results)
+
+    def handle_violation(
+        self,
+        event: ViolationEvent,
+        min_interval_ms: int = 1000,
+    ) -> Optional[Union[AckReceipt, ErrorEvent]]:
+        """Tiếp nhận ViolationEvent từ RulesEngine và kích hoạt còi/loa ESP32 tương ứng."""
+        if not self._enabled:
+            return None
+
+        now_ms = _now_ms()
+        if (
+            hasattr(self, "_last_alert_ts")
+            and hasattr(self, "_last_alert_rule")
+            and getattr(self, "_last_alert_rule") == event.rule
+            and now_ms - getattr(self, "_last_alert_ts", 0) < min_interval_ms
+        ):
+            return None
+
+        self._last_alert_ts = now_ms
+        self._last_alert_rule = event.rule
+
+        rule_name = event.rule.casefold()
+        if "drowsy" in rule_name or "eye" in rule_name:
+            status = "DROWSY"
+            level = 2
+            duration_ms = 2000
+        elif "yawn" in rule_name or "mouth" in rule_name:
+            status = "YAWNING"
+            level = 1
+            duration_ms = 1500
+        else:
+            status = "DROWSY"
+            level = 1
+            duration_ms = 1000
+
+        cmd = AlertCommand(
+            status=status,
+            duration_ms=duration_ms,
+            level=level,
+            trace_id=event.trace_id,
+        )
+        return self.send_alert(cmd)
+
+    def handle_recovery(
+        self,
+        trace_id: str = "esp-recovery",
+    ) -> Optional[Union[AckReceipt, ErrorEvent]]:
+        """Gửi lệnh NORMAL xuống ESP32 để tắt còi/đèn khi tài xế đã tỉnh lại (kết thúc vi phạm)."""
+        if not self._enabled:
+            return None
+        if not getattr(self, "_last_alert_rule", None):
+            return None
+        self._last_alert_rule = None
+        self._last_alert_ts = 0
+        cmd = AlertCommand(
+            status="NORMAL",
+            duration_ms=0,
+            level=0,
+            trace_id=trace_id,
+        )
+        return self.send_alert(cmd)
 
     def self_test(self) -> Tuple[bool, str]:
         cmd = AlertCommand(status="DROWSY", duration_ms=1000, level=1, trace_id="cmd-self-test")

@@ -1,45 +1,92 @@
-# Hệ thống cảnh báo an toàn cho tài xế (PBL4_HTTM)
+# IOTv3 — Hệ Thống Giám Sát Tài Xế Thực Chiến Trên Xe (Raspberry Pi 4 ARM64)
 
-Camera + ESP32 + Raspberry Pi 4 Model B giám sát tài xế (nhắm mắt, ngáp, quay đầu, dùng điện thoại, khí CO2 trong cabin). Mô phỏng trên máy tính trước (`mode="sim"`), sau đó chuyển sang Raspberry (`mode="rasp"`).
+Phiên bản nâng cấp tối ưu hóa thực chiến dành riêng cho bo mạch nhúng **Raspberry Pi 4 Model B (Quad-core ARM Cortex-A72 @ 1.5GHz / 1.8GHz, 4GB/8GB RAM)** vận hành trực tiếp trên xe ô tô.
 
-Trạng thái: giai đoạn **G2** (Lấy mẫu frame, Baseline & Kết nối cảm biến ESP32 G2.5). Luật làm việc đã được MAIN duyệt ngày 2026-10-20.
+---
 
-## Nếu bạn là AI: đọc theo thứ tự này, không đọc xong thì không sửa code
+## 1. Kiến Trúc Tối Ưu Cốt Lõi
 
-1. `CLAUDE.md`: luật bắt buộc (quy trình PROPOSE -> BUILD -> TEST -> REPORT, luật kiến trúc R1-R7, luật sửa lỗi F1-F8, thí nghiệm hiệu năng ở mục 10).
-2. `agents.md`: các vai và quyền hạn. Không có dòng `ROLE:` từ MAIN thì chỉ được đọc và hỏi.
-3. `feature-map.md`: giai đoạn hiện tại, danh sách FEAT, cây luồng.
-4. `scope/<giai đoạn>.json`: danh sách file được phép đụng.
-5. `features/component.txt`: hợp đồng từng component.
-6. `src/contracts/logic.py`, `src/contracts/state.py`: kiểu dữ liệu và máy trạng thái.
+Hệ thống được thiết kế theo phân tầng chuyên biệt, loại bỏ hoàn toàn các module mô phỏng thừa để đạt tốc độ cao và độ trễ thấp nhất:
 
-README này không phải nguồn luật. Khi mâu thuẫn, `CLAUDE.md` thắng.
+1. **`src/` — XƯƠNG SỐNG (Code Chính)**:
+   - Quản lý luồng thu hình từ Camera Vantech IP Camera LAN RTSP TCP / USB webcam với hàng đợi đệm siêu nhẹ (`max_depth = 1`), không bị trễ khung hình tích lũy.
+   - Giao tiếp UART Serial trực tiếp với ESP32, tự nhận diện cổng (`auto_detect_serial_port`), hỗ trợ phát giọng nói tiếng Việt `VOICE:1..5`, `STOP`, `PING` với độ trễ phát lệnh $< 5\text{ms}$.
+   - Quản lý toàn vẹn dữ liệu hợp đồng chuẩn (`src/contracts/`), bộ đệm sự cố vòng giới hạn 8 sự kiện trên RAM để không bao giờ làm tràn bộ nhớ nhúng.
+   - Tích hợp giám sát phần cứng SoC (`hardware_monitor.py`): bắt cờ sụt áp nguồn tẩu sạc xe hơi ($< 4.63\text{V}$) và cảnh báo quá nhiệt ($> 80^\circ\text{C}$).
 
-## Cấu trúc thư mục
+2. **`AI/` — BỘ NÃO (Inference Engine)**:
+   - Suy diễn nhận diện mắt/miệng bằng YOLOv8 (`AI/models/best.pt` hoặc thư mục NCNN).
+   - Trích xuất 468 điểm mốc khuôn mặt, EAR, MAR bằng MediaPipe FaceLandmarker tối ưu đa luồng **XNNPACK**.
+   - Cơ chế probe an toàn tự động chuyển sang chế độ YOLO-only nếu MediaPipe gặp sự cố thư viện C++.
 
-| Thư mục / file              | Vai trò                                                                                                                                |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/contracts/`            | Hợp đồng dữ liệu (chỉ đổi qua Change Request)                                                                                          |
-| `src/fd_*`                  | Các khối chức năng: connect, signal, process, flow, response, config, diagnose, faultsim, eval, registry. Chỉ nói chuyện qua `fd_flow` |
-| `src/fd_config/config.json` | Cấu hình duy nhất                                                                                                                      |
-| `workbench/`                | Cổng kiểm (`gate.py`), phòng thí nghiệm, test. Chỉ chạy trên PC, không nạp vào Raspberry                                               |
-| `scope/`                    | Phạm vi file được phép của từng giai đoạn                                                                                              |
-| `changes/`                  | Hồ sơ BUG, CR, EXP (thí nghiệm) và `LOG.md`                                                                                            |
-| `features/`                 | Hợp đồng component, gói phụ thuộc dự kiến                                                                                              |
-| `models/`                   | Trọng số AI (`best.pt`, `face_landmarker.task`)                                                                                        |
-| `DRAFT/`                    | Bản nháp cũ, không dùng (kể cả README của dự án YOLO26 cũ)                                                                             |
+3. **`AI/app/` — VẬN HÀNH THỰC CHIẾN (Web Dashboard & Systemd Service)**:
+   - Web Dashboard MJPEG thời gian thực trên cổng `8080`, chạy thuần Python HTTP Server, **100% offline không cần Internet**.
+   - Hiển thị trực tiếp: FPS suy diễn, trạng thái tài xế, thời lượng nhắm mắt/ngáp, % CPU, RAM RSS, nhiệt độ SoC và cờ cảnh báo sụt áp nguồn.
+   - Cho phép người vận hành ấn nút kích hoạt loa ESP32 và tinh chỉnh ngưỡng buồn ngủ ngay từ điện thoại/máy tính bảng qua WiFi.
 
-## Lệnh kiểm tra (an toàn, chạy tự do)
+---
 
-```
-python workbench/gate.py
-python workbench/check_scope.py G2
-python workbench/check_comments.py src
-python -m unittest discover -s workbench/tests
+## 2. Cài Đặt Tự Động 1 Chạm Trên Raspberry Pi 4
+
+Chạy script cấu hình tự động từ thư mục gốc của repository:
+
+```bash
+chmod +x AI/deploy/setup_pi.sh
+./AI/deploy/setup_pi.sh
 ```
 
-`gate.py` phải SẠCH trước mọi báo cáo.
+Script sẽ tự động:
+1. Cài đặt các gói hệ thống APT: `python3-venv`, `python3-pip`, `v4l-utils`, `libgl1`, `libglib2.0-0`, `udev`, `raspi-utils`.
+2. Phân quyền phần cứng nhúng cho user hiện tại: `sudo usermod -aG dialout,video,input $USER`.
+3. Khởi tạo môi trường ảo `.venv` và cài đặt các phụ thuộc ARM64 tối giản từ `AI/requirements-pi.txt`.
+4. Tạo template cấu hình `AI/deploy/pi.env`.
+5. Cài đặt và kích hoạt dịch vụ tự khởi động `driver-monitor.service`.
 
-## Giai đoạn
+---
 
-G0 nền móng, G1 mô phỏng không AI, G2 lấy mẫu frame và baseline, G3 AI (YOLO) qua `AiAdapter`, G4 ESP32 và cảm biến, G5 đánh giá tổng hợp, G6 chuyển sang Raspberry. Chi tiết ở `feature-map.md`.
+## 3. Kiểm Tra Nhanh Phần Cứng Tại Xe (1 Chạm)
+
+Trước khi cho xe lăn bánh, chạy lệnh kiểm tra tự động 5 thành phần:
+
+```bash
+python AI/scripts/check_pi_env.py
+```
+
+Kết quả trả về:
+- `[1/5]` Nhiệt độ chip SoC & Kiểm tra sụt áp nguồn tẩu sạc xe (Under-voltage).
+- `[2/5]` Quyền truy cập Serial UART và Camera của User.
+- `[3/5]` Kết nối và thu hình thử nghiệm từ Camera.
+- `[4/5]` Tự dò cổng Serial và gửi thử bản tin bắt tay tới ESP32.
+- `[5/5]` Nạp và kiểm tra khả năng suy diễn của YOLOv8 và MediaPipe.
+
+---
+
+## 4. Quản Lý Dịch Vụ Systemd Khi Xe Vận Hành
+
+Dịch vụ tự động chạy khi xe bật khóa điện và tự khởi động lại sau 3s nếu có sự cố:
+
+```bash
+# Khởi động dịch vụ thủ công
+sudo systemctl start driver-monitor
+
+# Xem trạng thái vận hành
+sudo systemctl status driver-monitor
+
+# Theo dõi nhật ký thời gian thực
+journalctl -u driver-monitor -f
+
+# Dừng dịch vụ khi bảo trì
+sudo systemctl stop driver-monitor
+```
+
+---
+
+## 5. Truy Cập Web Dashboard Giám Sát Không Dây
+
+Kết nối điện thoại hoặc máy tính bảng vào cùng mạng WiFi / Hotspot với Raspberry Pi, mở trình duyệt:
+
+```text
+http://<dia_chi_ip_pi>:8080
+hoặc
+http://raspberrypi.local:8080
+```

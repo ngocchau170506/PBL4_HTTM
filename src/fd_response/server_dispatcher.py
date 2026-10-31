@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 from collections import deque
 from dataclasses import dataclass
-from typing import Callable, Deque, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Deque, Dict, List, Optional, Sequence, Tuple, Union
 
 from contracts.logic import (
     ErrorClass,
@@ -49,6 +49,8 @@ class DispatchPackage:
     pre_ms: int
     ts_ms: int
     frame_ids: Tuple[int, ...]
+    evidence_frames: Optional[Tuple[Any, ...]] = None
+    telemetry: Optional[Dict[str, Any]] = None
 
     def to_manifest_json(self) -> str:
         payload = {
@@ -60,6 +62,10 @@ class DispatchPackage:
             "frame_ids": list(self.frame_ids),
             "frame_count": len(self.frame_ids),
         }
+        if self.evidence_frames is not None:
+            payload["evidence_frame_count"] = len(self.evidence_frames)
+        if self.telemetry is not None:
+            payload["telemetry"] = self.telemetry
         return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
@@ -139,6 +145,7 @@ class ServerDispatcher:
         max_spool: int = 64,
         timeout_ms: int = 500,
         failure_threshold: int = 3,
+        max_spool_bytes: int = 10 * 1024 * 1024,
     ) -> None:
         if not callable(transport):
             raise ValueError("transport phải là hàm gọi được")
@@ -147,9 +154,11 @@ class ServerDispatcher:
         self._max_spool: int = _positive_int("max_spool", max_spool)
         self._timeout_ms: int = _positive_int("timeout_ms", timeout_ms)
         self._failure_threshold: int = _positive_int("failure_threshold", failure_threshold)
+        self._max_spool_bytes: int = _positive_int("max_spool_bytes", max_spool_bytes)
 
         self._outbox: Deque[DispatchPackage] = deque()
         self._spool: Deque[DispatchPackage] = deque()
+        self._spool_bytes: int = 0
         self._health: Health = "OK"
         self._circuit_open: bool = False
         self._consecutive_failures: int = 0
@@ -164,6 +173,14 @@ class ServerDispatcher:
     @property
     def spool_size(self) -> int:
         return len(self._spool)
+
+    @property
+    def spool_bytes(self) -> int:
+        return self._spool_bytes
+
+    @property
+    def max_spool_bytes(self) -> int:
+        return self._max_spool_bytes
 
     @property
     def pending_count(self) -> int:
@@ -192,8 +209,10 @@ class ServerDispatcher:
         self,
         event: ViolationEvent,
         clip_frame_ids: Optional[Sequence[int]] = None,
+        evidence_frames: Optional[Sequence[Any]] = None,
+        telemetry: Optional[Dict[str, Any]] = None,
     ) -> Optional[ErrorEvent]:
-        """Đóng gói ViolationEvent + cụm frame_id vào hàng đợi nền (không chờ mạng)."""
+        """Đóng gói ViolationEvent + cụm frame_id kèm ảnh bằng chứng vào hàng đợi nền."""
         if not isinstance(event, ViolationEvent):
             self._health = "DEGRADED"
             return _make_error(
@@ -231,6 +250,8 @@ class ServerDispatcher:
             pre_ms=event.pre_ms,
             ts_ms=event.ts_ms,
             frame_ids=merged_frames,
+            evidence_frames=tuple(evidence_frames) if evidence_frames else None,
+            telemetry=telemetry,
         )
 
         overrun_err: Optional[ErrorEvent] = None
@@ -244,20 +265,29 @@ class ServerDispatcher:
     def _push_to_spool(
         self, pkg: DispatchPackage, reason: str
     ) -> Optional[ErrorEvent]:
-        """Đưa gói vào spool ngoại tuyến; nếu spool tràn thì bỏ gói cũ nhất và báo E_RESP_BUFFER_OVERRUN."""
-        if len(self._spool) >= self._max_spool:
+        """Đưa gói vào spool ngoại tuyến; nếu spool vượt dung lượng gói hoặc byte thì dọn gói cũ nhất."""
+        pkg_bytes = len(pkg.to_manifest_json().encode("utf-8"))
+        overrun_err: Optional[ErrorEvent] = None
+
+        while self._spool and (
+            len(self._spool) >= self._max_spool
+            or (self._spool_bytes + pkg_bytes > self._max_spool_bytes)
+        ):
             evicted = self._spool.popleft()
+            evicted_bytes = len(evicted.to_manifest_json().encode("utf-8"))
+            self._spool_bytes = max(0, self._spool_bytes - evicted_bytes)
             self._dropped_count += 1
             self._health = "DEGRADED"
-            self._spool.append(pkg)
-            return _make_error(
+            overrun_err = _make_error(
                 pkg.trace_id,
                 "E_RESP_BUFFER_OVERRUN",
                 "performance",
-                f"Spool đầy ({self._max_spool}) khi {reason}: rơi gói trace_id={evicted.trace_id}",
+                f"Spool vượt trần ({self._max_spool} gói / {self._max_spool_bytes}B) khi {reason}: rơi gói trace_id={evicted.trace_id}",
             )
+
         self._spool.append(pkg)
-        return None
+        self._spool_bytes += pkg_bytes
+        return overrun_err
 
     def _record_failure(
         self,
@@ -279,6 +309,8 @@ class ServerDispatcher:
         """Gửi 1 gói ưu tiên từ spool trước rồi tới outbox."""
         if self._spool:
             pkg = self._spool.popleft()
+            pkg_bytes = len(pkg.to_manifest_json().encode("utf-8"))
+            self._spool_bytes = max(0, self._spool_bytes - pkg_bytes)
         elif self._outbox:
             pkg = self._outbox.popleft()
         else:

@@ -1,0 +1,29 @@
+[Unit]
+Description=Driver Monitoring System (Raspberry Pi 4 Embedded Edge AI)
+After=network.target time-sync.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/driver-monitor
+Environment="PYTHONPATH=/home/pi/driver-monitor:/home/pi/driver-monitor/src"
+EnvironmentFile=-/home/pi/driver-monitor/AI/deploy/pi.env
+ExecStart=/home/pi/driver-monitor/.venv/bin/python -m AI.app.main
+Restart=always
+RestartSec=3s
+Nice=-10
+CPUSchedulingPolicy=rr
+CPUSchedulingPriority=20
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=driver-monitor
+
+# Bao ve he thong
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/pi/driver-monitor/logs /home/pi/driver-monitor/AI/calibration
+
+[Install]
+WantedBy=multi-user.target

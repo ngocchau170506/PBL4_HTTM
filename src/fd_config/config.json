@@ -1,6 +1,6 @@
 {
-  "_doc": "Cấu hình DUY NHẤT (R4). Không hard-code địa chỉ, fps, ngưỡng, timeout trong code. Đã duyệt cấu hình RTSP Camera & cổng ESP32 COM3 cho G2/G2.5.",
-  "mode": "sim",
+  "_doc": "Cấu hình DUY NHẤT (R4). Không hard-code địa chỉ, fps, ngưỡng, timeout trong code. Đã duyệt cấu hình chế độ nhúng Raspberry Pi 4 (mode: rasp) cho G7.",
+  "mode": "rasp",
   "camera": {
     "source": "rtsp",
     "index": 0,
@@ -10,8 +10,8 @@
     "height": 480
   },
   "esp32": {
-    "enabled": false,
-    "uri": "COM3"
+    "enabled": true,
+    "uri": "/dev/ttyUSB0"
   },
   "sampler": {
     "target_fps": 5
@@ -21,8 +21,12 @@
     "seconds_max": 10
   },
   "ai": {
-    "adapter": "stub",
-    "timeout_ms": 500
+    "adapter": "yolo",
+    "timeout_ms": 500,
+    "model_path": "AI/models/best.pt",
+    "landmarker_path": "AI/models/face_landmarker.task",
+    "confidence_threshold": 0.25,
+    "fallback_mode": true
   },
   "response": {
     "pre_event_ms": 2000,
@@ -34,13 +38,13 @@
     "max_gap_ms": 600,
     "eye_drowsiness": {
       "trigger_ms": 1500,
-      "closed_labels": ["Eyeclosed", "closed", "close", "asleep", "Drowsy eye"],
-      "open_labels": ["Attentive eye", "open"]
+      "closed_labels": ["Eyeclosed", "closed", "close", "asleep", "Drowsy eye", "Eye_Closed", "eye_closed", "eye_close", "drowsy_eye"],
+      "open_labels": ["Attentive eye", "open", "Eye_Open", "eye_open", "open_eye", "Open-Eye"]
     },
     "mouth_yawn": {
       "trigger_ms": 2500,
-      "yawn_labels": ["Yawn", "yawn", "Open-Mouth"],
-      "no_yawn_labels": ["noYawn"]
+      "yawn_labels": ["Yawn", "yawn", "Open-Mouth", "yawning", "mouth_open", "open_mouth", "Mouth_Open"],
+      "no_yawn_labels": ["noYawn", "mouth_closed", "mouth_close", "closed_mouth", "Mouth_Closed"]
     }
   },
   "eval": {

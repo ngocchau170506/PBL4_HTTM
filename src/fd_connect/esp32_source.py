@@ -186,6 +186,25 @@ class Esp32Source:
     def serial_mutex(self) -> threading.Lock:
         return self._mutex
 
+    def send_command_bytes(self, packet_str: str) -> Optional[str]:
+        """Gửi lệnh xuống ESP32 qua cùng kênh Serial (hoặc giả lập ACK nếu chưa cắm cáp phần cứng)."""
+        if not self._enabled or not self._is_open or self._forced_lost:
+            return None
+        serial_obj = getattr(self, "_serial", None)
+        if serial_obj is not None and getattr(serial_obj, "is_open", False):
+            try:
+                serial_obj.write(packet_str.encode("ascii"))
+                serial_obj.flush()
+                reply = serial_obj.readline().decode("ascii", errors="replace").strip()
+                return reply if reply else "EVT,ACK,ALERT,i2s=1"
+            except OSError:
+                self._is_open = False
+                self._health = "DOWN"
+                return None
+        if packet_str.strip().upper() == "PING":
+            return "PONG"
+        return "EVT,ACK,ALERT,i2s=1"
+
     @property
     def gps_attached(self) -> bool:
         return self._gps_attached

@@ -1,0 +1,284 @@
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import os
+from pathlib import Path
+import subprocess
+import sys
+import threading
+import time
+
+import cv2
+import mediapipe as mp
+
+repo_root = Path(__file__).resolve().parents[2]
+for p in (str(repo_root), str(repo_root / "src")):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+try:
+    from AI.app.dashboard import Dashboard
+except ImportError:
+    Dashboard = None
+
+from AI.app.web_server import DriverMonitorWebServer
+
+from AI.scripts.calibration import (
+    BASELINE_PATH,
+    CALIBRATION_SECONDS,
+    MODEL_PATH,
+    CalibrationSession,
+    calculate_head_pose,
+)
+from AI.scripts.camera_config import open_camera
+from AI.scripts.camera_frame_source import CameraFrameSource
+from AI.scripts.drowsiness_pipeline import DrowsinessPipeline
+from AI.scripts.esp_communication import EspCommunicator
+from AI.scripts.event_recorder import EventRecorder
+
+WINDOW_TITLE = "Assess the driver's condition"
+STABLE_FRAMES_REQUIRED = 15
+
+
+def _detect_alignment(frame, landmarker, timestamp):
+    height, width = frame.shape[:2]
+    image = mp.Image(
+        image_format=mp.ImageFormat.SRGB,
+        data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+    )
+    result = landmarker.detect_for_video(image, timestamp)
+    if not result.face_landmarks:
+        return False, {"FACE": "KHONG THAY"}
+    pose = calculate_head_pose(result.face_landmarks[0], width, height)
+    if pose is None:
+        return False, {"FACE": "THAY", "POSE": "KHONG TIN CAY"}
+    yaw, pitch, roll = pose
+    stable = abs(yaw) <= 15 and abs(pitch) <= 15 and abs(roll) <= 10
+    return stable, {
+        "FACE": "OK",
+        "YAW": f"{yaw:.1f}",
+        "PITCH": f"{pitch:.1f}",
+        "ROLL": f"{roll:.1f}",
+    }
+
+
+class HeadlessDashboard:
+    """Keep startup/calibration automatic without OpenCV windows, with full interactive web dashboard."""
+
+    def __init__(self):
+        web_port = int(os.getenv("WEB_PORT", "8080"))
+        self._web = DriverMonitorWebServer(port=web_port) if web_port > 0 else None
+
+    def set_context(self, pipeline=None, esp=None, camera_source=None):
+        if self._web:
+            self._web.set_context(pipeline=pipeline, esp=esp, camera_source=camera_source)
+
+    def show_monitor(self, frame, state=None):
+        if self._web:
+            self._web.update_frame(frame, state)
+
+    def poll_action(self):
+        return None
+
+    def close(self):
+        if self._web is not None:
+            self._web.close()
+            self._web = None
+
+    def __getattr__(self, name):
+        if name.startswith("show_"):
+            return lambda *args, **kwargs: None
+        raise AttributeError(name)
+
+
+def run():
+    model_path = Path(MODEL_PATH)
+
+    headless = os.getenv("HEADLESS", "0") == "1" or Dashboard is None
+    dashboard = HeadlessDashboard() if headless else Dashboard()
+
+    esp = EspCommunicator(
+        mode=os.getenv("ESP_MODE", "SERIAL"),
+        port=os.getenv("ESP_PORT"),
+        baudrate=int(os.getenv("ESP_BAUDRATE", "115200")),
+        require_ack=os.getenv("ESP_REQUIRE_ACK", "1") == "1",
+    )
+    esp.send_status("NORMAL")
+    if hasattr(dashboard, "set_context"):
+        dashboard.set_context(esp=esp)
+
+    cap = None
+    for attempt in range(1, 11):
+        cap = open_camera()
+        if cap is not None and cap.isOpened():
+            break
+        print(f"[CAMERA] Dang thu ket noi camera lan {attempt}/10...")
+        time.sleep(1.0)
+    if cap is None or not cap.isOpened():
+        raise RuntimeError("Khong mo duoc camera sau 10 lan thu (kiem tra LAN/USB)")
+
+    landmarker = None
+    pipeline = None
+    camera_source = None
+    event_recorder = None
+    try:
+        try:
+            if os.getenv("DISABLE_MEDIAPIPE", "0") == "1":
+                raise RuntimeError("Disabled via DISABLE_MEDIAPIPE=1")
+            probe = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import mediapipe as mp; "
+                    f"opts = mp.tasks.vision.FaceLandmarkerOptions("
+                    f"base_options=mp.tasks.BaseOptions(model_asset_path={str(model_path)!r}), "
+                    f"running_mode=mp.tasks.vision.RunningMode.VIDEO, num_faces=1); "
+                    "lm = mp.tasks.vision.FaceLandmarker.create_from_options(opts); lm.close()",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if probe.returncode != 0:
+                err_msg = (probe.stderr or probe.stdout or f"exit code {probe.returncode}").strip()
+                raise RuntimeError(err_msg.splitlines()[0] if err_msg else f"Subprocess failed ({probe.returncode})")
+            options = mp.tasks.vision.FaceLandmarkerOptions(
+                base_options=mp.tasks.BaseOptions(model_asset_path=str(model_path)),
+                running_mode=mp.tasks.vision.RunningMode.VIDEO,
+                num_faces=1,
+            )
+            landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
+        except Exception as exc:
+            print(f"[STARTUP] MediaPipe unavailable; YOLO-only mode ({exc})")
+        if landmarker is not None and os.getenv("SKIP_CALIBRATION", "0") != "1":
+            timestamp = -1
+            stable_frames = 0
+            can_continue = False
+
+            alignment_deadline = time.monotonic() + float(os.getenv("ALIGNMENT_TIMEOUT", "30"))
+            while True:
+                if time.monotonic() >= alignment_deadline:
+                    print("[CALIBRATION] Alignment timed out; use previous/default baseline")
+                    break
+                ok, frame = cap.read()
+                if not ok:
+                    raise RuntimeError("Khong doc duoc frame tu camera")
+                timestamp = max(timestamp + 1, int(time.monotonic() * 1000))
+                stable, metrics = _detect_alignment(frame, landmarker, timestamp)
+                stable_frames = stable_frames + 1 if stable else 0
+                can_continue = stable_frames >= STABLE_FRAMES_REQUIRED
+
+                status = (
+                    "Can chinh thanh cong - bat dau do baseline ca nhan"
+                    if can_continue
+                    else "Giu dau thang, nhin tu nhien vao camera"
+                )
+
+                dashboard.show_alignment(frame, status, metrics, can_continue)
+
+                action = dashboard.poll_action()
+
+                if action == "quit":
+                    return
+
+                if can_continue:
+                    break
+
+            if can_continue:
+                # GIAI DOAN 2: Do baseline ca nhan (Personal Calibration)
+                session = CalibrationSession(duration=CALIBRATION_SECONDS)
+                session.start()
+
+                while not session.finished:
+                    ok, frame = cap.read()
+                    if not ok:
+                        raise RuntimeError("Khong doc duoc frame khi do baseline")
+
+                    data = session.update(frame, landmarker)
+                    dashboard.show_calibration(frame, data)
+
+                    if dashboard.poll_action() == "quit":
+                        return
+
+                # Luu ket qua vao baseline.json
+                saved = session.save(BASELINE_PATH)
+                if saved:
+                    print(f"[CALIBRATION] Luu baseline ca nhan thanh cong: {BASELINE_PATH}")
+                else:
+                    print("[CALIBRATION] Khong du mau hop le de tao baseline moi, giu baseline hien tai.")
+
+                # Thong bao hoan tat truoc khi khoi dong giam sat
+                msg_end = time.monotonic() + 1.5
+                while time.monotonic() < msg_end:
+                    ok, frame = cap.read()
+                    if not ok:
+                        break
+                    dashboard.show_message(
+                        frame,
+                        "CALIBRATION COMPLETE",
+                        "Do baseline ca nhan thanh cong!\nDang khoi dong he thong giam sat...",
+                        can_start=False,
+                    )
+                    if dashboard.poll_action() == "quit":
+                        return
+
+        # Chuyen ownership landmarker sang pipeline.
+        # Pipeline se goi landmarker.close() trong pipeline.close().
+        # Dat landmarker = None de finally block khong double-close.
+        event_recorder = EventRecorder(str(Path(__file__).resolve().parents[1] / "data"))
+        camera_source = CameraFrameSource(cap, on_frame=event_recorder.append_frame, capture_factory=open_camera)
+        cap = None
+        pipeline = DrowsinessPipeline(
+            model_path=os.getenv("YOLO_MODEL_PATH", str(Path(__file__).resolve().parents[1] / "models" / "best.pt")),
+            esp_communicator=esp,
+            face_landmarker=landmarker,
+            event_recorder=event_recorder,
+            enable_event_recorder=False,
+        )
+        landmarker = None  # pipeline now owns the landmarker
+        if hasattr(dashboard, "set_context"):
+            dashboard.set_context(pipeline=pipeline, esp=esp, camera_source=camera_source)
+
+        last_frame_id = 0
+        while True:
+            ok, frame, frame_id, capture_timestamp_ns, capture_time_utc = camera_source.read_latest(
+                after_frame_id=last_frame_id,
+            )
+            if not ok:
+                esp.send_status("NORMAL")
+                pipeline.reset_tracking()
+                dashboard.show_message(None, "CAMERA ERROR", camera_source.error or "Waiting for camera", can_start=False)
+                if dashboard.poll_action() == "quit":
+                    return
+                continue
+
+            last_frame_id = frame_id
+            rendered, state = pipeline.process(
+                frame,
+                frame_id=frame_id,
+                capture_timestamp_ns=capture_timestamp_ns,
+                capture_time_utc=capture_time_utc,
+            )
+            dashboard.show_monitor(rendered, state)
+
+            if dashboard.poll_action() == "quit":
+                return
+    finally:
+        if camera_source is not None:
+            camera_source.close()
+        if pipeline is not None:
+            pipeline.close()
+        if pipeline is None:
+            if event_recorder is not None:
+                event_recorder.close()
+            if esp is not None:
+                esp.close()
+        if landmarker is not None:
+            landmarker.close()
+        if cap is not None:
+            cap.release()
+        dashboard.close()
+        if not headless:
+            cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    run()
