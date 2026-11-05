@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import toast from "react-hot-toast";
 import dataService from "../../services/dataService";
+import { useFleetStore } from "../../store/useFleetStore";
 import EmergencyCallModal from "./components/EmergencyCallModal";
 import EvidenceVideoModal from "./components/EvidenceVideoModal";
 import LeafletMapView from "./components/LeafletMapView";
@@ -8,73 +9,18 @@ import MapKpiStats from "./components/MapKpiStats";
 import VehicleDispatchPanel from "./components/VehicleDispatchPanel";
 
 export default function MapPage() {
-  const [fleet, setFleet] = useState([]);
-  const [selectedVehicle, setSelectedVehicle] = useState(null);
-  const [stats, setStats] = useState({
-    activeVehicles: 4,
-    microsleepAlerts: 1,
-    fatigueWarnings: 1,
-    normalVehicles: 2,
-  });
-  const [isSimulating, setIsSimulating] = useState(true);
+  const {
+    liveFleet,
+    selectedVehicle,
+    setSelectedVehicle,
+    monitoringStats,
+    isSimulating,
+    setIsSimulating,
+  } = useFleetStore();
 
   const [showVideoModal, setShowVideoModal] = useState(false);
   const [showCallModal, setShowCallModal] = useState(false);
-
   const mapInstanceRef = useRef(null);
-
-  useEffect(() => {
-    const loadMapData = async () => {
-      const [defaultList, monitoringStats] = await Promise.all([
-        dataService.getPriorityFleet(),
-        dataService.getMonitoringStats(),
-      ]);
-      const mappedFleet = (defaultList || []).map((item, index) => ({
-        ...item,
-        lat: 16.0544 + (index === 0 ? 0.015 : index * 0.018 - 0.025),
-        lng: 108.2022 + (index === 0 ? -0.012 : index * 0.015 - 0.02),
-        currentSpeed: parseInt(item.speed) || 60,
-        currentCo2: parseInt(String(item.co2 || "850").replace(",", "")) || 850,
-        remainingSeconds:
-          item.countdownSeconds !== undefined ? item.countdownSeconds : 900,
-      }));
-      setFleet(mappedFleet);
-      setSelectedVehicle(
-        mappedFleet.find((v) => v.priorityLevel === "DANGER") ||
-          mappedFleet[0] ||
-          null,
-      );
-      if (monitoringStats) setStats(monitoringStats);
-    };
-    loadMapData();
-  }, []);
-
-  useEffect(() => {
-    if (!fleet.length) return;
-    const timer = setInterval(() => {
-      setFleet((prevFleet) =>
-        prevFleet.map((v) => {
-          const deltaLat = isSimulating ? (Math.random() - 0.48) * 0.001 : 0;
-          const deltaLng = isSimulating ? (Math.random() - 0.48) * 0.001 : 0;
-          const updatedVehicle = {
-            ...v,
-            lat: v.lat + deltaLat,
-            lng: v.lng + deltaLng,
-            remainingSeconds:
-              v.remainingSeconds > 0 ? v.remainingSeconds - 1 : 0,
-          };
-          const selectedPlate =
-            selectedVehicle?.plate || selectedVehicle?.bien_so;
-          const currentPlate = v.plate || v.bien_so;
-          if (currentPlate === selectedPlate) {
-            setSelectedVehicle(updatedVehicle);
-          }
-          return updatedVehicle;
-        }),
-      );
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [isSimulating, selectedVehicle, fleet.length]);
 
   const formatCountdown = (totalSec = 0) => {
     if (totalSec <= 0) return "00:00 (Hết hạn)";
@@ -119,7 +65,7 @@ export default function MapPage() {
             Giám sát Thời gian thực & Điều phối xe
           </h1>
           <p className="text-brand-text-muted text-xs">
-            Dữ liệu Edge Telemetry trực tiếp qua Leaflet Maps & IoT WebSockets
+            Đồng bộ trực tiếp qua Zustand Global Store & Socket.io Telemetry
           </p>
         </div>
         <button
@@ -141,16 +87,16 @@ export default function MapPage() {
             ></span>
           </span>
           <span>
-            {isSimulating ? "GPS Telemetry: LIVE" : "Tạm dừng giả lập"}
+            {isSimulating ? "Socket Telemetry: LIVE" : "Tạm dừng giả lập"}
           </span>
         </button>
       </div>
 
-      <MapKpiStats stats={stats} />
+      <MapKpiStats stats={monitoringStats} />
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
         <LeafletMapView
-          vehicles={fleet}
+          vehicles={liveFleet}
           selectedVehicle={selectedVehicle}
           onSelectVehicle={handleSelectVehicle}
           mapInstanceRef={mapInstanceRef}
