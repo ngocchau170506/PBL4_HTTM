@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { useAuth } from "../../context/AuthContext";
 import dataService from "../../services/dataService";
+import { useFleetStore } from "../../store/useFleetStore";
 import DisputesSection from "./components/DisputesSection";
 import LogsFilterBar from "./components/LogsFilterBar";
 import LogsKpiStats from "./components/LogsKpiStats";
@@ -11,30 +12,18 @@ import ViolationReviewModal from "./components/ViolationReviewModal";
 
 export default function LogsPage() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState("VIOLATIONS"); // "VIOLATIONS" | "DISPUTES"
-  const [violations, setViolations] = useState([]);
-  const [disputes, setDisputes] = useState([]);
+  const { violations, disputes, syncFleetData, globalSearchQuery } =
+    useFleetStore();
+
+  const [activeTab, setActiveTab] = useState("VIOLATIONS");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [typeFilter, setTypeFilter] = useState("ALL");
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedViolation, setSelectedViolation] = useState(null);
 
-  const loadData = async () => {
-    try {
-      const [vData, dData] = await Promise.all([
-        dataService.getViolations(),
-        dataService.getDisputes(),
-      ]);
-      setViolations([...(vData || [])]);
-      setDisputes([...(dData || [])]);
-    } catch {
-      toast.error("Không thể tải dữ liệu vi phạm & khiếu nại");
-    }
-  };
-
   useEffect(() => {
-    loadData();
-  }, []);
+    syncFleetData();
+  }, [syncFleetData]);
 
   const handleConfirmReview = async (violationId, decision, notes) => {
     try {
@@ -45,10 +34,10 @@ export default function LogsPage() {
         reviewerName: user?.name || "Trần Điều Phối",
         reviewerId: user?.id || 2,
       });
-      await loadData();
+      await syncFleetData();
       if (decision === "CONFIRMED") {
         toast.success(
-          `Xác nhận vi phạm #${violationId} & tự động trừ điểm uy tín.`,
+          `Xác nhận vi phạm #${violationId} & tự động cập nhật sổ cái điểm.`,
           { icon: "✅" },
         );
       } else {
@@ -74,7 +63,7 @@ export default function LogsPage() {
         resolverId: user?.id || 1,
         resolverName: user?.name || "Nguyễn Quản Trị",
       });
-      await loadData();
+      await syncFleetData();
       if (decision === "APPROVED") {
         toast.success(
           `Đã chấp thuận khiếu nại #KN-${disputeId} & hoàn điểm tự động vào Sổ cái!`,
@@ -95,21 +84,35 @@ export default function LogsPage() {
     (d) => d.trang_thai === "OPEN",
   ).length;
 
-  const filteredViolations = violations.filter((v) => {
+  const effectiveQuery = (searchTerm || globalSearchQuery || "").toLowerCase();
+
+  // Tự động ghép thông tin Khiếu nại từ mảng `disputes` trong Zustand vào từng `violation`
+  const enrichedViolations = violations.map((v) => {
+    const matchedDispute = disputes.find(
+      (d) => Number(d.violation_id || d.violationId) === Number(v.id),
+    );
+    return {
+      ...v,
+      matchedDispute: matchedDispute || v.dispute || null,
+      dispute_status: matchedDispute?.trang_thai || v.dispute_status || null,
+    };
+  });
+
+  const filteredViolations = enrichedViolations.filter((v) => {
     const currentStatus = v.trang_thai_xac_thuc || v.trang_thai;
-    const currentType = v.ma_loai || v.loai_vi_pham;
+    const currentType = v.ma_loai || v.loai_vi_pham || "";
     const driverName = (
       v.driver?.user?.ho_ten ||
       v.driver_name ||
       ""
     ).toLowerCase();
     const plate = (
+      v.bien_so_xe ||
       v.vehicle?.bien_so_xe ||
       v.vehicle_plate ||
       v.trip?.vehicle?.bien_so_xe ||
       ""
     ).toLowerCase();
-    const query = searchTerm.toLowerCase();
 
     if (statusFilter !== "ALL") {
       if (
@@ -137,10 +140,10 @@ export default function LogsPage() {
     }
 
     if (
-      searchTerm &&
-      !driverName.includes(query) &&
-      !plate.includes(query) &&
-      !String(v.id).includes(query)
+      effectiveQuery &&
+      !driverName.includes(effectiveQuery) &&
+      !plate.includes(effectiveQuery) &&
+      !String(v.id).includes(effectiveQuery)
     ) {
       return false;
     }
@@ -152,15 +155,14 @@ export default function LogsPage() {
       <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
         <div>
           <h1 className="text-brand-text-primary text-2xl font-black tracking-tight">
-            Xác thực Vi phạm AI & Giải quyết Khiếu nại
+            Xác thực Vi phạm AI &amp; Giải quyết Khiếu nại
           </h1>
           <p className="text-brand-text-muted text-xs">
-            Quy trình xác thực 2 pha (Edge AI &rarr; Cloud Hậu kiểm), đối soát
-            khiếu nại công bằng theo nguyên tắc Four-Eyes
+            Quản lý State thời gian thực qua Zustand Store &amp; Socket.io (SRS
+            4.1 • FR_3.2)
           </p>
         </div>
 
-        {/* THANH CHUYỂN TAB: VI PHẠM AI / KHIẾU NẠI */}
         <div className="card-glass border-brand-border flex items-center gap-1 self-start rounded-2xl border p-1 shadow-md md:self-auto">
           <button
             onClick={() => setActiveTab("VIOLATIONS")}
@@ -192,7 +194,7 @@ export default function LogsPage() {
         </div>
       </div>
 
-      <LogsKpiStats violations={violations} />
+      <LogsKpiStats violations={enrichedViolations} />
 
       {activeTab === "VIOLATIONS" ? (
         <>
@@ -208,6 +210,7 @@ export default function LogsPage() {
           <LogsTable
             violations={filteredViolations}
             onSelectViolation={(v) => setSelectedViolation(v)}
+            onSwitchToDisputes={() => setActiveTab("DISPUTES")}
           />
         </>
       ) : (

@@ -3,7 +3,6 @@ import {
   CheckCircle2,
   Clock,
   FileVideo,
-  RotateCcw,
   Scale,
   ShieldCheck,
   X,
@@ -12,6 +11,8 @@ import {
 import { useState } from "react";
 import toast from "react-hot-toast";
 import Button from "../../../components/common/Button";
+import StatusBadge from "../../../components/common/StatusBadge";
+import { formatFullDateTime } from "../../../utils/formatDateTime";
 
 export default function DisputesSection({
   disputes = [],
@@ -20,32 +21,6 @@ export default function DisputesSection({
 }) {
   const [selectedDispute, setSelectedDispute] = useState(null);
   const [responseNote, setResponseNote] = useState("");
-
-  const renderStatusBadge = (status) => {
-    switch (status) {
-      case "OPEN":
-        return (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-950/60 px-3 py-1 text-xs font-bold text-amber-300">
-            <span className="h-2 w-2 animate-ping rounded-full bg-amber-400"></span>
-            Chờ giải quyết (48h SLA)
-          </span>
-        );
-      case "APPROVED":
-        return (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/50 px-3 py-1 text-xs font-bold text-emerald-400">
-            <RotateCcw className="h-3.5 w-3.5" /> Đã chấp thuận (Hoàn điểm)
-          </span>
-        );
-      case "REJECTED":
-        return (
-          <span className="bg-brand-surface/70 text-brand-text-subtle inline-flex items-center gap-1.5 rounded-full border border-slate-700 px-3 py-1 text-xs font-medium">
-            <XCircle className="h-3.5 w-3.5" /> Bác bỏ khiếu nại
-          </span>
-        );
-      default:
-        return null;
-    }
-  };
 
   const handleDecision = async (decision) => {
     if (!responseNote.trim()) {
@@ -79,16 +54,16 @@ export default function DisputesSection({
             </div>
             <div>
               <h3 className="text-brand-text-primary text-sm font-bold">
-                Danh sách Đơn Khiếu nại từ Mobile App Tài xế
+                Danh sách Đơn Khiếu nại từ Tài xế
               </h3>
               <p className="text-brand-text-muted text-[11px]">
-                Áp dụng nguyên tắc Phân quyền chéo (Four-Eyes Principle): Người
-                duyệt phạt ban đầu không được tự xử lý khiếu nại
+                Áp dụng nguyên tắc Phân quyền chéo: Người duyệt phạt ban đầu
+                không được tự xử lý khiếu nại
               </p>
             </div>
           </div>
           <span className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-950/30 px-3 py-1.5 text-xs font-bold text-emerald-400">
-            <ShieldCheck className="h-4 w-4" /> Four-Eyes Check: BẬT
+            <ShieldCheck className="h-4 w-4" /> Four-Eyes Check
           </span>
         </div>
 
@@ -131,15 +106,7 @@ export default function DisputesSection({
                       <td className="text-brand-blue-sky px-4 py-4 text-xs font-bold">
                         #KN-{d.id}
                         <div className="text-brand-text-subtle text-[10px]">
-                          {new Date(d.khieu_nai_luc).toLocaleTimeString(
-                            "vi-VN",
-                            {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                              day: "2-digit",
-                              month: "2-digit",
-                            },
-                          )}
+                          {formatFullDateTime(d.khieu_nai_luc)}
                         </div>
                       </td>
                       <td className="px-4 py-4">
@@ -157,26 +124,25 @@ export default function DisputesSection({
                         <span className="text-brand-text-primary font-bold">
                           #{d.violation_id} ({vCode})
                         </span>
-                        <p className="text-brand-text-subtle text-[11px]">
+                        {/* <p className="text-brand-text-subtle text-[11px]">
                           Nguồn phạt:{" "}
                           {d.violation?.nguon_quyet_dinh || "AI / SYSTEM"}
-                        </p>
+                        </p> */}
                       </td>
                       <td className="max-w-xs px-4 py-4 text-xs">
                         <span className="rounded border border-amber-500/30 bg-amber-950/40 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
                           {d.ten_ly_do || d.ma_ly_do}
                         </span>
-                        <p className="text-brand-text-secondary mt-1 line-clamp-2 text-[11px] leading-relaxed">
-                          &ldquo;{d.noi_dung_giai_trinh}&rdquo;
-                        </p>
                       </td>
                       <td className="px-4 py-4 text-center">
                         <span className="text-alert-warning font-mono text-xs font-black">
                           +{pts} điểm
                         </span>
                       </td>
-                      <td className="px-4 py-4">
-                        {renderStatusBadge(d.trang_thai)}
+                      <td className="px-4 py-4 text-center">
+                        <div className="flex flex-col items-center gap-1">
+                          <StatusBadge code={d.trang_thai} />
+                        </div>
                       </td>
                       <td className="px-4 py-4 text-right">
                         <button
@@ -217,6 +183,12 @@ export default function DisputesSection({
                   Tài xế:{" "}
                   {selectedDispute.driver?.user?.ho_ten || "Phạm Hoàng Nam"} •
                   Yêu cầu hoàn: <b>+{penaltyPoints} điểm uy tín</b>
+                </p>
+                <p className="text-brand-text-muted text-xs">
+                  Nguồn phạt:{" "}
+                  {selectedDispute.violation?.nguon_quyet_dinh || "AI / SYSTEM"}{" "}
+                  • Loại vi phạm:{" "}
+                  {selectedDispute.violation?.ma_loai || "VIOLATION"}
                 </p>
               </div>
               <button
@@ -281,7 +253,8 @@ export default function DisputesSection({
 
               <div>
                 <label className="text-brand-text-primary mb-1.5 block font-bold">
-                  Phản hồi chính thức của Ban Điều phối (Bắt buộc) *
+                  Phản hồi chính thức của Ban Điều phối
+                  <span className="inline-block text-red-500"> *</span>
                 </label>
                 <textarea
                   rows={2}
@@ -322,7 +295,7 @@ export default function DisputesSection({
                 </div>
               ) : (
                 <span className="text-brand-text-subtle text-xs italic">
-                  Đơn khiếu nại đã đóng ({selectedDispute.trang_thai})
+                  Đơn khiếu nại đã đóng
                 </span>
               )}
             </div>

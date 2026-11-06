@@ -1,11 +1,6 @@
-import {
-  AlertTriangle,
-  CheckCircle2,
-  FileText,
-  Lock,
-  Unlock,
-} from "lucide-react";
+import { FileText, Lock, Unlock } from "lucide-react";
 import { useEffect, useState } from "react";
+import StatusBadge from "../../../components/common/StatusBadge";
 import dataService from "../../../services/dataService";
 
 export default function DriversTable({
@@ -30,29 +25,6 @@ export default function DriversTable({
     return activeShift?.vehicle?.bien_so_xe || driver.xe_hien_tai || null;
   };
 
-  const renderAlertBadge = (score, alertLevel) => {
-    if (score <= 20 || alertLevel === "SUSPENDED_RED") {
-      return (
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-500/40 bg-rose-950/60 px-3 py-1 text-xs font-bold text-rose-300">
-          <span className="h-2 w-2 animate-ping rounded-full bg-rose-500"></span>
-          Đình chỉ
-        </span>
-      );
-    }
-    if (score <= 65 || alertLevel === "WARNING_YELLOW") {
-      return (
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-950/60 px-3 py-1 text-xs font-bold text-amber-300">
-          <AlertTriangle className="h-3 w-3" /> Cảnh cáo
-        </span>
-      );
-    }
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/40 px-3 py-1 text-xs font-bold text-emerald-400">
-        <CheckCircle2 className="h-3 w-3" /> Bình thường
-      </span>
-    );
-  };
-
   return (
     <div className="card-glass border-brand-border rounded-3xl border p-6 shadow-xl">
       <div className="overflow-x-auto">
@@ -62,7 +34,7 @@ export default function DriversTable({
               <th className="rounded-tl-2xl px-4 py-4">Tài xế</th>
               <th className="px-4 py-4">Bằng lái</th>
               <th className="px-4 py-4">Xe ca hiện tại</th>
-              <th className="px-4 py-4 text-center">Điểm uy tín (Ledger)</th>
+              <th className="px-4 py-4 text-center">Điểm uy tín</th>
               <th className="px-4 py-4">Cấp an toàn</th>
               <th className="rounded-tr-2xl px-4 py-4 text-right">Thao tác</th>
             </tr>
@@ -88,10 +60,16 @@ export default function DriversTable({
                   driver.diem_uy_tin !== undefined
                     ? driver.diem_uy_tin
                     : driver.uy_tin || 100;
-                const alertLevel = driver.cap_canh_bao;
                 const isSuspended =
-                  score <= 20 || alertLevel === "SUSPENDED_RED";
+                  score <= 20 || driver.cap_canh_bao === "SUSPENDED_RED";
                 const activePlate = getActiveVehiclePlate(driver);
+
+                // Quy đổi điểm sang mã chuẩn của StatusBadge
+                const badgeCode = isSuspended
+                  ? "SUSPENDED_RED"
+                  : score <= 65 || driver.cap_canh_bao === "WARNING_YELLOW"
+                    ? "WARNING_YELLOW"
+                    : "NORMAL";
 
                 return (
                   <tr
@@ -124,7 +102,7 @@ export default function DriversTable({
                     <td className="px-4 py-4">
                       {activePlate ? (
                         <div className="flex items-center gap-2">
-                          <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400"></span>
+                          <span className="bg-alert-safe h-2 w-2 animate-pulse rounded-full"></span>
                           <span className="border-brand-border bg-brand-dark text-brand-text-primary rounded-lg border px-2.5 py-1 text-xs font-bold">
                             {activePlate}
                           </span>
@@ -139,12 +117,12 @@ export default function DriversTable({
                       <span
                         className={`text-base font-black ${
                           score > 80
-                            ? "text-emerald-400"
+                            ? "text-alert-safe"
                             : score > 65
                               ? "text-brand-blue-sky"
                               : score > 20
-                                ? "text-amber-400"
-                                : "text-rose-400"
+                                ? "text-alert-warning"
+                                : "text-alert-danger"
                         }`}
                       >
                         {score}
@@ -156,17 +134,17 @@ export default function DriversTable({
                         <div
                           className={`h-full ${
                             score > 65
-                              ? "bg-emerald-500"
+                              ? "bg-alert-safe"
                               : score > 20
-                                ? "bg-amber-500"
-                                : "bg-rose-500"
+                                ? "bg-alert-warning"
+                                : "bg-alert-danger"
                           }`}
                           style={{ width: `${Math.max(5, score)}%` }}
                         />
                       </div>
                     </td>
                     <td className="px-4 py-4">
-                      {renderAlertBadge(score, alertLevel)}
+                      <StatusBadge code={badgeCode} />
                     </td>
                     <td className="px-4 py-4 text-right">
                       <button
@@ -174,14 +152,14 @@ export default function DriversTable({
                         className="text-brand-blue-sky hover:text-brand-primary mr-3 inline-flex cursor-pointer items-center gap-1 text-xs font-bold hover:underline"
                       >
                         <FileText className="h-3.5 w-3.5" />
-                        <span>Hồ sơ & Sổ cái</span>
+                        <span>Hồ sơ &amp; Sổ cái</span>
                       </button>
                       <button
                         onClick={() => onToggleDriverStatus(driver)}
                         className={`inline-flex cursor-pointer items-center gap-1 text-xs font-bold hover:underline ${
                           isSuspended
-                            ? "text-emerald-400 hover:text-emerald-300"
-                            : "text-rose-400 hover:text-rose-300"
+                            ? "text-alert-safe hover:opacity-80"
+                            : "text-alert-danger hover:opacity-80"
                         }`}
                       >
                         {isSuspended ? (

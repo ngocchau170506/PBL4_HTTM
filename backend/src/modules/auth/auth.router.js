@@ -5,11 +5,9 @@ import {
   handleGetMe,
   handleGetUsers,
   handleUpdateUser,
-  handleResetPasswordByAdmin,
   handleGetConfig,
   handleUpdateConfig 
 } from './auth.controller.js';
-import { requireAuth, requireRole } from '../../common/auth.middleware.js';
 
 const router = express.Router();
 
@@ -28,5 +26,12 @@ router.patch('/users/:userId/reset-password', requireRole('ADMIN'), handleResetP
 
 router.get('/config', requireRole('ADMIN', 'MANAGER', 'DISPATCHER'), handleGetConfig);
 router.put('/config', requireRole('ADMIN'), handleUpdateConfig);
+router.patch('/me', handleUpdateOwnProfile);
+router.post('/change-password', handleChangePassword);
+router.post(
+	'/users/:userId/reset-password',
+	requireRole('ADMIN'),
+	handleAdminResetPassword,
+);
 
 export default router;

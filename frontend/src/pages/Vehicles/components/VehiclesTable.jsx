@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import dataService from "../../../services/dataService";
+import StatusBadge from "../../../components/common/StatusBadge";
 
 export default function VehiclesTable({
   vehicles = [],
@@ -40,39 +41,6 @@ export default function VehiclesTable({
       };
     }
     return null;
-  };
-
-  const renderVehicleStatusBadge = (status) => {
-    switch (status) {
-      case "IN_USE":
-      case "DANG_CHAY":
-        return (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/50 px-3 py-1 text-xs font-bold text-emerald-400">
-            <span className="h-2 w-2 animate-ping rounded-full bg-emerald-400"></span>
-            Đang vận hành
-          </span>
-        );
-      case "ACTIVE":
-      case "SAN_SANG":
-        return (
-          <span className="text-brand-blue-sky border-brand-primary/30 bg-brand-blue-night/40 inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-bold">
-            <CheckCircle2 className="h-3 w-3" /> Sẵn sàng nhận ca
-          </span>
-        );
-      case "MAINTENANCE":
-      case "BAO_DUONG":
-        return (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-950/60 px-3 py-1 text-xs font-bold text-amber-300">
-            <Wrench className="h-3 w-3" /> Đang bảo dưỡng
-          </span>
-        );
-      default:
-        return (
-          <span className="border-brand-border bg-brand-surface text-brand-text-muted rounded-full border px-3 py-1 text-xs font-semibold">
-            {status}
-          </span>
-        );
-    }
   };
 
   return (
@@ -201,7 +169,7 @@ export default function VehiclesTable({
                       )}
                     </td>
                     <td className="px-4 py-4">
-                      {renderVehicleStatusBadge(v.trang_thai)}
+                      <StatusBadge code={v.trang_thai} />
                     </td>
                     <td className="px-4 py-4 text-right">
                       {iot && (

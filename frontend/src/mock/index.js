@@ -389,6 +389,93 @@ export const createShift = (shiftData, creatorName = "Trần Điều Phối") =>
   return shiftData;
 };
 
+export const updateShift = (
+  shiftId,
+  updatedData,
+  actorName = "Trần Điều Phối",
+) => {
+  const shifts = getShifts();
+  const idx = shifts.findIndex((s) => s.id === Number(shiftId));
+  if (idx === -1) throw new Error("Không tìm thấy ca phân công!");
+
+  const oldShift = shifts[idx];
+  if (oldShift.trang_thai === "IN_PROGRESS") {
+    throw new Error("Không thể chỉnh sửa ca đang trong hành trình lăn bánh!");
+  }
+
+  const newShift = { ...oldShift, ...updatedData };
+  shifts[idx] = newShift;
+  setStored(STORAGE_KEYS.SHIFTS, shifts);
+
+  const auditLogs = getAuditLogs();
+  auditLogs.unshift({
+    id: Date.now(),
+    actor_type: "USER",
+    user_id: 2,
+    user_name: actorName,
+    hanh_dong: "UPDATE_SHIFT",
+    doi_tuong_loai: "shift",
+    doi_tuong_id: String(shiftId),
+    gia_tri_truoc: {
+      driver_id: oldShift.driver_id,
+      vehicle_id: oldShift.vehicle_id,
+      thoi_gian_bat_dau_du_kien: oldShift.thoi_gian_bat_dau_du_kien,
+      trang_thai: oldShift.trang_thai,
+    },
+    gia_tri_sau: {
+      driver_id: newShift.driver_id,
+      vehicle_id: newShift.vehicle_id,
+      thoi_gian_bat_dau_du_kien: newShift.thoi_gian_bat_dau_du_kien,
+      trang_thai: newShift.trang_thai,
+    },
+    ly_do:
+      updatedData.ly_do_override ||
+      `Cập nhật thông tin ca phân công #${shiftId}`,
+    created_at: new Date().toISOString(),
+  });
+  setStored(STORAGE_KEYS.AUDIT_LOGS, auditLogs);
+
+  return newShift;
+};
+
+export const deleteShift = (
+  shiftId,
+  reason = "Hủy ca phân công do điều chỉnh kế hoạch",
+  actorName = "Trần Điều Phối",
+) => {
+  const shifts = getShifts();
+  const target = shifts.find((s) => s.id === Number(shiftId));
+  if (!target) throw new Error("Không tìm thấy ca phân công!");
+  if (target.trang_thai === "IN_PROGRESS") {
+    throw new Error("Không thể xóa ca đang thực hiện!");
+  }
+
+  const remaining = shifts.filter((s) => s.id !== Number(shiftId));
+  setStored(STORAGE_KEYS.SHIFTS, remaining);
+
+  const auditLogs = getAuditLogs();
+  auditLogs.unshift({
+    id: Date.now(),
+    actor_type: "USER",
+    user_id: 2,
+    user_name: actorName,
+    hanh_dong: "DELETE_SHIFT",
+    doi_tuong_loai: "shift",
+    doi_tuong_id: String(shiftId),
+    gia_tri_truoc: {
+      driver_name: target.driver?.user?.ho_ten,
+      bien_so_xe: target.vehicle?.bien_so_xe,
+      trang_thai: target.trang_thai,
+    },
+    gia_tri_sau: { deleted: true },
+    ly_do: reason,
+    created_at: new Date().toISOString(),
+  });
+  setStored(STORAGE_KEYS.AUDIT_LOGS, auditLogs);
+
+  return { success: true };
+};
+
 export const resolveDisputeTransaction = ({
   disputeId,
   decision,

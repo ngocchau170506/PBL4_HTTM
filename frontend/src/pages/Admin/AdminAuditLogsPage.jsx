@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import dataService from "../../services/dataService";
+import { formatFullDateTime } from "../../utils/formatDateTime";
 
 export default function AdminAuditLogsPage() {
   const [logs, setLogs] = useState([]);
@@ -80,8 +81,7 @@ export default function AdminAuditLogsPage() {
             Tra cứu Audit Log & Đối soát Thay đổi
           </h1>
           <p className="text-brand-text-muted text-xs">
-            Phân vùng theo tháng • Quyền CSDL chỉ cho phép `INSERT` & `SELECT`
-            (Không thể sửa hoặc xóa vết)
+            Phân vùng theo tháng • Quyền CSDL chỉ cho phép INSERT & SELECT
           </p>
         </div>
 
@@ -242,12 +242,7 @@ export default function AdminAuditLogsPage() {
                       >
                         <td className="text-brand-text-muted px-3.5 py-3.5 text-[11px] whitespace-nowrap">
                           {log.created_at
-                            ? new Date(log.created_at).toLocaleString("vi-VN", {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                                day: "2-digit",
-                                month: "2-digit",
-                              })
+                            ? formatFullDateTime(log.created_at)
                             : "Hôm nay"}
                         </td>
                         <td className="px-3.5 py-3.5">

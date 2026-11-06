@@ -1,4 +1,5 @@
 import { Award, Gauge, Wind } from "lucide-react";
+import { formatTimeOnly } from "../../../utils/formatDateTime";
 
 export default function RealTripsTable({ trips = [] }) {
   return (
@@ -56,13 +57,7 @@ export default function RealTripsTable({ trips = [] }) {
                     <p className="text-brand-text-subtle mt-0.5">
                       Bắt đầu:{" "}
                       <span className="text-slate-300">
-                        {new Date(trip.thoi_gian_bat_dau).toLocaleTimeString(
-                          "vi-VN",
-                          {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          },
-                        )}
+                        {formatTimeOnly(trip.thoi_gian_bat_dau)}
                       </span>
                     </p>
                   </td>

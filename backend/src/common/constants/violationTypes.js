@@ -1,7 +1,3 @@
-// ==========================================
-// DANH MỤC LOẠI VI PHẠM CHUẨN HÓA (PBL4 FLEET)
-// ==========================================
-
 export const VIOLATION_TYPES = {
   BUON_NGU: {
     id: 1,
@@ -73,18 +69,12 @@ export const VIOLATION_TYPES = {
   },
 };
 
-/**
- * Tra cứu loại lỗi theo ID số
- */
 export const getViolationTypeById = (id) => {
-  if (!id) return null;
-  const numId = parseInt(id, 10);
-  return Object.values(VIOLATION_TYPES).find((t) => t.id === numId) || null;
+	if (!id) return null;
+	const numId = parseInt(id, 10);
+	return Object.values(VIOLATION_TYPES).find((t) => t.id === numId) || null;
 };
 
-/**
- * Tra cứu loại lỗi theo Mã Code (chuỗi)
- */
 export const getViolationTypeByCode = (code) => {
   if (!code) return null;
   const upper = String(code).toUpperCase().trim();
@@ -116,7 +106,7 @@ export const getViolationTypeByCode = (code) => {
     return VIOLATION_TYPES.QUA_TOC_DO;
   }
 
-  return null;
+	return null;
 };
 
 /**
