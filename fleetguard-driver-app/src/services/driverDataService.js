@@ -6,7 +6,7 @@ const USE_MOCK = false; // Đổi thành true nếu muốn chạy 100% dữ li�
 // - Nếu chạy trên Web / iOS Simulator: dùng "http://localhost:3000/api/v1"
 // - Nếu chạy trên Android Emulator: đổi thành "http://10.0.2.2:3000/api/v1"
 // - Nếu chạy trên Điện thoại thật (Expo Go): đổi thành IP LAN máy tính, VD: "http://192.168.1.100:3000/api/v1"
-const API_BASE_URL = "http://localhost:3000/api/v1";
+const API_BASE_URL = "http://192.168.111.91:3000/api/v1";
 
 let authToken = null;
 

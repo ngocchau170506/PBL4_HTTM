@@ -12,7 +12,6 @@ import ViolationReviewModal from "./components/ViolationReviewModal";
 
 export default function LogsPage() {
   const { user } = useAuth();
-  // Quản lý state vi phạm & khiếu nại qua Zustand theo đúng SRS 4.1 (FR_3.2)
   const { violations, disputes, syncFleetData, globalSearchQuery } =
     useFleetStore();
 
@@ -87,7 +86,19 @@ export default function LogsPage() {
 
   const effectiveQuery = (searchTerm || globalSearchQuery || "").toLowerCase();
 
-  const filteredViolations = violations.filter((v) => {
+  // Tự động ghép thông tin Khiếu nại từ mảng `disputes` trong Zustand vào từng `violation`
+  const enrichedViolations = violations.map((v) => {
+    const matchedDispute = disputes.find(
+      (d) => Number(d.violation_id || d.violationId) === Number(v.id),
+    );
+    return {
+      ...v,
+      matchedDispute: matchedDispute || v.dispute || null,
+      dispute_status: matchedDispute?.trang_thai || v.dispute_status || null,
+    };
+  });
+
+  const filteredViolations = enrichedViolations.filter((v) => {
     const currentStatus = v.trang_thai_xac_thuc || v.trang_thai;
     const currentType = v.ma_loai || v.loai_vi_pham || "";
     const driverName = (
@@ -144,11 +155,11 @@ export default function LogsPage() {
       <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
         <div>
           <h1 className="text-brand-text-primary text-2xl font-black tracking-tight">
-            Xác thực Vi phạm AI & Giải quyết Khiếu nại
+            Xác thực Vi phạm AI &amp; Giải quyết Khiếu nại
           </h1>
           <p className="text-brand-text-muted text-xs">
-            Quản lý State thời gian thực qua Zustand Store & Socket.io (SRS 4.1
-            • FR_3.2)
+            Quản lý State thời gian thực qua Zustand Store &amp; Socket.io (SRS
+            4.1 • FR_3.2)
           </p>
         </div>
 
@@ -183,7 +194,7 @@ export default function LogsPage() {
         </div>
       </div>
 
-      <LogsKpiStats violations={violations} />
+      <LogsKpiStats violations={enrichedViolations} />
 
       {activeTab === "VIOLATIONS" ? (
         <>
@@ -199,6 +210,7 @@ export default function LogsPage() {
           <LogsTable
             violations={filteredViolations}
             onSelectViolation={(v) => setSelectedViolation(v)}
+            onSwitchToDisputes={() => setActiveTab("DISPUTES")}
           />
         </>
       ) : (

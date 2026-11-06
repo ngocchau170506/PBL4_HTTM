@@ -8,6 +8,9 @@ import {
 	handleRegister,
 	handleUpdateConfig,
 	handleUpdateUser,
+	handleUpdateOwnProfile,
+	handleChangePassword,
+	handleAdminResetPassword,
 } from './auth.controller.js';
 
 const router = express.Router();

@@ -1,8 +1,12 @@
-import { FileVideo } from "lucide-react";
+import { CheckCircle2, FileVideo, Scale, XCircle } from "lucide-react";
 import StatusBadge from "../../../components/common/StatusBadge";
 import { formatFullDateTime } from "../../../utils/formatDateTime";
 
-export default function LogsTable({ violations = [], onSelectViolation }) {
+export default function LogsTable({
+  violations = [],
+  onSelectViolation,
+  onSwitchToDisputes,
+}) {
   return (
     <div className="card-glass border-brand-border rounded-3xl border p-6 shadow-xl">
       <div className="overflow-x-auto">
@@ -15,7 +19,7 @@ export default function LogsTable({ violations = [], onSelectViolation }) {
               <th className="px-4 py-4">Hành vi phát hiện</th>
               <th className="px-4 py-4 text-center">Độ tin cậy AI</th>
               <th className="px-4 py-4 text-center">Mức trừ</th>
-              <th className="px-4 py-4">Trạng thái</th>
+              <th className="px-4 py-4">Trạng thái &amp; Khiếu nại</th>
               <th className="rounded-tr-2xl px-4 py-4 text-right">Thao tác</th>
             </tr>
           </thead>
@@ -43,6 +47,14 @@ export default function LogsTable({ violations = [], onSelectViolation }) {
                 const penalty =
                   v.diem_bi_tru !== undefined ? v.diem_bi_tru : v.diem_tru || 0;
                 const status = v.trang_thai_xac_thuc || v.trang_thai;
+                const pointStatus = v.trang_thai_diem || v.trangThaiDiem;
+                const disputeStatus = v.dispute_status;
+                const disputeId = v.matchedDispute?.id;
+
+                const isRefunded =
+                  pointStatus === "REFUNDED" || disputeStatus === "APPROVED";
+                const isCapped = pointStatus === "CAPPED";
+
                 const badgeStatusCode =
                   status === "CONFIRMED" && v.nguon_quyet_dinh === "AI"
                     ? "AI_CONFIRMED"
@@ -52,7 +64,9 @@ export default function LogsTable({ violations = [], onSelectViolation }) {
                 return (
                   <tr
                     key={v.id}
-                    className="hover:bg-brand-surface/70 transition-colors"
+                    className={`hover:bg-brand-surface/70 transition-colors ${
+                      disputeStatus === "OPEN" ? "bg-amber-950/10" : ""
+                    }`}
                   >
                     {/* Mã vi phạm */}
                     <td className="text-brand-blue-sky px-4 py-4 text-xs font-bold">
@@ -120,20 +134,70 @@ export default function LogsTable({ violations = [], onSelectViolation }) {
                       )}
                     </td>
 
-                    {/* Mức điểm trừ */}
+                    {/* Mức điểm trừ (Hiển thị rõ nếu đã Hoàn điểm hoặc Áp trần CAPPED) */}
                     <td className="px-4 py-4 text-center">
-                      <span
-                        className={`text-xs font-bold ${
-                          penalty > 0 ? "text-alert-danger" : "text-alert-safe"
-                        }`}
-                      >
-                        {penalty > 0 ? `-${penalty}` : "0"}
-                      </span>
+                      {isRefunded ? (
+                        <div className="flex flex-col items-center">
+                          <span className="text-brand-text-subtle text-[10px] line-through">
+                            -{penalty}
+                          </span>
+                          <span className="text-[11px] font-black text-emerald-400">
+                            Đã hoàn (+{penalty}đ)
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center">
+                          <span
+                            className={`text-xs font-bold ${
+                              penalty > 0
+                                ? "text-alert-danger"
+                                : "text-alert-safe"
+                            }`}
+                          >
+                            {penalty > 0 ? `-${penalty}` : "0"}
+                          </span>
+                          {isCapped && (
+                            <span className="mt-0.5 rounded bg-purple-950/60 px-1.5 py-0.5 text-[9px] font-bold text-purple-300">
+                              CAPPED
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </td>
 
-                    {/* Trạng thái xác thực */}
+                    {/* Trạng thái xác thực + Trạng thái Khiếu nại (4 trục độc lập SRS 4.1) */}
                     <td className="px-4 py-4">
-                      <StatusBadge code={badgeStatusCode} />
+                      <div className="flex flex-col items-start gap-1.5">
+                        <StatusBadge code={badgeStatusCode} />
+
+                        {disputeStatus === "OPEN" && (
+                          <button
+                            onClick={onSwitchToDisputes}
+                            title="Bấm để chuyển sang tab Giải quyết Khiếu nại"
+                            className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-950/50 px-2 py-0.5 text-[10px] font-bold text-amber-300 transition-all hover:bg-amber-900/70"
+                          >
+                            <Scale className="h-3 w-3 animate-bounce" />
+                            <span>
+                              Đang khiếu nại{" "}
+                              {disputeId ? `#KN-${disputeId}` : ""}
+                            </span>
+                          </button>
+                        )}
+
+                        {disputeStatus === "APPROVED" && (
+                          <span className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-950/40 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
+                            <CheckCircle2 className="h-3 w-3" />
+                            <span>Khiếu nại thành công (Hoàn điểm)</span>
+                          </span>
+                        )}
+
+                        {disputeStatus === "REJECTED" && (
+                          <span className="inline-flex items-center gap-1 rounded-lg border border-rose-500/30 bg-rose-950/40 px-2 py-0.5 text-[10px] font-bold text-rose-400">
+                            <XCircle className="h-3 w-3" />
+                            <span>Đã bác đơn khiếu nại</span>
+                          </span>
+                        )}
+                      </div>
                     </td>
 
                     {/* Thao tác */}

@@ -89,7 +89,7 @@ const BADGE_CONFIG = {
     style: "border-alert-safe/30 bg-alert-safe/15 text-alert-safe",
     pingColor: "bg-alert-safe",
   },
-  ACTIVE: {
+  AVAILABLE: {
     label: "Sẵn sàng nhận ca",
     style: "border-brand-primary/30 bg-brand-blue-night/40 text-brand-blue-sky",
     icon: CheckCircle2,

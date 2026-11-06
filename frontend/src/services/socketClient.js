@@ -16,56 +16,74 @@ class SocketService {
   socket = null;
   mockInterval = null;
   isConnected = false;
+  storeActionsRef = null;
 
   connect(token, storeActions) {
-    if (this.isConnected) return;
+    // Luôn cập nhật tham chiếu storeActions mới nhất
+    this.storeActionsRef = storeActions;
+
+    // Nếu đã khởi tạo instance socket rồi thì KHÔNG tạo chồng kết nối mới
+    if (this.socket) {
+      if (this.socket.connected) {
+        storeActions.setSocketStatus("CONNECTED");
+      }
+      return;
+    }
 
     if (!USE_MOCK_SOCKET) {
       this.socket = io(SOCKET_URL, {
         auth: { token },
-        transports: ["polling", "websocket"],
+        transports: ["websocket", "polling"], // Ưu tiên websocket trực tiếp để không bị rơi kết nối polling
         reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionAttempts: Infinity,
       });
 
       this.socket.on("connect", () => {
         this.isConnected = true;
-        storeActions.setSocketStatus("CONNECTED");
+        this.storeActionsRef?.setSocketStatus("CONNECTED");
       });
 
       this.socket.on("disconnect", () => {
         this.isConnected = false;
-        storeActions.setSocketStatus("DISCONNECTED");
+        this.storeActionsRef?.setSocketStatus("DISCONNECTED");
       });
 
       this.socket.on(SOCKET_EVENTS.TELEMETRY_UPDATE, (payload) => {
-        storeActions.handleTelemetrySocket(payload);
+        this.storeActionsRef?.handleTelemetrySocket(payload);
       });
 
       this.socket.on(SOCKET_EVENTS.VIOLATION_NEW, (payload) => {
-        storeActions.handleNewViolationSocket(payload);
+        this.storeActionsRef?.handleNewViolationSocket(payload);
         toast.error(
           `🚨 SOCKET ALERT: Xe ${payload.bien_so_xe} (${payload.driver_name}) - ${payload.ten_loai}!`,
           { duration: 5000 },
         );
       });
 
-      this.socket.on(SOCKET_EVENTS.VIOLATION_UPDATED, () => {
-        storeActions.syncFleetData();
+      this.socket.on(SOCKET_EVENTS.VIOLATION_UPDATED, (payload) => {
+        this.storeActionsRef?.syncFleetData();
+        if (payload?.type === "NEW_DISPUTE") {
+          toast(
+            `⚖️ Tài xế vừa gửi đơn khiếu nại mới (#KN-${payload.dispute_id})!`,
+            { icon: "📩", duration: 4000 },
+          );
+        }
       });
 
       this.socket.on(SOCKET_EVENTS.SCORE_CHANGED, () => {
-        storeActions.syncFleetData();
+        this.storeActionsRef?.syncFleetData();
       });
 
       this.socket.on(SOCKET_EVENTS.DEVICE_HEALTH, (payload) => {
-        storeActions.handleDeviceHealthSocket(payload);
+        this.storeActionsRef?.handleDeviceHealthSocket(payload);
       });
     } else {
       this.isConnected = true;
       storeActions.setSocketStatus("MOCK_LIVE");
 
       this.mockInterval = setInterval(() => {
-        storeActions.tickRealtimeTelemetry();
+        this.storeActionsRef?.tickRealtimeTelemetry();
       }, 2000);
     }
   }
@@ -75,8 +93,8 @@ class SocketService {
       {
         id: Date.now(),
         violation_id: Date.now(),
-        trip_id: 502,
-        driver_id: 2,
+        trip_id: 2,
+        driver_id: 4,
         bien_so_xe: "43H-567.89",
         driver_name: "Phạm Hoàng Nam",
         ma_loai: "MICROSLEEP",
@@ -94,8 +112,8 @@ class SocketService {
       {
         id: Date.now(),
         violation_id: Date.now(),
-        trip_id: 501,
-        driver_id: 1,
+        trip_id: 1,
+        driver_id: 3,
         bien_so_xe: "43C-123.45",
         driver_name: "Lê Minh Tuấn",
         ma_loai: "PHONE_DISTRACTION",
