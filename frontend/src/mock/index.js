@@ -517,7 +517,32 @@ export const getPriorityFleet = () => {
         ? "YOLO26 phát hiện mắt nhắm 1.8s kèm nồng độ CO2 cabin vượt ngưỡng (1,340 ppm)."
         : "Phương tiện đang di chuyển ổn định, các chỉ số sinh học bình thường.",
     countdownSeconds: idx === 1 ? 769 : 900,
-    nearestRestStop: { name: "Trạm Dừng Nghỉ Nam Hải Vân (Km 22)" },
+    nearestRestStop: {
+      name: "Trạm Dừng Nghỉ Nam Hải Vân (Km 22)",
+      tenTram: "Trạm Dừng Nghỉ Nam Hải Vân (Km 22)",
+      lat: 16.1485,
+      lng: 108.1322,
+      vi_do: 16.1485,
+      kinh_do: 108.1322,
+      kmRemaining: 4.2,
+      kmConLai: 4.2,
+      kmAtOnset: 5.8,
+      kmBanDau: 5.8,
+      kmTraveledSinceOnset: 1.6,
+      kmDaDi: 1.6,
+      etaMinutes: 4,
+      phutConLai: 4,
+      googleMapsUrl: "https://www.google.com/maps/dir/?api=1&destination=16.1485,108.1322",
+    },
+    drowsinessOnset: idx === 1 ? {
+      timestamp: new Date(Date.now() - 131 * 1000).toISOString(),
+      lat: 16.0544 + (0.018 - 0.025) - 0.010,
+      lng: 108.2022 + (0.015 - 0.02) - 0.008,
+      initialDistanceKm: 5.8,
+      distanceTraveledKm: 1.6,
+      remainingDistanceKm: 4.2,
+      etaMinutes: 4,
+    } : null,
   }));
 };
 

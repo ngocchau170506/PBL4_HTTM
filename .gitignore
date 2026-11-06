@@ -31,3 +31,12 @@ yarn-error.log*
 
 # AI Agent config
 .agents/
+
+# IoT Gateway / Server Python
+iot-gateway/__pycache__/
+iot-gateway/**/*.pyc
+iot-gateway/data/*.db
+iot-gateway/data/*.sqlite
+iot-gateway/evidence/*
+!iot-gateway/evidence/.gitkeep
+iot-gateway/signals_log.jsonl

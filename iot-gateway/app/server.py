@@ -132,6 +132,54 @@ def normalize_incoming_telemetry(payload: Dict[str, Any], path: str) -> Dict[str
     return norm
 
 
+def forward_to_main_backend(data: Dict[str, Any], violation_flag: Optional[str] = None) -> None:
+    """Tự động chuyển tiếp bản sao Telemetry sang Backend Node.js cổng 3000 để cập nhật Web Dashboard chính."""
+    def _send():
+        try:
+            d_state = violation_flag or data.get("driver_state")
+            flag = None
+            if d_state and str(d_state).upper() not in ("NORMAL", "OK", "0", "NONE"):
+                raw_flag = str(d_state).upper()
+                if "DROWS" in raw_flag or "SLEEP" in raw_flag or "SUSPECT" in raw_flag:
+                    flag = "DROWSY"
+                elif "YAWN" in raw_flag:
+                    flag = "YAWNING"
+                elif "PHONE" in raw_flag:
+                    flag = "PHONE"
+                else:
+                    flag = raw_flag
+
+            gps = data.get("gps", {}) if isinstance(data.get("gps"), dict) else {}
+            lat = float(data.get("gps_lat") or gps.get("lat") or 16.0685)
+            lng = float(data.get("gps_lon") or gps.get("lon") or 108.2215)
+            speed = float(data.get("speed_kmh") or gps.get("speed_kmh") or 0.0)
+
+            mq = data.get("mq135", {}) if isinstance(data.get("mq135"), dict) else {}
+            co2 = float(data.get("co2_ppm") or mq.get("co2_ppm") or 450.0)
+
+            fwd_body = {
+                "deviceId": 3,
+                "tripId": 2,
+                "viDo": lat,
+                "kinhDo": lng,
+                "tocDo": speed,
+                "co2Level": co2,
+                "aiViolationFlag": flag,
+            }
+            body_bytes = json.dumps(fwd_body).encode("utf-8")
+            req = urllib.request.Request(
+                "http://127.0.0.1:3000/api/iot/telemetry",
+                data=body_bytes,
+                headers={"Content-Type": "application/json", "User-Agent": "IoT-Gateway-Forwarder/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=1.5):
+                pass
+        except Exception:
+            pass
+
+    threading.Thread(target=_send, daemon=True).start()
+
+
 def create_handler_class(db: DatabaseManager):
     """Factory tạo HTTP Request Handler liên kết với DatabaseManager."""
 
@@ -270,6 +318,7 @@ def create_handler_class(db: DatabaseManager):
             ):
                 norm = normalize_incoming_telemetry(payload, clean_path)
                 db.record_telemetry(norm)
+                forward_to_main_backend(norm)
 
                 vid = norm.get("vehicle_id", "XE-01")
                 # Trả về các lệnh đang chờ (Downlink Commands) ngay trong body ACK
@@ -314,6 +363,8 @@ def create_handler_class(db: DatabaseManager):
                         print(f"[SERVER] Loi luu anh bang chung: {exc}")
 
                 db.record_violation(payload, saved_image_path=saved_path)
+                v_alert = payload.get("alert_type") or payload.get("reason", "DROWSINESS")
+                forward_to_main_backend(payload, violation_flag=v_alert)
                 self._send_json(200, {
                     "status": "ACK",
                     "event_id": payload.get("event_id"),

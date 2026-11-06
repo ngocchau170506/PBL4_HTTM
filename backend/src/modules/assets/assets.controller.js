@@ -73,3 +73,18 @@ export const createRoute = async (req, res) => {
     res.status(400).json({ success: false, message: error.message });
   }
 };
+
+// Tìm trạm dừng chân gần nhất
+export const handleGetNearestRestStop = async (req, res) => {
+  try {
+    const routeId = req.params.id || req.query.routeId;
+    const lat = req.query.lat || 16.0544;
+    const lng = req.query.lng || 108.2022;
+    const speed = req.query.speed || 60;
+
+    const nearest = await assetsService.getNearestRestStopOnRoute({ routeId, lat, lng, speed });
+    res.json({ success: true, data: nearest });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};

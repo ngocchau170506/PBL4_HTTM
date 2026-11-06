@@ -7,6 +7,18 @@ import LeafletMapView from "./components/LeafletMapView";
 import MapKpiStats from "./components/MapKpiStats";
 import VehicleDispatchPanel from "./components/VehicleDispatchPanel";
 
+const calcDistKm = (lat1, lon1, lat2, lon2) => {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return 4.0;
+  const toRad = (angle) => (angle * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return parseFloat((6371 * c).toFixed(2));
+};
+
 export default function MapPage() {
   const [fleet, setFleet] = useState([]);
   const [selectedVehicle, setSelectedVehicle] = useState(null);
@@ -29,15 +41,56 @@ export default function MapPage() {
         dataService.getPriorityFleet(),
         dataService.getMonitoringStats(),
       ]);
-      const mappedFleet = (defaultList || []).map((item, index) => ({
-        ...item,
-        lat: 16.0544 + (index === 0 ? 0.015 : index * 0.018 - 0.025),
-        lng: 108.2022 + (index === 0 ? -0.012 : index * 0.015 - 0.02),
-        currentSpeed: parseInt(item.speed) || 60,
-        currentCo2: parseInt(String(item.co2 || "850").replace(",", "")) || 850,
-        remainingSeconds:
-          item.countdownSeconds !== undefined ? item.countdownSeconds : 900,
-      }));
+      const mappedFleet = (defaultList || []).map((item, index) => {
+        const vLat = item.lat || (16.0544 + (index === 0 ? 0.015 : index * 0.018 - 0.025));
+        const vLng = item.lng || (108.2022 + (index === 0 ? -0.012 : index * 0.015 - 0.02));
+        const isDanger = item.priorityLevel === "DANGER" || item.alertType === "MICROSLEEP";
+
+        const stop = item.nearestRestStop || {
+          name: "Trạm Dừng Nghỉ Nam Hải Vân (Km 22)",
+          tenTram: "Trạm Dừng Nghỉ Nam Hải Vân (Km 22)",
+          lat: 16.1485,
+          lng: 108.1322,
+          kmRemaining: 4.2,
+          kmAtOnset: 5.8,
+          kmTraveledSinceOnset: 1.6,
+          etaMinutes: 4,
+          googleMapsUrl: "https://www.google.com/maps/dir/?api=1&destination=16.1485,108.1322",
+        };
+
+        const stopLat = stop.lat || stop.vi_do || 16.1485;
+        const stopLng = stop.lng || stop.kinh_do || 108.1322;
+        const currentDist = calcDistKm(vLat, vLng, stopLat, stopLng);
+
+        const onset = item.drowsinessOnset || (isDanger ? {
+          timestamp: new Date(Date.now() - 131 * 1000).toISOString(),
+          lat: vLat - 0.010,
+          lng: vLng - 0.008,
+          initialDistanceKm: parseFloat((currentDist + 1.2).toFixed(2)),
+          distanceTraveledKm: 1.2,
+          remainingDistanceKm: currentDist,
+          etaMinutes: Math.max(1, Math.round((currentDist / (parseInt(item.speed) || 60)) * 60)),
+        } : null);
+
+        return {
+          ...item,
+          lat: vLat,
+          lng: vLng,
+          currentSpeed: parseInt(item.speed) || 60,
+          currentCo2: parseInt(String(item.co2 || "850").replace(",", "")) || 850,
+          remainingSeconds:
+            item.countdownSeconds !== undefined ? item.countdownSeconds : 900,
+          nearestRestStop: {
+            ...stop,
+            lat: stopLat,
+            lng: stopLng,
+            kmRemaining: currentDist,
+            kmConLai: currentDist,
+            etaMinutes: Math.max(1, Math.round((currentDist / (parseInt(item.speed) || 60)) * 60)),
+          },
+          drowsinessOnset: onset,
+        };
+      });
       setFleet(mappedFleet);
       setSelectedVehicle(
         mappedFleet.find((v) => v.priorityLevel === "DANGER") ||
@@ -56,12 +109,42 @@ export default function MapPage() {
         prevFleet.map((v) => {
           const deltaLat = isSimulating ? (Math.random() - 0.48) * 0.001 : 0;
           const deltaLng = isSimulating ? (Math.random() - 0.48) * 0.001 : 0;
+          const newLat = v.lat + deltaLat;
+          const newLng = v.lng + deltaLng;
+
+          let updatedRestStop = v.nearestRestStop;
+          let updatedOnset = v.drowsinessOnset;
+
+          if (updatedRestStop?.lat && updatedRestStop?.lng) {
+            const dist = calcDistKm(newLat, newLng, updatedRestStop.lat, updatedRestStop.lng);
+            const speed = v.currentSpeed || 60;
+            const eta = Math.max(1, Math.round((dist / speed) * 60));
+            updatedRestStop = {
+              ...updatedRestStop,
+              kmRemaining: dist,
+              kmConLai: dist,
+              etaMinutes: eta,
+              phutConLai: eta,
+            };
+          }
+
+          if (updatedOnset?.lat && updatedOnset?.lng) {
+            const distTraveled = calcDistKm(updatedOnset.lat, updatedOnset.lng, newLat, newLng);
+            updatedOnset = {
+              ...updatedOnset,
+              distanceTraveledKm: distTraveled,
+              remainingDistanceKm: updatedRestStop?.kmRemaining ?? 4.0,
+            };
+          }
+
           const updatedVehicle = {
             ...v,
-            lat: v.lat + deltaLat,
-            lng: v.lng + deltaLng,
+            lat: newLat,
+            lng: newLng,
             remainingSeconds:
               v.remainingSeconds > 0 ? v.remainingSeconds - 1 : 0,
+            nearestRestStop: updatedRestStop,
+            drowsinessOnset: updatedOnset,
           };
           const selectedPlate =
             selectedVehicle?.plate || selectedVehicle?.bien_so;

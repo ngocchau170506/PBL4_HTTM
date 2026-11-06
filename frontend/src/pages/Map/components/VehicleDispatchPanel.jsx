@@ -1,5 +1,7 @@
 import {
   Gauge,
+  MapPin,
+  ExternalLink,
   Navigation,
   PhoneCall,
   Sparkles,
@@ -143,6 +145,47 @@ export default function VehicleDispatchPanel({
             {vehicle?.alertDesc ||
               "Mô hình Edge AI phát hiện dấu hiệu buồn ngủ kéo dài hoặc nồng độ khí cabin vượt ngưỡng an toàn."}
           </p>
+        </div>
+
+        {/* Khối Thông tin Trạm dừng chân gần nhất tính từ lúc buồn ngủ */}
+        <div className="border border-emerald-500/30 bg-emerald-950/20 rounded-2xl p-3.5 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-emerald-400 font-bold text-xs">
+              <MapPin className="h-4 w-4" />
+              <span>Trạm Dừng Chân Gần Nhất</span>
+            </div>
+            <span className="bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-mono text-[10px] font-bold px-2 py-0.5 rounded-full">
+              ~{vehicle?.nearestRestStop?.etaMinutes ?? 4} phút lái xe
+            </span>
+          </div>
+
+          <div className="bg-brand-dark/85 rounded-xl p-3 border border-brand-border-dark space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-white font-bold text-xs truncate max-w-[210px]">
+                {vehicle?.nearestRestStop?.name || vehicle?.nearestRestStop?.tenTram || "Trạm Dừng Nghỉ Nam Hải Vân (Km 22)"}
+              </p>
+              <div className="text-right">
+                <span className="text-emerald-400 font-mono text-base font-black">
+                  {vehicle?.nearestRestStop?.kmRemaining ?? 4.2} <span className="text-xs font-normal text-slate-400">km</span>
+                </span>
+              </div>
+            </div>
+
+            <div className="border-t border-slate-800/80 pt-2 grid grid-cols-2 gap-2 text-[11px]">
+              <div>
+                <span className="text-slate-400 block text-[10px]">Đã chạy từ lúc buồn ngủ:</span>
+                <span className="font-mono font-bold text-amber-400">
+                  {vehicle?.drowsinessOnset?.distanceTraveledKm ?? 1.2} km
+                </span>
+              </div>
+              <div className="text-right">
+                <span className="text-slate-400 block text-[10px]">Khoảng cách ban đầu:</span>
+                <span className="font-mono font-bold text-slate-300">
+                  {vehicle?.drowsinessOnset?.initialDistanceKm ?? 5.8} km
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 

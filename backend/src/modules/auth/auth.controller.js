@@ -55,6 +55,18 @@ export const handleUpdateUser = async (req, res, next) => {
   }
 };
 
+export const handleResetPasswordByAdmin = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+    const { newPassword, matKhauMoi } = req.body;
+    const password = newPassword || matKhauMoi;
+    const result = await authService.resetUserPasswordByAdmin(userId, password, req.user.id);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const handleGetConfig = async (req, res, next) => {
   try {
     const config = await authService.getSystemConfig();

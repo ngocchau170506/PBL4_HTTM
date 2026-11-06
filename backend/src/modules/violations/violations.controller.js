@@ -26,7 +26,7 @@ export const getViolationTypes = (req, res) => {
 
 export const createViolation = async (req, res) => {
   try {
-    const { driverId, tripId, loaiViPham, violationTypeId, diemTru, videoUrl, videoDuration, moTa, clientEventId } = req.body;
+    const { driverId, tripId, loaiViPham, violationTypeId, diemTru, videoUrl, videoDuration, moTa, clientEventId, currentLat, currentLng, currentSpeed } = req.body;
     if (!driverId || !tripId || (!loaiViPham && !violationTypeId)) {
       return res.status(400).json({ success: false, message: 'Vui lòng cung cấp driverId, tripId và loaiViPham hoặc violationTypeId.' });
     }
@@ -41,6 +41,9 @@ export const createViolation = async (req, res) => {
       videoDuration,
       moTa,
       clientEventId,
+      currentLat,
+      currentLng,
+      currentSpeed,
     });
     res.status(201).json({ success: true, data: result.violation, ...result });
   } catch (error) {
@@ -66,6 +69,16 @@ export const reviewViolation = async (req, res) => {
       ...req.body,
       reviewerId,
     });
+    res.json({ success: true, data: result.violation, ...result });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+export const handleResolveViolationSafe = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await violationsService.resolveViolationSafe(id, req.body, req.user);
     res.json({ success: true, data: result.violation, ...result });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });

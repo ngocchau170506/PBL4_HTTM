@@ -5,6 +5,7 @@ import {
   handleGetMe,
   handleGetUsers,
   handleUpdateUser,
+  handleResetPasswordByAdmin,
   handleGetConfig,
   handleUpdateConfig 
 } from './auth.controller.js';
@@ -20,8 +21,12 @@ router.use(requireAuth);
 router.get('/me', handleGetMe);
 router.get('/users', requireRole('ADMIN'), handleGetUsers);
 router.patch('/users/:userId', requireRole('ADMIN'), handleUpdateUser);
-router.get('/config', requireRole('ADMIN', 'MANAGER'), handleGetConfig);
+
+// Nghiệp vụ Admin cấp lại mật khẩu cho người dùng
+router.post('/users/:userId/reset-password', requireRole('ADMIN'), handleResetPasswordByAdmin);
+router.patch('/users/:userId/reset-password', requireRole('ADMIN'), handleResetPasswordByAdmin);
+
+router.get('/config', requireRole('ADMIN', 'MANAGER', 'DISPATCHER'), handleGetConfig);
 router.put('/config', requireRole('ADMIN'), handleUpdateConfig);
 
 export default router;
-

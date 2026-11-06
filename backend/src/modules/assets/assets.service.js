@@ -1,5 +1,6 @@
 import prisma from '../../common/prisma.js';
 import { logAuditAction } from '../../common/audit.service.js';
+import { findNearestRestStop } from '../../common/utils/geo.js';
 
 export const formatVehicle = (v) => ({
   ...v,
@@ -150,4 +151,38 @@ export const createRoute = async ({ tenTuyen, ten_tuyen, khoangCachKm, khoang_ca
     },
   });
   return formatRoute(route);
+};
+
+// Tìm trạm dừng chân gần nhất theo tọa độ GPS thực tế
+export const getNearestRestStopOnRoute = async ({ routeId, lat, lng, speed = 60 }) => {
+  let restStops = [];
+  if (routeId) {
+    const route = await prisma.route.findUnique({ where: { id: parseInt(routeId, 10) } });
+    if (route?.danhSachTramDungChan) {
+      try {
+        restStops = JSON.parse(route.danhSachTramDungChan);
+      } catch (e) {
+        restStops = [];
+      }
+    }
+  }
+
+  if (!restStops.length) {
+    const allRoutes = await prisma.route.findMany();
+    for (const r of allRoutes) {
+      if (r.danhSachTramDungChan) {
+        try {
+          const list = JSON.parse(r.danhSachTramDungChan);
+          if (Array.isArray(list)) restStops.push(...list);
+        } catch (e) {}
+      }
+    }
+  }
+
+  return findNearestRestStop({
+    currentLat: parseFloat(lat),
+    currentLng: parseFloat(lng),
+    restStops,
+    currentSpeedKmH: parseFloat(speed),
+  });
 };

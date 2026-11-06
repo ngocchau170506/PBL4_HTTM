@@ -2,6 +2,7 @@ import prisma from '../../common/prisma.js';
 import { createViolationRecord } from '../violations/violations.service.js';
 import { getAiConfig } from '../configs/configs.service.js';
 import { resolveViolationFromFlag } from '../../common/constants/violationTypes.js';
+import { calculateDistanceKm, findNearestRestStop } from '../../common/utils/geo.js';
 
 let ioInstance = null;
 
@@ -59,7 +60,23 @@ export const processIotDataPacket = async ({ tripId, deviceId, kinhDo, viDo, toc
 
   const isDangerFlag = Boolean(aiViolationFlag) || (co2 !== null && co2 > 1000);
 
-  // Broadcast Real-time Telemetry event via Socket.io (hỗ trợ cả gps_update và telemetry:update cho Frontend Zustand store)
+  // Tính trạm dừng chân gần nhất và khoảng cách theo GPS thực tế
+  let nearestRestStop = null;
+  if (tripInfo?.route?.danhSachTramDungChan) {
+    try {
+      const restStops = JSON.parse(tripInfo.route.danhSachTramDungChan);
+      nearestRestStop = findNearestRestStop({
+        currentLat: lat,
+        currentLng: lng,
+        restStops,
+        currentSpeedKmH: speed,
+      });
+    } catch (e) {
+      nearestRestStop = null;
+    }
+  }
+
+  // Broadcast Real-time Telemetry event via Socket.io
   if (ioInstance) {
     const telemetryPayload = {
       logId: logEntry.id,
@@ -79,6 +96,8 @@ export const processIotDataPacket = async ({ tripId, deviceId, kinhDo, viDo, toc
       co2_ppm: co2 || 450,
       marker_color: isDangerFlag ? 'RED' : 'GREEN',
       aiViolationFlag: aiViolationFlag || null,
+      nearestRestStop,
+      nearest_rest_stop: nearestRestStop,
       timestamp: logEntry.thoiGianGhiNhan,
       thoi_gian_ghi_nhan: logEntry.thoiGianGhiNhan,
       vehicle: tripInfo?.vehicle || null,
@@ -132,6 +151,9 @@ export const processIotDataPacket = async ({ tripId, deviceId, kinhDo, viDo, toc
           videoDuration: 10,
           aiConfidenceScore: 0.95,
           moTa: `${detectedType.icon} ${detectedType.description}`,
+          currentLat: lat,
+          currentLng: lng,
+          currentSpeed: speed,
         });
 
         // Broadcast violation alert event via Socket.io
@@ -146,6 +168,62 @@ export const processIotDataPacket = async ({ tripId, deviceId, kinhDo, viDo, toc
           ioInstance.emit('new_violation', newViolation);
         }
       }
+    }
+  }
+
+  // 5. CƠ CHẾ ÂN HẠN & MIỄN TRỪ VI PHẠM KHI DỪNG NGHỈ AN TOÀN (RESOLVED_SAFE)
+  if (parsedTripId && speed <= 5.0 && tripInfo?.route?.danhSachTramDungChan) {
+    try {
+      const restStops = JSON.parse(tripInfo.route.danhSachTramDungChan);
+      // Kiểm tra xe có đang nằm trong trạm dừng chân an toàn không (khoảng cách <= 0.6 km)
+      const nearStop = restStops.find((s) => {
+        const sLat = s.vi_do || s.lat || s.viDo;
+        const sLng = s.kinh_do || s.lng || s.kinhDo;
+        if (sLat && sLng) {
+          const dist = calculateDistanceKm(lat, lng, sLat, sLng);
+          return dist <= 0.6;
+        }
+        return false;
+      });
+
+      if (nearStop) {
+        // Tìm các vi phạm thuộc nhóm mệt mỏi trong 20 phút gần nhất đang có hiệu lực
+        const twentyMinutesAgo = new Date(Date.now() - 20 * 60 * 1000);
+        const pendingFatigueViolation = await prisma.violation.findFirst({
+          where: {
+            tripId: parsedTripId,
+            driverId: tripInfo.driverId,
+            loaiViPham: { in: ['YAWNING_FATIGUE', 'MET_MOI_NGAP', 'HIGH_CO2', 'CO2_CAO'] },
+            trangThai: { in: ['CONFIRMED', 'PENDING_MANUAL_REVIEW', 'PENDING_VERIFICATION'] },
+            thoiGianViPham: { gte: twentyMinutesAgo },
+          },
+          orderBy: { thoiGianViPham: 'desc' },
+        });
+
+        if (pendingFatigueViolation) {
+          console.log(`🛡️ [RESOLVED_SAFE] Xe ${tripInfo.vehicle.bienSo} đã tấp đỗ tại ${nearStop.ten || 'Trạm nghỉ'}! Miễn trừ vi phạm #${pendingFatigueViolation.id}`);
+          const { resolveViolationSafe } = await import('../violations/violations.service.js');
+          const { violation: resolvedV, updatedDriver } = await resolveViolationSafe(
+            pendingFatigueViolation.id,
+            {
+              restStopName: nearStop.ten || 'Trạm dừng nghỉ trên tuyến',
+              notes: `Tự động phát hiện xe dừng nghỉ an toàn theo GPS tại ${nearStop.ten} (tốc độ = 0 km/h).`,
+            },
+            { id: 1 }
+          );
+
+          if (ioInstance) {
+            ioInstance.emit('violation_resolved_safe', {
+              violation: resolvedV,
+              driver: tripInfo.driver,
+              vehicle: tripInfo.vehicle,
+              updatedUyTin: updatedDriver.uyTin,
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error checking safe rest stop:', e);
     }
   }
 

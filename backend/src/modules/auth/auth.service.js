@@ -149,6 +149,42 @@ export const updateUser = async (userId, data, adminId) => {
   return formatUser(updatedUser);
 };
 
+// Nghiệp vụ Admin cấp lại mật khẩu người dùng
+export const resetUserPasswordByAdmin = async (userId, customPassword, adminId) => {
+  const pUserId = parseInt(userId, 10);
+  const user = await prisma.user.findUnique({ where: { id: pUserId } });
+  if (!user) {
+    throw new Error('Không tìm thấy người dùng để cấp lại mật khẩu.');
+  }
+
+  const newPassword = customPassword || 'Pbl4@2026';
+  const saltRounds = 10;
+  const passwordHash = await bcrypt.hash(newPassword, saltRounds);
+
+  await prisma.user.update({
+    where: { id: pUserId },
+    data: { passwordHash },
+  });
+
+  const { logAuditAction } = await import('../../common/audit.service.js');
+  logAuditAction({
+    userId: adminId || 1,
+    hanhDong: 'RESET_USER_PASSWORD',
+    doiTuongLoai: 'USER',
+    doiTuongId: String(pUserId),
+    giaTriTruoc: { passwordHash: '***PROTECTED***' },
+    giaTriSau: { passwordHash: '***RESET_BY_ADMIN***' },
+    lyDo: `Quản trị viên cấp lại mật khẩu cho tài khoản: ${user.username}`,
+  });
+
+  return {
+    success: true,
+    message: `Đã cấp lại mật khẩu thành công cho tài khoản ${user.username}.`,
+    temporaryPassword: newPassword,
+    user: formatUser(user),
+  };
+};
+
 export const getSystemConfig = async () => {
   return getAiConfig();
 };

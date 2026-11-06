@@ -1,16 +1,17 @@
 import prisma from './prisma.js';
 
-export const logAuditAction = async ({ userId, hanhDong, doiTuongLoai, doiTuongId, giaTriTruoc, giaTriSau, lyDo }) => {
+export const logAuditAction = async ({ userId, hanhDong, doiTuongLoai, doiTuongId, giaTriTruoc, giaTriSau, lyDo, ipAddress }) => {
   try {
     const log = await prisma.auditLog.create({
       data: {
-        userId: parseInt(userId, 10),
+        userId: userId ? parseInt(userId, 10) : null,
         hanhDong,
         doiTuongLoai,
-        doiTuongId: parseInt(doiTuongId, 10),
-        giaTriTruoc: giaTriTruoc ? JSON.stringify(giaTriTruoc) : null,
-        giaTriSau: giaTriSau ? JSON.stringify(giaTriSau) : null,
+        doiTuongId: String(doiTuongId),
+        giaTriTruoc: giaTriTruoc ? (typeof giaTriTruoc === 'string' ? giaTriTruoc : JSON.stringify(giaTriTruoc)) : null,
+        giaTriSau: giaTriSau ? (typeof giaTriSau === 'string' ? giaTriSau : JSON.stringify(giaTriSau)) : null,
         lyDo: lyDo || null,
+        ipAddress: ipAddress || '127.0.0.1',
       },
     });
     return log;

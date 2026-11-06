@@ -3,6 +3,7 @@ import { sendViolationEmailAlert } from '../../common/email.service.js';
 import { logAuditAction } from '../../common/audit.service.js';
 import { getAiConfig } from '../configs/configs.service.js';
 import { formatDriver } from '../drivers/drivers.service.js';
+import { findNearestRestStop } from '../../common/utils/geo.js';
 import {
   VIOLATION_TYPES,
   getViolationTypeById,
@@ -17,6 +18,13 @@ export const enrichViolationRecord = (v) => {
   const code = v.maLoai || (type ? type.code : v.loaiViPham);
   const name = v.tenLoai || (type ? type.name : v.loaiViPham);
   const icon = type ? type.icon : '⚠️';
+
+  let restStopInfo = null;
+  try {
+    restStopInfo = v.tramDungChanGoiY ? (typeof v.tramDungChanGoiY === 'string' ? JSON.parse(v.tramDungChanGoiY) : v.tramDungChanGoiY) : null;
+  } catch (e) {
+    restStopInfo = null;
+  }
 
   return {
     ...v,
@@ -39,6 +47,8 @@ export const enrichViolationRecord = (v) => {
     thoi_gian_vi_pham: v.thoiGianViPham,
     driver_id: v.driverId,
     trip_id: v.tripId,
+    tram_dung_chan_goi_y: restStopInfo,
+    google_maps_url: restStopInfo?.googleMapsUrl || null,
     driver: v.driver ? formatDriver(v.driver) : null,
     vehicle: v.trip?.vehicle
       ? {
@@ -80,6 +90,9 @@ export const createViolationRecord = async ({
   aiConfidenceScore,
   moTa,
   clientEventId,
+  currentLat,
+  currentLng,
+  currentSpeed,
 }) => {
   const parsedDriverId = parseInt(driverId, 10);
   const parsedTripId = parseInt(tripId, 10);
@@ -113,7 +126,7 @@ export const createViolationRecord = async ({
     decisionSource = null;
   }
 
-  // Rest stop guidance
+  // Rest stop guidance: Tính toán Trạm dừng chân gần nhất theo tọa độ GPS thời gian thực (Haversine Formula)
   const tripData = await prisma.trip.findUnique({
     where: { id: parsedTripId },
     include: { route: true, vehicle: true, driver: { include: { user: true } } },
@@ -123,27 +136,23 @@ export const createViolationRecord = async ({
   if (tripData?.route?.danhSachTramDungChan) {
     try {
       const restStops = JSON.parse(tripData.route.danhSachTramDungChan);
-      if (restStops && restStops.length > 0) {
-        const nextStop = restStops[0];
-        restStopGuidance = {
-          tenTram: nextStop.ten,
-          kmConLai: 4.2,
-          phutConLai: 5,
-          thongBaoGiongNoi: `Cảnh báo an toàn! Còn khoảng 4.2 km nữa sẽ đến ${nextStop.ten}. Vui lòng giảm tốc độ và dừng nghỉ!`,
-        };
-      }
+      restStopGuidance = findNearestRestStop({
+        currentLat: currentLat || 16.0544,
+        currentLng: currentLng || 108.2022,
+        restStops,
+        currentSpeedKmH: currentSpeed || 60,
+      });
     } catch (e) {
       console.error('Error parsing rest stops:', e);
     }
   }
 
   if (!restStopGuidance) {
-    restStopGuidance = {
-      tenTram: 'Trạm Dừng Nghỉ Nam Hải Vân (Km 22)',
-      kmConLai: 4.2,
-      phutConLai: 5,
-      thongBaoGiongNoi: 'Cảnh báo an toàn! Còn 4.2 km nữa sẽ đến Trạm Dừng Nghỉ Nam Hải Vân.',
-    };
+    restStopGuidance = findNearestRestStop({
+      currentLat: currentLat || 16.0544,
+      currentLng: currentLng || 108.2022,
+      restStops: [],
+    });
   }
 
   // Dùng prisma.$transaction đảm bảo tính toàn vẹn kèm CAPPING
@@ -152,7 +161,6 @@ export const createViolationRecord = async ({
     let pointStatus = initialStatus === 'CONFIRMED' ? 'APPLIED' : 'NOT_APPLIED';
 
     if (initialStatus === 'CONFIRMED' && rawPts > 0) {
-      // Tính toán áp trần (Penalty Capping)
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
 
@@ -365,7 +373,6 @@ export const reviewViolationManual = async (
         });
       }
     } else {
-      // Nếu REJECT: Bác bỏ vi phạm (hoàn lại điểm nếu trước đó đã bị auto-confirm trừ điểm)
       if (violation.trangThai === 'CONFIRMED' && violation.diemTru > 0) {
         const currentUyTin = currentDriver.uyTin;
         const refundedUyTin = Math.min(100, currentUyTin + violation.diemTru);
@@ -427,6 +434,89 @@ export const reviewViolationManual = async (
     giaTriTruoc: { trangThai: oldStatus },
     giaTriSau: { trangThai: newStatus, ghiChuDuyet: noteText },
     lyDo: noteText || `Thẩm định: ${newStatus}`,
+  });
+
+  return { violation: enrichViolationRecord(updatedViolation), updatedDriver };
+};
+
+// Nghiệp vụ Miễn trừ vi phạm khi tấp trạm nghỉ an toàn (RESOLVED_SAFE)
+export const resolveViolationSafe = async (violationId, { restStopName, notes } = {}, currentUser) => {
+  const id = parseInt(violationId, 10);
+  const violation = await prisma.violation.findUnique({
+    where: { id },
+    include: {
+      driver: { include: { user: true } },
+      trip: { include: { vehicle: true } },
+    },
+  });
+
+  if (!violation) {
+    throw new Error('Bản ghi vi phạm không tồn tại.');
+  }
+
+  const { updatedViolation, updatedDriver } = await prisma.$transaction(async (tx) => {
+    let currentDriver = await tx.driver.findUnique({
+      where: { userId: violation.driverId },
+      include: { user: true },
+    });
+
+    // Nếu trước đó vi phạm đã bị trừ điểm -> hoàn lại điểm cho tài xế
+    if (violation.trangThai === 'CONFIRMED' && violation.diemTru > 0 && violation.trangThaiDiem !== 'REFUNDED') {
+      const currentUyTin = currentDriver.uyTin;
+      const refundedUyTin = Math.min(100, currentUyTin + violation.diemTru);
+
+      let newWarning = 'NORMAL';
+      if (refundedUyTin <= 20) newWarning = 'SUSPENDED_RED';
+      else if (refundedUyTin <= 65) newWarning = 'WARNING_YELLOW';
+
+      currentDriver = await tx.driver.update({
+        where: { userId: violation.driverId },
+        data: {
+          uyTin: refundedUyTin,
+          capCanhBao: newWarning,
+        },
+        include: { user: true },
+      });
+
+      await tx.driverScoreLog.create({
+        data: {
+          driverId: violation.driverId,
+          loaiThayDoi: 'CONG_DIEM',
+          soDiemThayDoi: violation.diemTru,
+          diemTruoc: currentUyTin,
+          diemSau: refundedUyTin,
+          lyDo: `Miễn trừ vi phạm do dừng nghỉ an toàn (RESOLVED_SAFE) tại ${restStopName || 'Trạm nghỉ'}. ${notes || ''}`,
+          violationId: violation.id,
+          tripId: violation.tripId,
+        },
+      });
+    }
+
+    const updated = await tx.violation.update({
+      where: { id },
+      data: {
+        trangThai: 'RESOLVED_SAFE',
+        trangThaiDiem: 'NOT_APPLIED',
+        nguonQuyetDinh: 'SYSTEM_RULE',
+        moTa: (violation.moTa || '') + ` | Đã miễn trừ vi phạm do dừng nghỉ an toàn tại ${restStopName || 'trạm dừng chân'} đủ thời gian quy định.`,
+      },
+      include: {
+        driver: { include: { user: true } },
+        trip: { include: { vehicle: true } },
+      },
+    });
+
+    return { updatedViolation: updated, updatedDriver: currentDriver };
+  });
+
+  logAuditAction({
+    userId: currentUser?.id || 1,
+    hanhDong: 'RESOLVE_VIOLATION_SAFE',
+    doiTuongLoai: 'VIOLATION',
+    doiTuongId: String(id),
+    giaTriTruoc: { trangThai: violation.trangThai },
+    giaTriSau: { trangThai: 'RESOLVED_SAFE', restStopName },
+    lyDo: `Tài xế đã dừng nghỉ an toàn theo cơ chế ân hạn tại ${restStopName || 'Trạm nghỉ'}`,
   });
 
   return { violation: enrichViolationRecord(updatedViolation), updatedDriver };

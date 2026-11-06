@@ -180,6 +180,31 @@ const swaggerDefinition = {
         },
       },
     },
+        '/api/auth/users/{userId}/reset-password': {
+      post: {
+        tags: ['1. Authentication & Tài khoản'],
+        summary: 'Quản trị viên cấp lại mật khẩu cho tài khoản (Chỉ ADMIN)',
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          { name: 'userId', in: 'path', required: true, schema: { type: 'integer' }, example: 2 },
+        ],
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  newPassword: { type: 'string', example: 'Driver@2026' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Cấp lại mật khẩu thành công.' },
+        },
+      },
+    },
     '/api/auth/users/{userId}': {
       patch: {
         tags: ['1. Authentication & Tài khoản'],
@@ -736,6 +761,160 @@ const swaggerDefinition = {
           201: { description: 'Upload video thành công, trả về URL truy cập.' },
           400: { description: 'Không có file hoặc định dạng không hợp lệ.' },
         },
+      },
+    },
+
+    // ==========================================
+    // 10. REAL-TIME MONITORING & REST STOPS
+    // ==========================================
+    '/api/monitoring/priority-fleet': {
+      get: {
+        tags: ['10. Giám sát & Điều phối Realtime'],
+        summary: 'Lấy danh sách đội xe ưu tiên can thiệp kèm trạm dừng chân và mốc buồn ngủ',
+        security: [{ BearerAuth: [] }],
+        responses: {
+          200: {
+            description: 'Danh sách xe kèm trạng thái DANGER/SAFE, khoảng cách trạm dừng chân và mốc bắt đầu buồn ngủ.',
+          },
+        },
+      },
+    },
+    '/api/monitoring/stats': {
+      get: {
+        tags: ['10. Giám sát & Điều phối Realtime'],
+        summary: 'Thống kê KPI giám sát thời gian thực',
+        security: [{ BearerAuth: [] }],
+        responses: {
+          200: { description: 'Tổng số xe hoạt động, số cảnh báo ngủ gật, mệt mỏi.' },
+        },
+      },
+    },
+    '/api/routes/nearest-rest-stop': {
+      get: {
+        tags: ['10. Giám sát & Điều phối Realtime'],
+        summary: 'Tính toán trạm dừng chân gần nhất và khoảng cách từ lúc buồn ngủ (Haversine)',
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          { name: 'lat', in: 'query', required: true, schema: { type: 'number' }, example: 16.0544 },
+          { name: 'lng', in: 'query', required: true, schema: { type: 'number' }, example: 108.2022 },
+          { name: 'speed', in: 'query', schema: { type: 'number' }, example: 60 },
+          { name: 'routeId', in: 'query', schema: { type: 'integer' }, example: 1 },
+        ],
+        responses: {
+          200: {
+            description: 'Thông tin trạm dừng chân gần nhất, km còn lại, km đã chạy từ lúc buồn ngủ và Google Maps URL.',
+          },
+        },
+      },
+    },
+    '/api/trips/dispatch-rest-stop': {
+      post: {
+        tags: ['10. Giám sát & Điều phối Realtime'],
+        summary: 'Lệnh điều phối xe vào trạm dừng nghỉ an toàn',
+        security: [{ BearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['vehiclePlate', 'restStopName'],
+                properties: {
+                  vehiclePlate: { type: 'string', example: '43C-123.45' },
+                  restStopName: { type: 'string', example: 'Trạm Dừng Nghỉ Nam Hải Vân (Km 22)' },
+                },
+              },
+            },
+          },
+        },
+        responses: { 200: { description: 'Đã gửi lệnh điều hướng tới buồng lái.' } },
+      },
+    },
+
+    // ==========================================
+    // 11. VIOLATIONS EXTRA & SAFE RESOLUTION
+    // ==========================================
+    '/api/violations/{id}/resolve-safe': {
+      post: {
+        tags: ['6. Vi phạm & Chấm điểm AI'],
+        summary: 'Miễn trừ vi phạm khi tài xế chủ động tấp xe vào trạm nghỉ an toàn (RESOLVED_SAFE)',
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'integer' }, example: 1 },
+        ],
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  restStopName: { type: 'string', example: 'Trạm Dừng Nghỉ Nam Hải Vân' },
+                  notes: { type: 'string', example: 'Xe dừng nghỉ an toàn theo GPS.' },
+                },
+              },
+            },
+          },
+        },
+        responses: { 200: { description: 'Đã miễn trừ vi phạm và hoàn điểm cho tài xế.' } },
+      },
+    },
+
+    // ==========================================
+    // 12. DISPUTES (KHIẾU NẠI)
+    // ==========================================
+    '/api/disputes': {
+      get: {
+        tags: ['11. Quản lý Khiếu nại (Disputes)'],
+        summary: 'Lấy danh sách các đơn khiếu nại của tài xế',
+        security: [{ BearerAuth: [] }],
+        responses: { 200: { description: 'Danh sách khiếu nại.' } },
+      },
+      post: {
+        tags: ['11. Quản lý Khiếu nại (Disputes)'],
+        summary: 'Tài xế tạo đơn khiếu nại điểm vi phạm',
+        security: [{ BearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['violationId', 'reason'],
+                properties: {
+                  violationId: { type: 'integer', example: 1 },
+                  reason: { type: 'string', example: 'Gió bụi bay vào mắt, không phải ngủ gật' },
+                },
+              },
+            },
+          },
+        },
+        responses: { 201: { description: 'Tạo đơn khiếu nại thành công.' } },
+      },
+    },
+    '/api/disputes/{id}/resolve': {
+      patch: {
+        tags: ['11. Quản lý Khiếu nại (Disputes)'],
+        summary: 'Quản trị viên xét duyệt khiếu nại (APPROVED / REJECTED)',
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'integer' }, example: 1 },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['trang_thai'],
+                properties: {
+                  trang_thai: { type: 'string', enum: ['APPROVED', 'REJECTED'], example: 'APPROVED' },
+                  phan_hoi: { type: 'string', example: 'Đã xem clip 10s, chấp thuận hoàn điểm.' },
+                },
+              },
+            },
+          },
+        },
+        responses: { 200: { description: 'Xử lý khiếu nại thành công.' } },
       },
     },
 

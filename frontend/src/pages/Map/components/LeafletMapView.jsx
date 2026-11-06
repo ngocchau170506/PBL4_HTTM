@@ -25,6 +25,45 @@ const createVehicleIcon = (colorHex, isDanger = false, plateText = "") => {
   });
 };
 
+const createRestStopIcon = (stopName, kmRemaining, etaMinutes) => {
+  return L.divIcon({
+    className: "!bg-transparent !border-0",
+    iconSize: [160, 60],
+    iconAnchor: [80, 50],
+    html: `
+      <div style="display: flex; flex-direction: column; align-items: center; cursor: pointer;">
+        <div style="background: linear-gradient(135deg, #059669, #047857); border: 2px solid #34d399; border-radius: 9999px; padding: 4px 10px; box-shadow: 0 4px 16px rgba(16, 185, 129, 0.5); display: flex; align-items: center; gap: 5px; color: white; font-weight: 800; font-size: 11px;">
+          <span>🛑 Trạm Nghỉ</span>
+          <span style="background: rgba(0,0,0,0.3); padding: 1px 6px; border-radius: 6px; font-family: monospace; font-size: 10px; color: #a7f3d0;">Còn ${kmRemaining} km</span>
+        </div>
+        <div style="width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 6px solid #047857; margin-top: -1px;"></div>
+        <div style="margin-top: 2px; font-size: 10px; font-weight: 700; color: #6ee7b7; text-shadow: 0 2px 4px rgba(0,0,0,0.9); white-space: nowrap;">
+          ${stopName} (~${etaMinutes}p)
+        </div>
+      </div>
+    `,
+  });
+};
+
+const createOnsetMarkerIcon = (timeText, initialKm) => {
+  return L.divIcon({
+    className: "!bg-transparent !border-0",
+    iconSize: [150, 50],
+    iconAnchor: [75, 45],
+    html: `
+      <div style="display: flex; flex-direction: column; align-items: center; cursor: pointer;">
+        <div style="background: #991b1b; border: 2px solid #f87171; border-radius: 8px; padding: 3px 8px; box-shadow: 0 4px 14px rgba(239, 68, 68, 0.6); display: flex; align-items: center; gap: 4px; color: white; font-size: 10px; font-weight: 800;">
+          <span>😴 Bắt đầu buồn ngủ</span>
+        </div>
+        <div style="width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 5px solid #991b1b;"></div>
+        <div style="font-size: 9px; color: #fca5a5; font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,0.9); margin-top: 2px;">
+          Cách trạm ban đầu: ${initialKm || '5.8'} km
+        </div>
+      </div>
+    `,
+  });
+};
+
 export default function LeafletMapView({
   vehicles = [],
   selectedVehicle,
@@ -106,7 +145,82 @@ export default function LeafletMapView({
       marker.on("click", () => onSelectVehicle && onSelectVehicle(v));
       marker.addTo(layerGroup);
     });
-  }, [map, vehicles, onSelectVehicle]);
+
+    // 3. Vẽ Trạm dừng chân gần nhất, Điểm bắt đầu buồn ngủ & Tuyến đường khẩn cấp
+    const activeTarget = selectedVehicle || vehicles.find((v) => v.priorityLevel === "DANGER") || vehicles[0];
+    if (activeTarget && activeTarget.nearestRestStop) {
+      const vLat = activeTarget.lat ?? 16.0544;
+      const vLng = activeTarget.lng ?? 108.2022;
+
+      const stop = activeTarget.nearestRestStop;
+      const stopLat = stop.lat || stop.vi_do || 16.1485;
+      const stopLng = stop.lng || stop.kinh_do || 108.1322;
+      const stopName = stop.name || stop.tenTram || "Trạm Dừng Nghỉ Nam Hải Vân";
+      const kmRemaining = stop.kmRemaining ?? stop.kmConLai ?? 4.2;
+      const etaMinutes = stop.etaMinutes ?? stop.phutConLai ?? 4;
+
+      // Marker Trạm Dừng Chân
+      const restIcon = createRestStopIcon(stopName, kmRemaining, etaMinutes);
+      const restMarker = L.marker([stopLat, stopLng], { icon: restIcon }).addTo(layerGroup);
+      restMarker.bindPopup(`
+        <div style="font-family: sans-serif; min-width: 180px; color: #0f172a; padding: 4px;">
+          <h4 style="margin: 0 0 6px; font-size: 13px; font-weight: 800; color: #065f46;">🛑 ${stopName}</h4>
+          <p style="margin: 3px 0; font-size: 11px;"><b>Khoảng cách còn lại:</b> <span style="color: #059669; font-weight: bold;">${kmRemaining} km</span></p>
+          <p style="margin: 3px 0; font-size: 11px;"><b>Thời gian dự kiến:</b> ~ ${etaMinutes} phút</p>
+          <a href="${stop.googleMapsUrl || 'https://www.google.com/maps/dir/?api=1&destination=' + stopLat + ',' + stopLng}" target="_blank" rel="noopener noreferrer" style="display: block; margin-top: 8px; background: #059669; color: white; text-align: center; text-decoration: none; padding: 6px 10px; border-radius: 6px; font-size: 11px; font-weight: bold;">
+            🧭 Mở Google Maps chỉ đường
+          </a>
+        </div>
+      `);
+
+      // Đường dẫn khẩn cấp từ Xe -> Trạm dừng chân
+      const routeLine = L.polyline(
+        [
+          [vLat, vLng],
+          [stopLat, stopLng],
+        ],
+        {
+          color: activeTarget.priorityLevel === "DANGER" ? "#f59e0b" : "#10b981",
+          weight: 4,
+          dashArray: "8, 8",
+          opacity: 0.85,
+        }
+      ).addTo(layerGroup);
+
+      routeLine.bindTooltip(
+        `🧭 Khoảng cách đến trạm dừng: ${kmRemaining} km (~${etaMinutes} phút)`,
+        { permanent: false, direction: "top", className: "bg-slate-900 text-white font-mono text-xs px-2 py-1 rounded shadow" }
+      );
+
+      // Điểm bắt đầu buồn ngủ (nếu có)
+      const onset = activeTarget.drowsinessOnset;
+      if (onset?.lat && onset?.lng) {
+        const onsetIcon = createOnsetMarkerIcon(onset.timestamp, onset.initialDistanceKm);
+        const onsetMarker = L.marker([onset.lat, onset.lng], { icon: onsetIcon }).addTo(layerGroup);
+        onsetMarker.bindPopup(`
+          <div style="font-family: sans-serif; color: #0f172a; padding: 4px;">
+            <h4 style="margin: 0 0 4px; color: #b91c1c; font-size: 12px; font-weight: 800;">😴 Điểm phát hiện buồn ngủ</h4>
+            <p style="margin: 2px 0; font-size: 11px;">Cách trạm ban đầu: <b>${onset.initialDistanceKm || 5.8} km</b></p>
+            <p style="margin: 2px 0; font-size: 11px;">Đã chạy kể từ lúc buồn ngủ: <b style="color: #dc2626;">${onset.distanceTraveledKm || 1.2} km</b></p>
+          </div>
+        `);
+
+        // Đường nối từ điểm phát hiện buồn ngủ tới vị trí xe hiện tại
+        L.polyline(
+          [
+            [onset.lat, onset.lng],
+            [vLat, vLng],
+          ],
+          {
+            color: "#ef4444",
+            weight: 2.5,
+            dashArray: "4, 6",
+            opacity: 0.7,
+          }
+        ).addTo(layerGroup);
+      }
+    }
+  }, [map, vehicles, selectedVehicle, onSelectVehicle]);
 
   return (
     <div className="card-glass border-brand-border relative flex h-162.5 flex-col overflow-hidden rounded-3xl border shadow-2xl lg:col-span-7">
