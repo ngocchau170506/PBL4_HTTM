@@ -53,8 +53,9 @@ Both available and agreeing: use both. One unavailable: use the other, reporting
 SUSPECTED for a single-source alert. Both available and disagreeing: CONFLICT.
 Eye closure requires 2 seconds, yawning 1 second by default. No observations
 break the timer; 1.5 seconds without face evidence becomes TRACKING_LOST.
-MediaPipe runs on every processed frame so it can detect events independently
-of YOLO. This costs CPU compared with event-triggered verification; measure on Pi.
+MediaPipe uses event-triggered verification by default: it runs when YOLO detects
+suspicious signs (closed eyes, yawning), during verification timers, or as fallback
+when YOLO fails. To force continuous execution on every frame, set ALWAYS_RUN_LANDMARKER=1.
 Only recognized eye/mouth labels count as YOLO observations. If your trained
 model uses other labels, update the label mapping in drowsiness_pipeline.py.
 

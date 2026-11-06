@@ -23,10 +23,10 @@ from AI.scripts.esp_communication import EspCommunicator
 from AI.scripts.event_recorder import EventRecorder
 from AI.scripts.camera_config import open_camera
 
-WINDOW_TITLE = "Assess the driver's condition"
 STABLE_FRAMES_REQUIRED = 15
-
+# kết hợp với IoT thì thay return thành thông báo ra loa
 def _detect_alignment(frame, landmarker, timestamp):
+    """Detect face and head pose alignment in the given frame."""
     height, width = frame.shape[:2]
     image = mp.Image(
         image_format=mp.ImageFormat.SRGB,
@@ -34,17 +34,16 @@ def _detect_alignment(frame, landmarker, timestamp):
     )
     result = landmarker.detect_for_video(image, timestamp)
     if not result.face_landmarks:
-        return False, {"FACE": "KHONG THAY"}
+        return False, {"FACE": "CAN'T FIND"}
     pose = calculate_head_pose(result.face_landmarks[0], width, height)
     if pose is None:
-        return False, {"FACE": "THAY", "POSE": "KHONG TIN CAY"}
+        return False, {"FACE": "FIND", "POSE": "CAN'T CALC"}
     yaw, pitch, roll = pose
     stable = abs(yaw) <= 15 and abs(pitch) <= 15 and abs(roll) <= 10
     return stable, {
         "FACE": "OK", "YAW": f"{yaw:.1f}", "PITCH": f"{pitch:.1f}",
         "ROLL": f"{roll:.1f}",
     }
-
 
 class HeadlessDashboard:
     """Keep startup/calibration automatic without OpenCV windows."""
@@ -64,10 +63,11 @@ def run():
     model_path = Path(MODEL_PATH)
     cap = open_camera()
     if not cap.isOpened():
-        raise RuntimeError("Khong mo duoc camera")
+        raise RuntimeError("Cannot open camera")
 
     headless = os.getenv("HEADLESS", "0") == "1"
     dashboard = HeadlessDashboard() if headless else Dashboard()
+
     landmarker = None
     pipeline = None
     camera_source = None
@@ -91,20 +91,20 @@ def run():
             alignment_deadline = time.monotonic() + float(os.getenv("ALIGNMENT_TIMEOUT", "30"))
             while True:
                 if time.monotonic() >= alignment_deadline:
-                    print("[CALIBRATION] Alignment timed out; use previous/default baseline")
+                    print("[CALIBRATION] Alignment timed out; use default baseline")
                     break
                 ok, frame = cap.read()
                 if not ok:
-                    raise RuntimeError("Khong doc duoc frame tu camera")
+                    raise RuntimeError("Cannot read frame during alignment")
                 timestamp = max(timestamp + 1, int(time.monotonic() * 1000))
                 stable, metrics = _detect_alignment(frame, landmarker, timestamp)
                 stable_frames = stable_frames + 1 if stable else 0
                 can_continue = stable_frames >= STABLE_FRAMES_REQUIRED
 
                 status = (
-                    "Can chinh thanh cong - bat dau do baseline ca nhan"
+                    "Camera aligned, ready to calibrate"
                     if can_continue
-                    else "Giu dau thang, nhin tu nhien vao camera"
+                    else "Align your face to the camera and keep it stable for a few seconds..."
                 )
 
                 dashboard.show_alignment(frame, status, metrics, can_continue)
@@ -125,7 +125,7 @@ def run():
                 while not session.finished:
                     ok, frame = cap.read()
                     if not ok:
-                        raise RuntimeError("Khong doc duoc frame khi do baseline")
+                        raise RuntimeError("Cannot read frame during calibration")
 
                     data = session.update(frame, landmarker)
                     dashboard.show_calibration(frame, data)
@@ -136,9 +136,9 @@ def run():
                 # Luu ket qua vao baseline.json
                 saved = session.save(BASELINE_PATH)
                 if saved:
-                    print(f"[CALIBRATION] Luu baseline ca nhan thanh cong: {BASELINE_PATH}")
+                    print(f"[CALIBRATION] Saved baseline: {BASELINE_PATH}")
                 else:
-                    print("[CALIBRATION] Khong du mau hop le de tao baseline moi, giu baseline hien tai.")
+                    print("[CALIBRATION] Failed to save baseline")
 
                 # Thong bao hoan tat truoc khi khoi dong giam sat
                 msg_end = time.monotonic() + 1.5
@@ -149,15 +149,14 @@ def run():
                     dashboard.show_message(
                         frame,
                         "CALIBRATION COMPLETE",
-                        "Do baseline ca nhan thanh cong!\nDang khoi dong he thong giam sat...",
+                        "Baseline saved successfully!\nStarting monitoring system...",
                         can_start=False,
                     )
                     if dashboard.poll_action() == "quit":
                         return
 
-        # Chuyen ownership landmarker sang pipeline.
-        # Pipeline se goi landmarker.close() trong pipeline.close().
-        # Dat landmarker = None de finally block khong double-close.
+        # Giai doan 3: Khoi dong giam sat (Monitoring)
+        # Thay đổi ESP_MODE từ MOCK sang UART để giao tiếp với ESP32
         esp = EspCommunicator(
             mode=os.getenv("ESP_MODE", "MOCK"),
             port=os.getenv("ESP_PORT"),
@@ -168,6 +167,7 @@ def run():
         event_recorder = EventRecorder(str(Path(__file__).resolve().parents[1] / "data"))
         camera_source = CameraFrameSource(cap, on_frame=event_recorder.append_frame, capture_factory=open_camera)
         cap = None
+
         pipeline = DrowsinessPipeline(
             model_path=os.getenv("YOLO_MODEL_PATH", str(Path(__file__).resolve().parents[1] / "models" / "best.pt")),
             esp_communicator=esp,

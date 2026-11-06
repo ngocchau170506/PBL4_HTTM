@@ -80,12 +80,13 @@ class CnnFrameBuffer:
             ):
                 return None
             self._next_sample_ns = capture_timestamp_ns + self.sample_interval_ns
-            sampled = cv2.resize(image, self.image_size, interpolation=cv2.INTER_AREA)
+            # INTER_LINEAR nhanh gấp 3-5 lần INTER_AREA trên ARM CPU, bỏ .copy() thừa để tránh lãng phí RAM
+            sampled = cv2.resize(image, self.image_size, interpolation=cv2.INTER_LINEAR)
             item = CnnFrame(
                 frame_id=int(frame_id),
                 capture_timestamp_ns=int(capture_timestamp_ns),
                 capture_time_utc=str(capture_time_utc),
-                image=sampled.copy(),
+                image=sampled,
                 face_valid=face_valid,
                 metadata=dict(metadata or {}),
             )

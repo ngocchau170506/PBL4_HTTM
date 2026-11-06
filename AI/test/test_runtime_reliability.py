@@ -251,6 +251,26 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(state["confirmed_alert"], "UNKNOWN")
         self.assertIsNone(desired)
 
+    def test_mediapipe_skipped_when_yolo_normal(self):
+        import numpy as np
+        from AI.scripts.drowsiness_pipeline import DrowsinessPipeline
+        boxes = [SimpleNamespace(cls=[np.array(0)], conf=[np.array(0.9)])]
+        model = SimpleNamespace(names={0: "eye_open"})
+        model.predict = lambda **kwargs: [SimpleNamespace(boxes=boxes, plot=lambda: kwargs["source"].copy())]
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("AI.scripts.drowsiness_pipeline.YOLO", return_value=model), \
+                 patch.object(DrowsinessPipeline, "_run_mediapipe") as mock_mp, \
+                 patch.dict("os.environ", {"PERF_CSV": "", "HEADLESS": "1"}):
+                pipeline = DrowsinessPipeline(model_path=__file__, enable_event_recorder=False,
+                                              save_evidence=False, evidence_dir=directory)
+                try:
+                    _, state = pipeline.process(np.zeros((8, 8, 3), dtype=np.uint8))
+                    self.assertFalse(state["mp_active"])
+                    self.assertEqual(state["mediapipe_reason"], "IDLE_SKIPPED")
+                    mock_mp.assert_not_called()
+                finally:
+                    pipeline.close()
+
 
 if __name__ == "__main__":
     unittest.main()

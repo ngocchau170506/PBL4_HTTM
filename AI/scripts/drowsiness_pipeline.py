@@ -1,6 +1,3 @@
-
-"""YOLO driver monitoring with temporal alert confirmation and RAM buffering."""
-
 from collections import deque
 from enum import Enum
 import json
@@ -10,6 +7,7 @@ import time
 
 import cv2
 import mediapipe as mp
+import numpy as np
 from ultralytics import YOLO
 
 from AI.scripts.calibration import (
@@ -270,6 +268,7 @@ class DrowsinessPipeline:
             self.event_recorder = EventRecorder(
                 event_storage_dir or str(PROJECT_ROOT / "AI" / "data"),
             )
+        self._rgb_buffer = None
 
     def _run_mediapipe(self, frame, monotonic_time: float) -> dict:
         """Thực thi suy luận MediaPipe Face Landmarker có điều kiện trên frame.
@@ -287,9 +286,12 @@ class DrowsinessPipeline:
         timestamp_ms = max(self._mp_last_timestamp + 1, int(monotonic_time * 1000))
         self._mp_last_timestamp = timestamp_ms
 
+        if getattr(self, "_rgb_buffer", None) is None or self._rgb_buffer.shape != frame.shape:
+            self._rgb_buffer = np.empty_like(frame)
+        cv2.cvtColor(frame, cv2.COLOR_BGR2RGB, dst=self._rgb_buffer)
         image = mp.Image(
             image_format=mp.ImageFormat.SRGB,
-            data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+            data=self._rgb_buffer,
         )
         try:
             result = self._landmarker.detect_for_video(image, timestamp_ms)
@@ -397,10 +399,28 @@ class DrowsinessPipeline:
             elif "mouth_closed" in label or "mouth_close" in label or "closed_mouth" in label:
                 if yolo_mouth is None:
                     yolo_mouth = False
-        t_mp_start = time.perf_counter()
-        mp_result = self._run_mediapipe(frame, monotonic_time)
-        mp_time_s = time.perf_counter() - t_mp_start
-        mp_active = self._landmarker is not None
+        mp_should_run = (
+            os.getenv('ALWAYS_RUN_LANDMARKER', '0') == '1'
+            or (yolo_eye is True or yolo_mouth is True)
+            or (self._drowsy_started is not None or self._yawning_started is not None)
+            or (yolo_error is not None or self.model is None)
+        )
+
+        if mp_should_run:
+            t_mp_start = time.perf_counter()
+            mp_result = self._run_mediapipe(frame, monotonic_time)
+            mp_time_s = time.perf_counter() - t_mp_start
+            mp_active = bool(mp_result.get('valid')) or (self._landmarker is not None)
+        else:
+            mp_result = {
+                'valid': False,
+                'ear': None,
+                'mar': None,
+                'timestamp': monotonic_time,
+                'reason': 'IDLE_SKIPPED',
+            }
+            mp_time_s = 0.0
+            mp_active = False
         mp_eye = mp_result["ear"] < self.ear_threshold if mp_result["valid"] else None
         mp_mouth = mp_result["mar"] > self.mar_threshold if mp_result["valid"] else None
         decisions, tracking_lost = self.fusion.update(
