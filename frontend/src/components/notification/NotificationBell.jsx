@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useFleetStore } from "../../store/useFleetStore";
-import formatDateTime from "../../utils/formatDateTime";
+import { formatFullDateTime } from "../../utils/formatDateTime";
 
 function NotificationBell() {
   const { violations, disputes, syncFleetData } = useFleetStore();
@@ -132,7 +132,7 @@ function NotificationBell() {
                           {notif.message}
                         </p>
                         <p className="text-brand-text-subtle mt-1.5 font-mono text-[10px]">
-                          {formatDateTime(notif.createdAt)}
+                          {formatFullDateTime(notif.createdAt)}
                         </p>
                       </div>
                     </div>

@@ -1,31 +1,81 @@
 import {
+  AlertOctagon,
   BarChart3,
   CalendarClock,
   LayoutDashboard,
   LogOut,
   Map,
   PhoneCall,
+  Radio,
   Search,
   ShieldAlert,
   Sliders,
   Truck,
   Users,
+  X,
+  Zap,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import logoImg from "../../assets/Logo.png";
 import { useAuth } from "../../context/AuthContext";
+import socketClient from "../../services/socketClient";
+import { useFleetStore } from "../../store/useFleetStore";
 import NotificationBell from "../notification/NotificationBell";
 
 const MainLayout = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
-  const [searchQuery, setSearchQuery] = useState("");
+
+  const {
+    globalSearchQuery,
+    setGlobalSearchQuery,
+    socketStatus,
+    activeAlert,
+    dismissAlert,
+    syncFleetData,
+    setSocketStatus,
+    handleTelemetrySocket,
+    handleNewViolationSocket,
+    handleDeviceHealthSocket,
+    tickRealtimeTelemetry,
+  } = useFleetStore();
+
+  useEffect(() => {
+    syncFleetData();
+    const token = localStorage.getItem("token");
+    socketClient.connect(token, {
+      setSocketStatus,
+      handleTelemetrySocket,
+      handleNewViolationSocket,
+      handleDeviceHealthSocket,
+      tickRealtimeTelemetry,
+      syncFleetData,
+    });
+
+    return () => {
+      socketClient.disconnect();
+    };
+  }, [
+    syncFleetData,
+    setSocketStatus,
+    handleTelemetrySocket,
+    handleNewViolationSocket,
+    handleDeviceHealthSocket,
+    tickRealtimeTelemetry,
+  ]);
 
   const handleLogout = () => {
+    socketClient.disconnect();
     logout();
     navigate("/login");
+  };
+
+  const handleSimulateSocketAlert = () => {
+    socketClient.emitSimulatedViolation({
+      handleNewViolationSocket,
+    });
   };
 
   const isActive = (path) => {
@@ -54,7 +104,7 @@ const MainLayout = () => {
     {
       id: "fleet",
       path: "/vehicles",
-      label: "Quản lý Đội xe",
+      label: "Quản lý đội xe",
       tag: "Fleet",
       icon: Truck,
     },
@@ -69,7 +119,7 @@ const MainLayout = () => {
     {
       id: "drivers",
       path: "/drivers",
-      label: "Quản lý Tài xế",
+      label: "Quản lý tài xế",
       tag: "Biometrics",
       icon: Users,
     },
@@ -101,7 +151,7 @@ const MainLayout = () => {
 
   return (
     <div className="text-brand-text-secondary flex h-screen overflow-hidden bg-transparent font-sans">
-      {/* SIDEBAR NAVIGATION - SLATE 900 DARK */}
+      {/* SIDEBAR NAVIGATION */}
       <aside className="bg-brand-dark/90 border-brand-border-dark z-20 flex w-20 shrink-0 flex-col items-center border-r py-4 shadow-xl backdrop-blur-md">
         <button
           onClick={() => navigate("/")}
@@ -151,7 +201,9 @@ const MainLayout = () => {
               </div>
             );
           })}
+
           <div className="bg-brand-border-dark my-1 h-px w-8" />
+
           {user?.role?.toLowerCase() === "admin" &&
             adminNavItems.map((item) => {
               const active = isActive(item.path);
@@ -172,7 +224,6 @@ const MainLayout = () => {
                   >
                     <Icon className="h-5 w-5" />
                   </button>
-
                   <div className="pointer-events-none absolute top-1/2 left-full z-50 ml-3.5 hidden -translate-y-1/2 items-center group-hover:flex">
                     <div className="border-brand-border bg-brand-dark text-brand-text-primary flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs font-semibold whitespace-nowrap shadow-2xl">
                       <span>{item.label}</span>
@@ -187,20 +238,16 @@ const MainLayout = () => {
               );
             })}
         </nav>
+
         <div className="border-brand-border-dark flex w-full flex-col items-center gap-2.5 border-t px-3 pt-3">
           <div className="group relative flex justify-center">
             <a
               href="tel:19008899"
               className="flex h-11 w-11 items-center justify-center rounded-2xl border border-rose-500/30 bg-rose-500/15 text-rose-400 shadow-sm transition-all hover:bg-rose-500 hover:text-white"
-              aria-label="Hotline Cứu hộ 1900 8899"
+              aria-label="Hotline 1900 8899"
             >
               <PhoneCall className="h-4.5 w-4.5" />
             </a>
-            <div className="pointer-events-none absolute top-1/2 left-full z-50 ml-3.5 hidden -translate-y-1/2 items-center group-hover:flex">
-              <div className="bg-brand-dark rounded-xl border border-rose-500/30 px-3 py-1.5 text-xs font-bold whitespace-nowrap text-rose-400 shadow-2xl">
-                Hotline SOS: 1900 8899
-              </div>
-            </div>
           </div>
           <div className="group relative flex justify-center">
             <button
@@ -210,30 +257,44 @@ const MainLayout = () => {
             >
               <LogOut className="h-4.5 w-4.5" />
             </button>
-            <div className="pointer-events-none absolute top-1/2 left-full z-50 ml-3.5 hidden -translate-y-1/2 items-center group-hover:flex">
-              <div className="border-brand-border bg-brand-dark text-brand-text-muted rounded-xl border px-3 py-1.5 text-xs font-semibold whitespace-nowrap shadow-2xl">
-                Đăng xuất
-              </div>
-            </div>
           </div>
         </div>
       </aside>
+
       <div className="flex flex-1 flex-col overflow-hidden bg-transparent">
-        <header className="bg-brand-dark/90 border-brand-border-dark relative z-40 flex h-18 shrink-0 items-center justify-between border-b px-8 shadow-md backdrop-blur-md">
-          <div className="mr-4 max-w-xl flex-1">
+        <header className="bg-brand-dark/90 border-brand-border-dark relative z-20 flex h-18 shrink-0 items-center justify-between border-b px-8 shadow-md backdrop-blur-md">
+          <div className="mr-4 max-w-md flex-1">
             <div className="relative">
               <Search className="text-brand-text-subtle pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
               <input
                 type="text"
-                placeholder="Tra cứu biển số xe (29C-882.14), tên tài xế, mã ca chạy..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Tra cứu nhanh biển số xe, tài xế..."
+                value={globalSearchQuery}
+                onChange={(e) => setGlobalSearchQuery(e.target.value)}
                 className="border-brand-border bg-brand-dark/90 text-brand-text-primary placeholder:text-brand-text-subtle focus:border-brand-primary focus:bg-brand-surface focus:ring-brand-primary w-full rounded-lg border py-2 pr-4 pl-9 text-xs transition-all outline-none focus:ring-1"
               />
             </div>
           </div>
-          <div className="flex items-center gap-4">
+
+          <div className="flex items-center gap-3">
+            {/* NHÃN TRẠNG THÁI SOCKET.IO-CLIENT */}
+            <div className="hidden items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-950/30 px-3 py-1.5 text-[11px] font-bold text-emerald-400 md:flex">
+              <Radio className="h-3.5 w-3.5 animate-pulse" />
+              <span>Socket.io: {socketStatus}</span>
+            </div>
+
+            {/* NÚT BẤM GIẢ LẬP SỰ KIỆN SOCKET `violation:new` KHI DEMO */}
+            <button
+              onClick={handleSimulateSocketAlert}
+              className="flex cursor-pointer items-center gap-1.5 rounded-xl border border-rose-500/40 bg-rose-950/40 px-3 py-1.5 text-xs font-bold text-rose-300 shadow-sm transition-all hover:bg-rose-600 hover:text-white active:scale-95"
+              title="Bắn thử sự kiện Socket.io violation:new"
+            >
+              <Zap className="h-3.5 w-3.5 text-amber-400" />
+              <span className="hidden sm:inline">Test Báo động Socket</span>
+            </button>
+
             <NotificationBell />
+
             <div className="border-brand-border-dark flex items-center gap-3 border-l pl-3">
               <div className="from-brand-primary to-brand-primary-dark ring-brand-primary/30 relative flex h-9 w-9 items-center justify-center rounded-full bg-linear-to-br text-xs font-bold text-white shadow-md ring-2">
                 {user?.name ? user.name.charAt(0) : "TN"}
@@ -252,6 +313,37 @@ const MainLayout = () => {
             </div>
           </div>
         </header>
+
+        {/* BANNER BÁO ĐỘNG ĐỎ TOÀN CỤC TỪ ZUSTAND (`activeAlert`) */}
+        {activeAlert && (
+          <div className="border-alert-danger/50 flex items-center justify-between border-b bg-rose-950/90 px-8 py-2.5 text-xs text-white shadow-lg backdrop-blur-md">
+            <div className="flex items-center gap-2.5">
+              <AlertOctagon className="h-4 w-4 shrink-0 animate-bounce text-rose-400" />
+              <span>
+                <b>[CẢNH BÁO SOCKET.IO KHẨN CẤP]</b> Xe{" "}
+                <b>{activeAlert.bien_so_xe}</b> ({activeAlert.driver_name}) vừa
+                phát hiện lỗi <b>{activeAlert.ten_loai}</b>!
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => {
+                  dismissAlert();
+                  navigate("/logs");
+                }}
+                className="cursor-pointer rounded-lg bg-white px-2.5 py-1 text-[11px] font-black text-rose-950 hover:bg-rose-100"
+              >
+                Thẩm định ngay &rarr;
+              </button>
+              <button
+                onClick={dismissAlert}
+                className="cursor-pointer text-rose-300 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        )}
 
         <main className="text-brand-text-secondary flex-1 overflow-y-auto bg-slate-950/15 p-6">
           <Outlet />

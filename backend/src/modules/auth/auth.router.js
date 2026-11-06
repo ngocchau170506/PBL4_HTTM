@@ -1,14 +1,17 @@
 import express from 'express';
-import { 
-  handleRegister, 
-  handleLogin, 
-  handleGetMe,
-  handleGetUsers,
-  handleUpdateUser,
-  handleGetConfig,
-  handleUpdateConfig 
-} from './auth.controller.js';
 import { requireAuth, requireRole } from '../../common/auth.middleware.js';
+import {
+	handleGetConfig,
+	handleGetMe,
+	handleGetUsers,
+	handleLogin,
+	handleRegister,
+	handleUpdateConfig,
+	handleUpdateUser,
+	handleUpdateOwnProfile,
+	handleChangePassword,
+	handleAdminResetPassword,
+} from './auth.controller.js';
 
 const router = express.Router();
 
@@ -22,6 +25,12 @@ router.get('/users', requireRole('ADMIN'), handleGetUsers);
 router.patch('/users/:userId', requireRole('ADMIN'), handleUpdateUser);
 router.get('/config', requireRole('ADMIN', 'MANAGER'), handleGetConfig);
 router.put('/config', requireRole('ADMIN'), handleUpdateConfig);
+router.patch('/me', handleUpdateOwnProfile);
+router.post('/change-password', handleChangePassword);
+router.post(
+	'/users/:userId/reset-password',
+	requireRole('ADMIN'),
+	handleAdminResetPassword,
+);
 
 export default router;
-

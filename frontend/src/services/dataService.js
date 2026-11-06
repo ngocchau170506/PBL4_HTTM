@@ -1,7 +1,7 @@
 import axiosClient from "../api/axiosClient";
 import * as mockRepo from "../mock";
 
-const USE_MOCK = true;
+const USE_MOCK = false;
 
 export const dataService = {
   // 1. XÁC THỰC & ĐĂNG NHẬP (AUTH)
@@ -84,6 +84,18 @@ export const dataService = {
     return await axiosClient.post("/shifts", shiftData);
   },
 
+  async updateShift(shiftId, updatedData, actorName) {
+    if (USE_MOCK) return mockRepo.updateShift(shiftId, updatedData, actorName);
+    return await axiosClient.patch(`/shifts/${shiftId}`, updatedData);
+  },
+
+  async deleteShift(shiftId, reason, actorName) {
+    if (USE_MOCK) return mockRepo.deleteShift(shiftId, reason, actorName);
+    return await axiosClient.delete(`/shifts/${shiftId}`, {
+      data: { ly_do: reason },
+    });
+  },
+
   async getTrips() {
     if (USE_MOCK) return mockRepo.getTrips();
     return await axiosClient.get("/trips");
@@ -143,7 +155,7 @@ export const dataService = {
 
   async dispatchVehicleToRestStop(payload) {
     if (USE_MOCK) return mockRepo.dispatchVehicleToRestStop(payload);
-    return await axiosClient.post("/trips/dispatch-rest-stop", payload);
+    return await axiosClient.post("/monitoring/dispatch-rest-stop", payload);
   },
 
   // 7. QUẢN TRỊ HỆ THỐNG (ADMIN: CẤU HÌNH AI & AUDIT LOGS)

@@ -10,7 +10,7 @@ export default function VehiclesFilterBar({
   const tabs = [
     { key: "ALL", label: "Tất cả" },
     { key: "IN_USE", label: "Đang chạy" },
-    { key: "ACTIVE", label: "Sẵn sàng" },
+    { key: "AVAILABLE", label: "Sẵn sàng" },
     { key: "MAINTENANCE", label: "Bảo dưỡng" },
   ];
 

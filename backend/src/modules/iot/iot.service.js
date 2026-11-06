@@ -1,153 +1,332 @@
-import prisma from '../../common/prisma.js';
-import { createViolationRecord } from '../violations/violations.service.js';
-import { getAiConfig } from '../configs/configs.service.js';
 import { resolveViolationFromFlag } from '../../common/constants/violationTypes.js';
+import prisma from '../../common/prisma.js';
+import { getAiConfig } from '../configs/configs.service.js';
+import {
+	createViolationRecord,
+	enrichViolationRecord,
+} from '../violations/violations.service.js';
 
 let ioInstance = null;
 
 export const setSocketIO = (io) => {
-  ioInstance = io;
+	ioInstance = io;
 };
 
-export const processIotDataPacket = async ({ tripId, deviceId, kinhDo, viDo, tocDo, co2Level, aiViolationFlag }) => {
-  let parsedTripId = tripId ? parseInt(tripId, 10) : null;
-  const parsedDeviceId = parseInt(deviceId, 10);
-  const lat = parseFloat(viDo);
-  const lng = parseFloat(kinhDo);
-  const speed = parseFloat(tocDo);
-  const co2 = co2Level !== undefined ? parseFloat(co2Level) : null;
+export const getSocketIO = () => ioInstance;
 
-  // 1. Auto-lookup active IN_PROGRESS trip if tripId is omitted by hardware
-  if (!parsedTripId && parsedDeviceId) {
-    const device = await prisma.iotDevice.findUnique({
-      where: { id: parsedDeviceId },
-      include: { vehicle: true },
-    });
-    if (device && device.vehicleId) {
-      const activeTrip = await prisma.trip.findFirst({
-        where: { vehicleId: device.vehicleId, trangThai: 'IN_PROGRESS' },
-      });
-      if (activeTrip) parsedTripId = activeTrip.id;
-    }
-  }
+export const processIotDataPacket = async ({
+	tripId,
+	trip_id,
+	deviceId,
+	device_id,
+	active_driver_id,
+	kinhDo,
+	kinh_do_gps,
+	viDo,
+	vi_do_gps,
+	tocDo,
+	toc_do_kmh,
+	co2Level,
+	co2_ppm,
+	aiViolationFlag,
+}) => {
+	const rawTripId = tripId ?? trip_id;
+	const rawDeviceId = deviceId ?? device_id ?? 1;
+	let parsedTripId = rawTripId ? parseInt(rawTripId, 10) : null;
+	let parsedDeviceId = parseInt(rawDeviceId, 10);
 
-  // 2. Log Telemetry (GPS + MQ-135 CO2 Level) to Database
-  const logEntry = await prisma.iotDataLog.create({
-    data: {
-      tripId: parsedTripId,
-      deviceId: parsedDeviceId,
-      kinhDo: lng,
-      viDo: lat,
-      tocDo: speed,
-      co2Level: co2,
-      thoiGianGhiNhan: new Date(),
-    },
-  });
+	const lat = parseFloat(viDo ?? vi_do_gps ?? 16.0544);
+	const lng = parseFloat(kinhDo ?? kinh_do_gps ?? 108.2022);
+	const speed = parseFloat(tocDo ?? toc_do_kmh ?? 60);
+	const rawCo2 = co2Level ?? co2_ppm;
+	const co2 = rawCo2 !== undefined && rawCo2 !== null ? parseFloat(rawCo2) : null;
 
-  // 3. Fetch Trip & Driver info for live tracking and auto-trigger
-  let tripInfo = null;
-  if (parsedTripId) {
-    tripInfo = await prisma.trip.findUnique({
-      where: { id: parsedTripId },
-      include: {
-        driver: { include: { user: true } },
-        vehicle: true,
-        route: true,
-      },
-    });
-  }
+	// 1. Tự tìm chuyến IN_PROGRESS hoặc tìm deviceId từ tripId
+	let tripInfo = null;
+	if (parsedTripId) {
+		tripInfo = await prisma.trip.findUnique({
+			where: { id: parsedTripId },
+			include: {
+				driver: { include: { user: true } },
+				vehicle: { include: { iotDevice: true } },
+				route: true,
+			},
+		});
+		if (tripInfo?.vehicle?.iotDevice?.id) {
+			parsedDeviceId = tripInfo.vehicle.iotDevice.id;
+		}
+	} else if (parsedDeviceId) {
+		const device = await prisma.iotDevice.findUnique({
+			where: { id: parsedDeviceId },
+			include: { vehicle: true },
+		});
+		if (device && device.vehicleId) {
+			tripInfo = await prisma.trip.findFirst({
+				where: { vehicleId: device.vehicleId, trangThai: 'IN_PROGRESS' },
+				include: {
+					driver: { include: { user: true } },
+					vehicle: { include: { iotDevice: true } },
+					route: true,
+				},
+			});
+			if (tripInfo) parsedTripId = tripInfo.id;
+		}
+	}
 
-  const isDangerFlag = Boolean(aiViolationFlag) || (co2 !== null && co2 > 1000);
+	// 2. Lưu log Telemetry vào DB
+	const logEntry = await prisma.iotDataLog.create({
+		data: {
+			tripId: parsedTripId,
+			deviceId: parsedDeviceId,
+			kinhDo: lng,
+			viDo: lat,
+			tocDo: speed,
+			co2Level: co2,
+			thoiGianGhiNhan: new Date(),
+		},
+	});
 
-  // Broadcast Real-time Telemetry event via Socket.io (hỗ trợ cả gps_update và telemetry:update cho Frontend Zustand store)
-  if (ioInstance) {
-    const telemetryPayload = {
-      logId: logEntry.id,
-      tripId: parsedTripId,
-      trip_id: parsedTripId,
-      deviceId: parsedDeviceId,
-      vehicle_id: tripInfo?.vehicle?.id || parsedDeviceId,
-      bien_so_xe: tripInfo?.vehicle?.bienSo || 'Xe IoT',
-      active_driver_name: tripInfo?.driver?.user?.hoTen || 'Tài xế',
-      lat,
-      lng,
-      vi_do_gps: lat,
-      kinh_do_gps: lng,
-      speed,
-      toc_do_kmh: speed,
-      co2Level: co2,
-      co2_ppm: co2 || 450,
-      marker_color: isDangerFlag ? 'RED' : 'GREEN',
-      aiViolationFlag: aiViolationFlag || null,
-      timestamp: logEntry.thoiGianGhiNhan,
-      thoi_gian_ghi_nhan: logEntry.thoiGianGhiNhan,
-      vehicle: tripInfo?.vehicle || null,
-      driver: tripInfo?.driver || null,
-      route: tripInfo?.route || null,
-    };
+	const isDangerFlag = Boolean(aiViolationFlag) || (co2 !== null && co2 > 1200);
 
-    ioInstance.emit('gps_update', telemetryPayload);
-    ioInstance.emit('telemetry:update', telemetryPayload);
-  }
+	// 3. Phát sự kiện telemetry:update lên Leaflet Map
+	if (ioInstance) {
+		const telemetryPayload = {
+			logId: logEntry.id,
+			tripId: parsedTripId,
+			trip_id: parsedTripId,
+			deviceId: parsedDeviceId,
+			vehicle_id: tripInfo?.vehicle?.id || parsedDeviceId,
+			bien_so_xe: tripInfo?.vehicle?.bienSo || '43C-123.45',
+			active_driver_name: tripInfo?.driver?.user?.hoTen || 'Tài xế',
+			lat,
+			lng,
+			vi_do_gps: lat,
+			kinh_do_gps: lng,
+			speed,
+			toc_do_kmh: speed,
+			co2Level: co2,
+			co2_ppm: co2 || 680,
+			marker_color: isDangerFlag ? 'RED' : 'GREEN',
+			aiViolationFlag: aiViolationFlag || null,
+			timestamp: logEntry.thoiGianGhiNhan,
+			thoi_gian_ghi_nhan: logEntry.thoiGianGhiNhan,
+			vehicle: tripInfo?.vehicle || null,
+			driver: tripInfo?.driver || null,
+			route: tripInfo?.route || null,
+		};
 
-  // 4. AUTO DEDUCT POINTS & AI SAFETY TRIGGER LOGIC
-  if (tripInfo && tripInfo.driver) {
-    const driverId = tripInfo.driverId;
-    let videoUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
+		ioInstance.emit('gps_update', telemetryPayload);
+		ioInstance.emit('telemetry:update', telemetryPayload);
+	}
 
-    const config = await getAiConfig();
-    const co2Threshold = config.co2_warning_threshold_ppm || 1000;
+	// 4. Tự động tạo vi phạm & bắn Socket.io violation:new nếu có cờ AI đi kèm gói Telemetry
+	if (tripInfo && tripInfo.driver) {
+		const driverId = tripInfo.driverId;
+		const videoUrl =
+			'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
 
-    // Chuẩn hóa loại lỗi thông qua bộ từ điển VIOLATION_TYPES
-    const detectedType = resolveViolationFromFlag({
-      aiViolationFlag,
-      co2,
-      speed,
-      co2Threshold,
-    });
+		const config = await getAiConfig();
+		const co2Threshold = config.co2_warning_threshold_ppm || 1200;
 
-    // Process violation if triggered with anti-spam check window (45s)
-    if (detectedType) {
-      const recentViolation = await prisma.violation.findFirst({
-        where: {
-          driverId,
-          tripId: parsedTripId,
-          loaiViPham: detectedType.code,
-          thoiGianViPham: {
-            gte: new Date(Date.now() - 45 * 1000), // anti-spam window 45s
-          },
-        },
-      });
+		const detectedType = resolveViolationFromFlag({
+			aiViolationFlag,
+			co2,
+			speed,
+			co2Threshold,
+		});
 
-      if (!recentViolation) {
-        console.log(`🚨 [AI/IOT TRIGGER] [ID ${detectedType.id}] ${detectedType.code} (${detectedType.name}) - Vehicle ${tripInfo.vehicle.bienSo} - Driver ${tripInfo.driver.user.hoTen}`);
+		if (detectedType) {
+			const recentViolation = await prisma.violation.findFirst({
+				where: {
+					driverId,
+					tripId: parsedTripId,
+					loaiViPham: detectedType.code,
+					thoiGianViPham: {
+						gte: new Date(Date.now() - 45 * 1000),
+					},
+				},
+			});
 
-        const { violation: newViolation, updatedDriver } = await createViolationRecord({
-          driverId,
-          tripId: parsedTripId,
-          violationTypeId: detectedType.id,
-          loaiViPham: detectedType.code,
-          diemTru: detectedType.defaultPoints,
-          videoUrl,
-          videoDuration: 10,
-          aiConfidenceScore: 0.95,
-          moTa: `${detectedType.icon} ${detectedType.description}`,
-        });
+			if (!recentViolation) {
+				const { violation: newViolation, updatedDriver } =
+					await createViolationRecord({
+						driverId,
+						tripId: parsedTripId,
+						violationTypeId: detectedType.id,
+						loaiViPham: detectedType.code,
+						diemTru: detectedType.defaultPoints,
+						videoUrl: detectedType.need_video ? videoUrl : null,
+						videoDuration: 10,
+						aiConfidenceScore: 0.92,
+						moTa: `${detectedType.icon} ${detectedType.description}`,
+					});
 
-        // Broadcast violation alert event via Socket.io
-        if (ioInstance) {
-          const alertPayload = {
-            violation: newViolation,
-            driver: tripInfo.driver,
-            vehicle: tripInfo.vehicle,
-            updatedUyTin: updatedDriver.uyTin,
-          };
-          ioInstance.emit('violation_detected', alertPayload);
-          ioInstance.emit('new_violation', newViolation);
-        }
-      }
-    }
-  }
+				if (ioInstance) {
+					const socketViolationPayload = {
+						...newViolation,
+						violation_id: newViolation.id,
+						bien_so_xe: tripInfo.vehicle?.bienSo || '43C-123.45',
+						driver_name: tripInfo.driver?.user?.hoTen || 'Tài xế',
+						muc_do_nghiem_trong:
+							detectedType.muc_do_nghiem_trong || 'CRITICAL',
+					};
 
-  return { success: true, logEntry };
+					ioInstance.emit('violation:new', socketViolationPayload);
+					ioInstance.emit('new_violation', socketViolationPayload);
+					ioInstance.emit('driver:score_changed', {
+						driver_id: driverId,
+						diem_sau: updatedDriver.uyTin,
+						so_diem_thay_doi: -newViolation.diem_bi_tru,
+						cap_canh_bao: updatedDriver.capCanhBao,
+						ly_do: `Vi phạm ${detectedType.code} #${newViolation.id}`,
+					});
+				}
+			}
+		}
+	}
+
+	return { success: true, logEntry };
+};
+
+// 5. Xử lý API POST /api/v1/edge/violations (Có chống trùng Idempotency-Key & Upload Video)
+export const processEdgeViolation = async ({
+	clientEventId,
+	trip_id,
+	tripId,
+	driver_id,
+	driverId,
+	ma_loai,
+	loaiViPham,
+	edge_confidence,
+	ai_confidence_score,
+	videoUrl,
+	mo_ta,
+	moTa,
+}) => {
+	// Kiểm tra Idempotency-Key: Nếu Pi 4 gửi lại cùng client_event_id thì trả về bản ghi cũ, KHÔNG trừ điểm 2 lần!
+	if (clientEventId) {
+		const existing = await prisma.violation.findFirst({
+			where: { clientEventId: String(clientEventId) },
+			include: {
+				driver: { include: { user: true } },
+				trip: { include: { vehicle: true, route: true } },
+			},
+		});
+		if (existing) {
+			return {
+				isDuplicate: true,
+				violation: enrichViolationRecord(existing),
+			};
+		}
+	}
+
+	const parsedTripId = parseInt(trip_id || tripId || 1, 10);
+	let parsedDriverId = parseInt(driver_id || driverId || 0, 10);
+
+	// Tự động lấy tài xế từ Trip nếu Pi 4 chỉ gửi trip_id hoặc gửi lệch driver_id
+	const tripInfo = await prisma.trip.findUnique({
+		where: { id: parsedTripId },
+		include: {
+			driver: { include: { user: true } },
+			vehicle: true,
+		},
+	});
+
+	if (tripInfo && (!parsedDriverId || parsedDriverId !== tripInfo.driverId)) {
+		parsedDriverId = tripInfo.driverId;
+	}
+
+	const confidence = parseFloat(ai_confidence_score ?? edge_confidence ?? 0.82);
+
+	const result = await createViolationRecord({
+		driverId: parsedDriverId,
+		tripId: parsedTripId,
+		loaiViPham: ma_loai || loaiViPham || 'MICROSLEEP',
+		videoUrl:
+			videoUrl ||
+			'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+		videoDuration: 10,
+		aiConfidenceScore: confidence,
+		moTa: mo_ta || moTa,
+		clientEventId: clientEventId ? String(clientEventId) : null,
+	});
+
+	if (ioInstance) {
+		const socketPayload = {
+			...result.violation,
+			violation_id: result.violation.id,
+			bien_so_xe: tripInfo?.vehicle?.bienSo || '43H-567.89',
+			driver_name: tripInfo?.driver?.user?.hoTen || 'Tài xế',
+		};
+		ioInstance.emit('violation:new', socketPayload);
+		ioInstance.emit('driver:score_changed', {
+			driver_id: parsedDriverId,
+			diem_sau: result.updatedDriver.uyTin,
+			cap_canh_bao: result.updatedDriver.capCanhBao,
+		});
+	}
+
+	return {
+		isDuplicate: false,
+		violation: result.violation,
+	};
+};
+
+// 6. Xử lý API POST /api/v1/edge/heartbeat (Cập nhật nhiệt độ CPU, bộ nhớ trống)
+export const processDeviceHeartbeat = async ({
+	device_id,
+	deviceId,
+	ma_thiet_bi,
+	cpu_temp_c,
+	free_storage_mb,
+	trang_thai_ket_noi,
+	ai_model_version,
+}) => {
+	let targetDevice = null;
+	if (device_id || deviceId) {
+		targetDevice = await prisma.iotDevice.findUnique({
+			where: { id: parseInt(device_id || deviceId, 10) },
+		});
+	} else if (ma_thiet_bi) {
+		targetDevice = await prisma.iotDevice.findFirst({
+			where: { maThietBi: ma_thiet_bi },
+		});
+	}
+
+	if (!targetDevice) {
+		targetDevice = await prisma.iotDevice.findFirst();
+	}
+
+	if (!targetDevice) {
+		throw new Error('Không tìm thấy thiết bị IoT để cập nhật heartbeat.');
+	}
+
+	const updated = await prisma.iotDevice.update({
+		where: { id: targetDevice.id },
+		data: {
+			cpuTempC:
+				cpu_temp_c !== undefined ? parseFloat(cpu_temp_c) : targetDevice.cpuTempC,
+			freeStorageMb:
+				free_storage_mb !== undefined
+					? parseInt(free_storage_mb, 10)
+					: targetDevice.freeStorageMb,
+			trangThaiKetNoi: trang_thai_ket_noi || 'ONLINE',
+			aiModelVersion: ai_model_version || targetDevice.aiModelVersion,
+			lastHeartbeatAt: new Date(),
+		},
+	});
+
+	if (ioInstance) {
+		ioInstance.emit('device:health', {
+			device_id: updated.id,
+			vehicle_id: updated.vehicleId,
+			ma_thiet_bi: updated.maThietBi,
+			cpu_temp_c: updated.cpuTempC,
+			free_storage_mb: updated.freeStorageMb,
+			trang_thai_ket_noi: updated.trangThaiKetNoi,
+			last_heartbeat_at: updated.lastHeartbeatAt,
+		});
+	}
+
+	return updated;
 };
