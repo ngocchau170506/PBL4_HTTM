@@ -1,0 +1,9 @@
+// Sao chép file này thành `wifi_config.h` (cùng thư mục với esp32_firmware.ino) để BẬT uplink WiFi
+// trên ESP32. Không có wifi_config.h => uplink tắt, Pi tự gửi HTTP trực tiếp như cũ.
+// Lưu ý: file wifi_config.h chứa mật khẩu WiFi, đừng commit lên git.
+#pragma once
+
+#define UPLINK_WIFI_SSID   "TEN_WIFI"
+#define UPLINK_WIFI_PASS   "MAT_KHAU_WIFI"
+// URL Server PC (cổng 5000), KHÔNG có dấu "/" ở cuối
+#define UPLINK_SERVER_URL  "http://192.168.1.6:5000"

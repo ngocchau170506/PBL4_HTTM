@@ -1,0 +1,22 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+env/
+venv/
+
+# Environment and sensitive keys
+AI/deploy/pi.env
+.env
+*.env
+
+# Runtime data and logs
+logs/
+AI/data/
+AI/evidence/
+*.log
+*.csv
+
+firmware/esp32_firmware/wifi_config.h

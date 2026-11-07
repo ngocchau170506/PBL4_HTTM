@@ -1,0 +1,35 @@
+[Unit]
+Description=Driver Monitoring System (Raspberry Pi 4 Embedded Edge AI)
+After=network.target time-sync.target
+Wants=network-online.target
+# Chống vòng lặp crash-restart: mỗi lần khởi động nạp lại YOLO + MediaPipe (rất nóng, rất tốn RAM)
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/driver-monitor
+Environment="PYTHONPATH=/home/pi/driver-monitor:/home/pi/driver-monitor/src"
+Environment="MPLCONFIGDIR=/tmp/matplotlib"
+EnvironmentFile=-/home/pi/driver-monitor/AI/deploy/pi.env
+ExecStart=/home/pi/driver-monitor/.venv/bin/python -m AI.app.main
+Restart=on-failure
+RestartSec=10s
+# Nice=-5 trước đây giành CPU của kernel/mạng/UART -> hệ thống đơ khi AI bận. Dùng mức trung tính.
+Nice=0
+# Trần tài nguyên cứng: AI không được chiếm trọn 4 nhân (vọt nhiệt) và không được ăn hết RAM
+CPUQuota=300%
+MemoryMax=1536M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=driver-monitor
+
+# Bao ve he thong
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/pi/driver-monitor/logs /home/pi/driver-monitor/AI/calibration /home/pi/driver-monitor/AI/data /home/pi/driver-monitor/AI/evidence
+
+[Install]
+WantedBy=multi-user.target

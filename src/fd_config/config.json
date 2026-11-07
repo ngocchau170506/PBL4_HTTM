@@ -1,0 +1,63 @@
+{
+  "_doc": "Cấu hình DUY NHẤT (R4). Không hard-code địa chỉ, fps, ngưỡng, timeout trong code. Đã duyệt cấu hình chế độ nhúng Raspberry Pi 4 (mode: rasp) cho G7.",
+  "mode": "rasp",
+  "camera": {
+    "source": "rtsp",
+    "index": 0,
+    "uri": "rtsp://192.168.1.210:554/user=admin_password=${FD_CAMERA_PASSWORD}_channel=1_stream=0&protocol=unicast&onvif=ture.sdp?real_stream",
+    "fps": 25,
+    "width": 640,
+    "height": 480
+  },
+  "esp32": {
+    "enabled": true,
+    "uri": "/dev/ttyUSB0",
+    "baudrate": 921600,
+    "wifi_offload": true
+  },
+  "sampler": {
+    "target_fps": 5
+  },
+  "baseline": {
+    "seconds_min": 5,
+    "seconds_max": 10
+  },
+  "ai": {
+    "adapter": "yolo",
+    "timeout_ms": 2000,
+    "model_path": "AI/models/best.pt",
+    "landmarker_path": "AI/models/face_landmarker.task",
+    "confidence_threshold": 0.25,
+    "fallback_mode": true
+  },
+  "response": {
+    "pre_event_ms": 2000,
+    "buffer_frames": 50,
+    "chunking_enabled": true,
+    "device_id": "CAR-09-HCM",
+    "uplink_mode": "esp32_gateway"
+  },
+  "rules": {
+    "_status": "CHUA_XAC_DINH: ngưỡng và độ tin cậy là giá trị tạm của Builder, MAIN sẽ tự thiết kế rồi thay. Không dùng làm số liệu đánh giá.",
+    "min_conf": 0.5,
+    "max_gap_ms": 600,
+    "eye_drowsiness": {
+      "trigger_ms": 1500,
+      "closed_labels": ["Eyeclosed", "closed", "close", "asleep", "Drowsy eye", "Eye_Closed", "eye_closed", "eye_close", "drowsy_eye"],
+      "open_labels": ["Attentive eye", "open", "Eye_Open", "eye_open", "open_eye", "Open-Eye"]
+    },
+    "mouth_yawn": {
+      "trigger_ms": 2500,
+      "yawn_labels": ["Yawn", "yawn", "Open-Mouth", "yawning", "mouth_open", "open_mouth", "Mouth_Open"],
+      "no_yawn_labels": ["noYawn", "mouth_closed", "mouth_close", "closed_mouth", "Mouth_Closed"]
+    }
+  },
+  "eval": {
+    "min_throughput_fps": 3000,
+    "max_p95_latency_ms": 1.0,
+    "max_p99_latency_ms": 5.0,
+    "max_queue_depth": 100,
+    "max_ram_growth_mb": 5.0,
+    "sustained_test_duration_s": 30
+  }
+}

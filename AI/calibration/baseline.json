@@ -1,0 +1,31 @@
+{
+    "calibration_duration": 5.0,
+    "samples": {
+        "raw": 40,
+        "valid_ear": 38,
+        "valid_mar": 40,
+        "valid_head_pose": 40
+    },
+    "ear": {
+        "mean": 0.2836,
+        "std": 0.0097
+    },
+    "mar": {
+        "mean": 0.088,
+        "std": 0.0198
+    },
+    "head_pose": {
+        "yaw": {
+            "mean": -8.2484,
+            "std": 6.5786
+        },
+        "pitch": {
+            "mean": 5.464,
+            "std": 0.7168
+        },
+        "roll": {
+            "mean": -3.4496,
+            "std": 1.2015
+        }
+    }
+}
