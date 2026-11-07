@@ -49,7 +49,7 @@
     "mouth_yawn": {
       "trigger_ms": 2500,
       "yawn_labels": ["Yawn", "yawn", "Open-Mouth", "yawning", "mouth_open", "open_mouth", "Mouth_Open"],
-      "no_yawn_labels": ["noYawn", "mouth_closed", "mouth_close", "closed_mouth", "Mouth_Closed"]
+      "no_yawn_labels": ["Normal", "normal", "noYawn", "no_yawn", "mouth_closed", "mouth_close", "closed_mouth", "Mouth_Closed"]
     }
   },
   "eval": {

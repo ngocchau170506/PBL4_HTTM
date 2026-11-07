@@ -92,13 +92,18 @@ def _is_drowsy(name):
 def _is_no_yawn(name):
     label = _normalize_label(name)
     return (
-        label in {"noyawn", "no_yawn", "mouth_closed", "mouth_close", "closed_mouth"}
+        label in {"normal", "noyawn", "no_yawn", "mouth_closed", "mouth_close", "closed_mouth"}
         or "noyawn" in label
         or "no_yawn" in label
         or "mouth_closed" in label
         or "mouth_close" in label
         or "closed_mouth" in label
     )
+
+
+def _is_normal_head(name):
+    label = _normalize_label(name)
+    return label in {"normal", "attentive_head", "normal_head"}
 
 
 def _is_yawning(name):
@@ -254,6 +259,7 @@ class DrowsinessPipeline:
         enable_event_recorder=True,
         event_recorder=None,
         cloud_sync=None,
+        enable_behavior_alerts=None,
     ):
         model_path = Path(model_path)
         self.cloud_sync = cloud_sync
@@ -307,12 +313,13 @@ class DrowsinessPipeline:
             f"{'SAN SANG (tái sử dụng)' if self._landmarker else 'KHONG CO (chi dung YOLO)'}"
         )
 
-        # Baseline cá nhân và ngưỡng động EAR / MAR
+        # Baseline cá nhân và ngưỡng động EAR / MAR / Head Pose
         self.baseline_path = Path(baseline_path or BASELINE_PATH)
         self.baseline = None
         self.baseline_valid = False
         self.ear_threshold = DEFAULT_EAR_THRESHOLD
         self.mar_threshold = DEFAULT_MAR_THRESHOLD
+        self.head_pose_baseline = (0.0, 0.0, 0.0)
         self._load_and_compute_thresholds()
 
         self.drowsy_state = AlertState.IDLE
@@ -323,6 +330,12 @@ class DrowsinessPipeline:
         self.head_yaw_threshold = float(os.getenv("HEAD_YAW_THRESHOLD_DEG", "35.0"))
         self.head_roll_threshold = float(os.getenv("HEAD_ROLL_THRESHOLD_DEG", "25.0"))
         self.tracking_lost_alert_s = float(os.getenv("TRACKING_LOST_ALERT_S", "3.0"))
+
+        # Cờ bật/tắt cảnh báo hành vi phụ (Smoking / phone) - mặc định False để tập trung giám sát buồn ngủ sớm
+        if enable_behavior_alerts is None:
+            self.enable_behavior_alerts = os.getenv("ENABLE_BEHAVIOR_ALERTS", "0") == "1"
+        else:
+            self.enable_behavior_alerts = bool(enable_behavior_alerts)
 
         # Cấu hình đọc 1 lần (trước đây os.getenv được gọi nhiều lần MỖI khung hình)
         self._headless = os.getenv("HEADLESS", "0") == "1"
@@ -343,6 +356,12 @@ class DrowsinessPipeline:
         self._distracted_started_at = None
         self.distracted_duration = 0.0
         self.distracted_state = AlertState.IDLE
+        self._smoking_started = None
+        self._smoking_started_at = None
+        self.smoking_duration = 0.0
+        self._phone_started = None
+        self._phone_started_at = None
+        self.phone_duration = 0.0
         self.last_head_pose = None
         self._last_face_seen_time = time.monotonic()
 
@@ -461,7 +480,7 @@ class DrowsinessPipeline:
         return 0.0
 
     def _load_and_compute_thresholds(self):
-        """Doc baseline.json, validate va tinh toan nguong EAR/MAR dong."""
+        """Doc baseline.json, validate va tinh toan nguong EAR/MAR va goc dau chuan dong."""
         validated = validate_baseline(self.baseline_path, minimum_samples=MIN_VALID_SAMPLES)
         if validated is not None:
             self.baseline = validated
@@ -470,16 +489,30 @@ class DrowsinessPipeline:
             mar_mean = float(validated["mar"]["mean"])
             self.ear_threshold = round(ear_mean * EAR_BASELINE_FACTOR, 4)
             self.mar_threshold = round(max(mar_mean * MAR_BASELINE_FACTOR, MAR_MIN_THRESHOLD), 4)
+            hp = validated.get("head_pose") if isinstance(validated, dict) else None
+            if isinstance(hp, dict):
+                try:
+                    self.head_pose_baseline = (
+                        float(hp.get("yaw", {}).get("mean", 0.0)),
+                        float(hp.get("pitch", {}).get("mean", 0.0)),
+                        float(hp.get("roll", {}).get("mean", 0.0)),
+                    )
+                except (TypeError, ValueError):
+                    self.head_pose_baseline = (0.0, 0.0, 0.0)
+            else:
+                self.head_pose_baseline = (0.0, 0.0, 0.0)
             print(
                 f"[Pipeline] Baseline hop le ({self.baseline_path.name}): "
                 f"EAR mean={ear_mean:.4f} -> threshold={self.ear_threshold:.4f} (x{EAR_BASELINE_FACTOR}); "
-                f"MAR mean={mar_mean:.4f} -> threshold={self.mar_threshold:.4f}"
+                f"MAR mean={mar_mean:.4f} -> threshold={self.mar_threshold:.4f}; "
+                f"HeadPose offset=(yaw={self.head_pose_baseline[0]:.1f}, pitch={self.head_pose_baseline[1]:.1f}, roll={self.head_pose_baseline[2]:.1f})"
             )
         else:
             self.baseline = None
             self.baseline_valid = False
             self.ear_threshold = DEFAULT_EAR_THRESHOLD
             self.mar_threshold = DEFAULT_MAR_THRESHOLD
+            self.head_pose_baseline = (0.0, 0.0, 0.0)
             print(
                 f"[Pipeline] CANH BAO: Baseline khong hop le hoac chua du mau tai {self.baseline_path}. "
                 f"Su dung nguong mac dinh: EAR={self.ear_threshold}, MAR={self.mar_threshold}"
@@ -564,13 +597,21 @@ class DrowsinessPipeline:
         elif boxes_xyxy:
             rendered = frame.copy()
             for name, conf, x1, y1, x2, y2 in boxes_xyxy:
-                color = (0, 0, 255) if (_is_drowsy(name) or _is_yawning(name) or _is_distracted_head(name) or _is_smoking(name) or _is_phone(name)) else (0, 255, 0)
+                is_behavior = _is_smoking(name) or _is_phone(name)
+                is_alert_box = (
+                    _is_drowsy(name)
+                    or _is_yawning(name)
+                    or _is_distracted_head(name)
+                    or (self.enable_behavior_alerts and is_behavior)
+                )
+                color = (0, 0, 255) if is_alert_box else (0, 255, 0)
                 cv2.rectangle(rendered, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(rendered, f"{name} {conf:.2f}", (x1, max(18, y1 - 6)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         yolo_time_s = time.perf_counter() - t_yolo_start
         detected_classes = [name for name, _ in detections]
         yolo_eye = yolo_mouth = None
+        yolo_normal = False
         yolo_distracted = False
         yolo_smoking = False
         yolo_phone = False
@@ -585,6 +626,8 @@ class DrowsinessPipeline:
             elif _is_no_yawn(name):
                 if yolo_mouth is None:
                     yolo_mouth = False
+            if _is_normal_head(name):
+                yolo_normal = True
             if _is_distracted_head(name):
                 yolo_distracted = True
             if _is_smoking(name):
@@ -611,9 +654,11 @@ class DrowsinessPipeline:
         decisions, tracking_lost = self.fusion.update(
             monotonic_time, {"eye": yolo_eye, "mouth": yolo_mouth},
             {"eye": mp_eye, "mouth": mp_mouth},
-            mp_result["valid"] or yolo_eye is not None or yolo_mouth is not None
-            or any(name.casefold().replace("_", " ") in {"attentive head", "distracted head"}
-                   for name in detected_classes),
+            mp_result["valid"]
+            or yolo_eye is not None
+            or yolo_mouth is not None
+            or yolo_normal
+            or yolo_distracted,
         )
         instantaneous_drowsy = decisions["eye"].active
         instantaneous_yawning = decisions["mouth"].active
@@ -625,6 +670,16 @@ class DrowsinessPipeline:
             instantaneous_yawning, "_yawning_started", monotonic_time,
             "_yawning_started_at", wall_time,
         )
+        smoking_duration = self._update_timer(
+            yolo_smoking, "_smoking_started", monotonic_time,
+            "_smoking_started_at", wall_time,
+        )
+        phone_duration = self._update_timer(
+            yolo_phone, "_phone_started", monotonic_time,
+            "_phone_started_at", wall_time,
+        )
+        self.smoking_duration = smoking_duration
+        self.phone_duration = phone_duration
 
         # Xu ly Head Pose 3D & Tracking Lost cho Distraction (Guc dau / Nghieng dau / Mat tap trung)
         pose = mp_result.get("pose")
@@ -645,6 +700,7 @@ class DrowsinessPipeline:
             mp_result["valid"]
             or yolo_eye is not None
             or yolo_mouth is not None
+            or yolo_normal
             or yolo_distracted
             or any(_is_eye_open(name) or _is_no_yawn(name) for name in detected_classes)
         )
@@ -657,10 +713,14 @@ class DrowsinessPipeline:
         is_head_distracted = yolo_distracted
         if self._head_pose_smooth is not None and mp_result["valid"]:
             s_yaw, s_pitch, s_roll = self._head_pose_smooth
+            base_yaw, base_pitch, base_roll = self.head_pose_baseline
+            rel_yaw = s_yaw - base_yaw
+            rel_pitch = s_pitch - base_pitch
+            rel_roll = s_roll - base_roll
             if (
-                abs(s_pitch) >= self.head_pitch_threshold
-                or abs(s_roll) >= self.head_roll_threshold
-                or abs(s_yaw) >= self.head_yaw_threshold
+                abs(rel_pitch) >= self.head_pitch_threshold
+                or abs(rel_roll) >= self.head_roll_threshold
+                or abs(rel_yaw) >= self.head_yaw_threshold
             ):
                 is_head_distracted = True
 
@@ -671,7 +731,8 @@ class DrowsinessPipeline:
         if lost_face_duration >= self.tracking_lost_alert_s and (current_spd >= 10.0 or allow_stationary):
             is_tracking_lost_distracted = True
 
-        instantaneous_distracted = is_head_distracted or is_tracking_lost_distracted
+        is_behavior_distracted = bool(self.enable_behavior_alerts and (yolo_smoking or yolo_phone))
+        instantaneous_distracted = is_head_distracted or is_tracking_lost_distracted or is_behavior_distracted
         distracted_duration = self._update_timer(
             instantaneous_distracted, "_distracted_started", monotonic_time,
             "_distracted_started_at", wall_time,
@@ -823,7 +884,7 @@ class DrowsinessPipeline:
                 self._alert_latency_ms = max(0.0, (time.monotonic() - (monotonic_time - alert_duration)) * 1000)
         else:
             self._alert_latency_ms = None
-        if confirmed_alert == "NORMAL" and yolo_eye is None and yolo_mouth is None and not mp_result["valid"]:
+        if confirmed_alert == "NORMAL" and yolo_eye is None and yolo_mouth is None and not yolo_normal and not mp_result["valid"]:
             confirmed_alert = "UNKNOWN"
         esp_result = None
         confirmed_at = iso_timestamp(wall_time)
@@ -838,12 +899,16 @@ class DrowsinessPipeline:
             alert_reason = f"Ngáp {yawning_duration:.1f}s/{self.yawning_threshold:.1f}s (nguồn={decisions['mouth'].source}{mar_str})"
         elif esp_target == "DISTRACTED":
             if is_head_distracted and self._head_pose_smooth is not None and mp_result.get("valid"):
+                base_yaw, base_pitch, _ = self.head_pose_baseline
                 alert_reason = (
                     f"Lệch góc đầu {distracted_duration:.1f}s/{self.distraction_threshold:.1f}s "
-                    f"(Pitch={self._head_pose_smooth[1]:.1f}°, Yaw={self._head_pose_smooth[0]:.1f}°)"
+                    f"(ΔPitch={self._head_pose_smooth[1] - base_pitch:.1f}°, ΔYaw={self._head_pose_smooth[0] - base_yaw:.1f}°)"
                 )
             elif yolo_distracted:
                 alert_reason = f"YOLO phát hiện lệch đầu {distracted_duration:.1f}s/{self.distraction_threshold:.1f}s (Distracted Head)"
+            elif is_behavior_distracted:
+                behavior_label = "Smoking" if yolo_smoking else "phone"
+                alert_reason = f"YOLO phát hiện hành vi mất tập trung {distracted_duration:.1f}s ({behavior_label})"
             else:
                 alert_reason = f"Mất dấu mặt {lost_face_duration:.1f}s ở tốc độ {current_spd:.1f}km/h"
         elif confirmed_alert == "CONFLICT":
@@ -921,9 +986,13 @@ class DrowsinessPipeline:
             "mouth_active": instantaneous_yawning,
             "yolo_eye": yolo_eye,
             "yolo_mouth": yolo_mouth,
+            "yolo_normal": yolo_normal,
             "yolo_distracted": yolo_distracted,
             "yolo_smoking": yolo_smoking,
             "yolo_phone": yolo_phone,
+            "smoking_duration": smoking_duration,
+            "phone_duration": phone_duration,
+            "enable_behavior_alerts": self.enable_behavior_alerts,
             "mp_eye": mp_eye,
             "mp_mouth": mp_mouth,
             "tracking_lost": tracking_lost,
@@ -1068,6 +1137,10 @@ class DrowsinessPipeline:
         self._drowsy_started_at = self._yawning_started_at = None
         self._distracted_started = self._distracted_started_at = None
         self.distracted_state = AlertState.IDLE
+        self._smoking_started = self._smoking_started_at = None
+        self.smoking_duration = 0.0
+        self._phone_started = self._phone_started_at = None
+        self.phone_duration = 0.0
         self._head_pose_smooth = None
         self._active_esp_alert = None
         if self.event_recorder is not None:

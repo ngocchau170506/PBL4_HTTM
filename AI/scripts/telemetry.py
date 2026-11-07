@@ -291,7 +291,10 @@ class EmbeddedFpsGovernor:
         elif level == 2:
             fps, duty, every_y, every_m, imgsz = min(b, 3.0), 0.60, 2, 2, self.base_imgsz
         else:
-            fps, duty, every_y, every_m, imgsz = min(b, 2.0), 0.40, 2, 2, min(self.base_imgsz, 256)
+            # L3 giữ imgsz tối thiểu 320 (nếu base_imgsz >= 320) để không mất các box mắt nhỏ (Eye_Closed/Eye_Open),
+            # vì tần suất YOLO đã giảm còn 1 Hz (fps<=2, every_y=2) và duty_cap=0.40 đã đủ hạ nhiệt.
+            l3_imgsz = min(self.base_imgsz, 320) if self.base_imgsz >= 320 else self.base_imgsz
+            fps, duty, every_y, every_m, imgsz = min(b, 2.0), 0.40, 2, 2, l3_imgsz
         interval = 1.0 / max(0.5, fps)
         hold = max(every_y, every_m) * interval * 1.25 + 0.25
         # Lịch luân phiên: mỗi model chạy khi tick % every == offset (YOLO offset 0, MP offset 1)
