@@ -695,6 +695,25 @@ class CloudSyncManager:
         self.last_telemetry_route = "PI_DIRECT_HTTP"
         return self._http_post("/api/v1/telemetry", telemetry)
 
+    def _send_violation(self, v_item: Dict[str, Any]) -> Tuple[bool, str]:
+        """Gửi sự kiện vi phạm: thử HTTP trực tiếp trước (để giữ nguyên ảnh Base64 nếu Pi có mạng),
+        nếu thất bại hoặc đang ở chế độ esp32_gateway không có HTTP trực tiếp thì đẩy qua ESP32 Gateway."""
+        esp = self.esp_context
+        ok, resp = self._http_post("/api/v1/violation", v_item, timeout_s=4.0)
+        if ok:
+            return True, resp
+        if (
+            self.uplink_mode == "esp32_gateway"
+            and esp is not None
+            and getattr(esp, "gateway_ready", False)
+            and hasattr(esp, "send_violation_frame")
+            and esp.send_violation_frame(v_item)
+        ):
+            self.telemetry_via_esp += 1
+            self.last_telemetry_route = "ESP32_GATEWAY"
+            return True, "VIA_ESP32"
+        return ok, resp
+
     def _run_loop(self):
         last_telemetry_time = 0.0
         last_discover_time = 0.0
@@ -712,7 +731,7 @@ class CloudSyncManager:
                 except queue.Empty:
                     break
                 v_item = self._build_violation_payload(job)
-                ok, resp = self._http_post("/api/v1/violation", v_item, timeout_s=4.0)
+                ok, resp = self._send_violation(v_item)
                 if ok:
                     self.total_violations_sent += 1
                 else:

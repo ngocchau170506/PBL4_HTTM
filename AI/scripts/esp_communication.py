@@ -378,6 +378,24 @@ class EspCommunicator:
             encode_fd_frame(frame_type=FRAME_TYPE_TELEMETRY, payload=body, seq=self._frame_seq)
         )
 
+    def send_violation_frame(self, payload: Dict[str, Any], max_bytes: int = 3800) -> bool:
+        """Đẩy gói sự kiện vi phạm (đã lược ảnh lớn vượt trần UART 3.8KB) qua ESP32 Gateway lên /api/v1/violation."""
+        if self.mode != "SERIAL" or not self.connected:
+            return False
+        compact = dict(payload)
+        if len(str(compact.get("evidence_image", ""))) > 1500:
+            compact["evidence_image"] = ""
+        try:
+            body = json.dumps(compact, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        except (TypeError, ValueError):
+            return False
+        if len(body) > max_bytes:
+            return False
+        self._frame_seq = (self._frame_seq + 1) & 0xFFFF
+        return self.send_frame_bytes(
+            encode_fd_frame(frame_type=FRAME_TYPE_VIOLATION, payload=body, seq=self._frame_seq)
+        )
+
     @property
     def connected(self) -> bool:
         return bool(self._serial is not None and self._serial.is_open)

@@ -19,6 +19,53 @@ for p in (str(repo_root), str(repo_root / "src")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+
+def _autoload_pi_env() -> None:
+    """Tự động nạp biến môi trường từ AI/deploy/pi.env trên Linux (Raspberry Pi) hoặc khi LOAD_PI_ENV=1,
+    dùng setdefault để không ghi đè các biến người dùng đã chủ động export qua SSH."""
+    if not (sys.platform.startswith("linux") or os.getenv("LOAD_PI_ENV", "0") == "1"):
+        return
+    env_path = repo_root / "AI" / "deploy" / "pi.env"
+    if not env_path.exists():
+        return
+    try:
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            key = key.strip()
+            # Cắt bỏ comment cuối dòng nếu không nằm trong dấu nháy
+            if " #" in val and not (val.startswith(("'", '"')) and val.endswith(("'", '"'))):
+                val = val.split(" #", 1)[0]
+            val = val.strip().strip("'").strip('"')
+            if key:
+                os.environ.setdefault(key, val)
+    except Exception:
+        pass
+
+
+def _arm64_lacks_aes() -> bool:
+    """Kiểm tra nhanh (<0.1ms) xem CPU ARM64 trên Linux (ví dụ BCM2711 Cortex-A72 của Pi 4)
+    có thiếu tập lệnh phần cứng AES hay không để tránh lỗi SIGILL khi nạp MediaPipe."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        cpuinfo = Path("/proc/cpuinfo")
+        if not cpuinfo.exists():
+            return False
+        text = cpuinfo.read_text(encoding="utf-8", errors="ignore")
+        for line in text.splitlines():
+            if line.lower().startswith("features"):
+                feats = set(line.split(":", 1)[-1].lower().split())
+                return "aes" not in feats
+    except Exception:
+        pass
+    return False
+
+
+_autoload_pi_env()
+
 from AI.scripts.telemetry import EmbeddedFpsGovernor, configure_embedded_threads
 
 # Khởi tạo giới hạn luồng tính toán phần cứng trước khi nạp OpenCV / PyTorch
@@ -134,7 +181,7 @@ def run():
     esp = EspCommunicator(
         mode=os.getenv("ESP_MODE", "SERIAL"),
         port=os.getenv("ESP_PORT"),
-        baudrate=int(os.getenv("ESP_BAUDRATE", "115200")),
+        baudrate=int(os.getenv("ESP_BAUDRATE", "921600")),
         require_ack=os.getenv("ESP_REQUIRE_ACK", "1") == "1",
     )
     esp.send_status("NORMAL")
@@ -155,6 +202,8 @@ def run():
         try:
             if os.getenv("DISABLE_MEDIAPIPE", "0") == "1":
                 raise RuntimeError("Disabled via DISABLE_MEDIAPIPE=1")
+            if _arm64_lacks_aes():
+                raise RuntimeError("ARM64 CPU lacks hardware AES (Pi 4 Cortex-A72); skipped to prevent SIGILL")
             probe = subprocess.run(
                 [
                     sys.executable,
