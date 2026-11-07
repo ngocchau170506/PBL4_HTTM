@@ -339,11 +339,23 @@ class DrowsinessPipeline:
         self.head_roll_threshold = float(os.getenv("HEAD_ROLL_THRESHOLD_DEG", "25.0"))
         self.tracking_lost_alert_s = float(os.getenv("TRACKING_LOST_ALERT_S", "3.0"))
 
-        # Cờ bật/tắt cảnh báo hành vi phụ (Smoking / phone) - mặc định False để tập trung giám sát buồn ngủ sớm
+        # Cờ bật/tắt hoàn toàn việc đọc & xử lý hành vi phụ (Smoking / phone)
+        # Mặc định False: chặn ngay từ tầng YOLO predict(classes=...) và bỏ qua toàn bộ xử lý ngầm
         if enable_behavior_alerts is None:
             self.enable_behavior_alerts = os.getenv("ENABLE_BEHAVIOR_ALERTS", "0") == "1"
         else:
             self.enable_behavior_alerts = bool(enable_behavior_alerts)
+
+        self._allowed_class_ids = None
+        if self.model is not None and not self.enable_behavior_alerts:
+            try:
+                self._allowed_class_ids = [
+                    int(cid)
+                    for cid, cname in self.model.names.items()
+                    if not (_is_smoking(cname) or _is_phone(cname))
+                ]
+            except Exception:
+                self._allowed_class_ids = None
 
         # Cấu hình đọc 1 lần (trước đây os.getenv được gọi nhiều lần MỖI khung hình)
         self._headless = os.getenv("HEADLESS", "0") == "1"
@@ -534,8 +546,14 @@ class DrowsinessPipeline:
         try:
             import numpy as np
             dummy = np.zeros((self._yolo_imgsz, self._yolo_imgsz, 3), dtype=np.uint8)
-            self.model.predict(source=dummy, imgsz=self._yolo_imgsz, conf=CONFIDENCE_THRESHOLD,
-                               max_det=self._yolo_max_det, verbose=False)
+            self.model.predict(
+                source=dummy,
+                imgsz=self._yolo_imgsz,
+                conf=CONFIDENCE_THRESHOLD,
+                max_det=self._yolo_max_det,
+                classes=self._allowed_class_ids,
+                verbose=False,
+            )
         except Exception as exc:
             print(f"[Pipeline] YOLO warm-up bo qua: {exc}")
 
@@ -547,14 +565,21 @@ class DrowsinessPipeline:
         try:
             if self.model is None:
                 raise RuntimeError(self.model_error or "YOLO unavailable")
-            results = self.model.predict(source=frame, imgsz=int(imgsz),
-                                         conf=CONFIDENCE_THRESHOLD, max_det=self._yolo_max_det,
-                                         verbose=False)
+            results = self.model.predict(
+                source=frame,
+                imgsz=int(imgsz),
+                conf=CONFIDENCE_THRESHOLD,
+                max_det=self._yolo_max_det,
+                classes=self._allowed_class_ids,
+                verbose=False,
+            )
             plotted = None
             if not self._headless and self.enable_perf_log:
                 plotted = results[0].plot()
             for box in results[0].boxes:
                 name = self.model.names[int(box.cls[0].item())]
+                if not self.enable_behavior_alerts and (_is_smoking(name) or _is_phone(name)):
+                    continue
                 conf = float(box.conf[0].item())
                 detections.append((name, conf))
                 if self._headless:
@@ -592,6 +617,17 @@ class DrowsinessPipeline:
         rendered = frame  # chỉ copy khi thật sự cần vẽ lên ảnh (tiết kiệm 1 lần copy 0.9MB/khung)
         if run_yolo or self.model is None:
             detections, boxes_xyxy, plotted, yolo_error = self._run_yolo(frame, imgsz)
+            if not self.enable_behavior_alerts:
+                if detections:
+                    detections = [
+                        (name, conf)
+                        for name, conf in detections
+                        if not (_is_smoking(name) or _is_phone(name))
+                    ]
+                if boxes_xyxy:
+                    boxes_xyxy = [
+                        b for b in boxes_xyxy if not (_is_smoking(b[0]) or _is_phone(b[0]))
+                    ]
             self._yolo_cache = (monotonic_time, detections, boxes_xyxy, None, yolo_error)
         elif self._yolo_cache is not None and (monotonic_time - self._yolo_cache[0]) <= hold_s:
             _, detections, boxes_xyxy, _, yolo_error = self._yolo_cache
@@ -606,6 +642,8 @@ class DrowsinessPipeline:
             rendered = frame.copy()
             for name, conf, x1, y1, x2, y2 in boxes_xyxy:
                 is_behavior = _is_smoking(name) or _is_phone(name)
+                if not self.enable_behavior_alerts and is_behavior:
+                    continue
                 is_alert_box = (
                     _is_drowsy(name)
                     or _is_yawning(name)
@@ -638,10 +676,11 @@ class DrowsinessPipeline:
                 yolo_normal = True
             if _is_distracted_head(name):
                 yolo_distracted = True
-            if _is_smoking(name):
-                yolo_smoking = True
-            if _is_phone(name):
-                yolo_phone = True
+            if self.enable_behavior_alerts:
+                if _is_smoking(name):
+                    yolo_smoking = True
+                if _is_phone(name):
+                    yolo_phone = True
         t_mp_start = time.perf_counter()
         if run_mp or self._mp_cache is None:
             mp_result = self._run_mediapipe(frame, monotonic_time)
@@ -678,14 +717,18 @@ class DrowsinessPipeline:
             instantaneous_yawning, "_yawning_started", monotonic_time,
             "_yawning_started_at", wall_time,
         )
-        smoking_duration = self._update_timer(
-            yolo_smoking, "_smoking_started", monotonic_time,
-            "_smoking_started_at", wall_time,
-        )
-        phone_duration = self._update_timer(
-            yolo_phone, "_phone_started", monotonic_time,
-            "_phone_started_at", wall_time,
-        )
+        if self.enable_behavior_alerts:
+            smoking_duration = self._update_timer(
+                yolo_smoking, "_smoking_started", monotonic_time,
+                "_smoking_started_at", wall_time,
+            )
+            phone_duration = self._update_timer(
+                yolo_phone, "_phone_started", monotonic_time,
+                "_phone_started_at", wall_time,
+            )
+        else:
+            smoking_duration = 0.0
+            phone_duration = 0.0
         self.smoking_duration = smoking_duration
         self.phone_duration = phone_duration
 
