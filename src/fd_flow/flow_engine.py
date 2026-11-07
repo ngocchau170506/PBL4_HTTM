@@ -1,5 +1,9 @@
 """Bộ điều phối cây luồng trung tâm FLOW_TREE (FEAT-012 & tích hợp G2 FEAT-020/021/022).
 
+LƯU Ý KIẾN TRÚC (PROPOSE-CR-001):
+- Module này thuộc khung mô phỏng/kiểm thử đơn luồng (workbench), KHÔNG dùng cho bản chạy thật trên Raspberry Pi.
+- Bản chạy thật trên xe nằm tại `AI/app/main.py` và `AI/scripts/*`.
+
 - Nối các fd: connect.camera -> signal -> process.sampler -> (process.baseline & process.ai) -> response.
 - Kiểm tra kiểu gói dữ liệu tại mỗi cạnh trong FLOW_TREE (sai kiểu -> E_FLOW_EDGE_TYPE kèm tên cạnh).
 - Đồng bộ trạng thái hệ thống (BASELINE <-> MONITOR) theo tiến trình khóa BaselineProfile của từng tài xế.

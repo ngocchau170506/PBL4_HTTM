@@ -1,5 +1,9 @@
 """Bộ mô phỏng và tiêm lỗi hạ tầng có kiểm soát (FEAT-051).
 
+LƯU Ý KIẾN TRÚC (PROPOSE-CR-001):
+- Module này chỉ dùng cho môi trường tiêm lỗi mô phỏng (workbench), KHÔNG dùng cho bản chạy thật trên Raspberry Pi.
+- Bản chạy thật trên xe nằm tại `AI/app/main.py` và `AI/scripts/*`.
+
 - Đọc kịch bản lỗi từ workbench/faults/*.yaml bằng bộ phân tích thuần thư viện chuẩn.
 - Hỗ trợ 5 nhóm kịch bản:
   1. network_drop: Mạng yếu / mất kết nối máy chủ (E_RESP_SEND, E_RESP_NO_ACK, E_RESP_BUFFER_OVERRUN).

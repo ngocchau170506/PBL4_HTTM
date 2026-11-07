@@ -1,5 +1,9 @@
 """Bộ thu thập số liệu đánh giá hạ tầng luồng dữ liệu (FEAT-050).
 
+LƯU Ý KIẾN TRÚC (PROPOSE-CR-001):
+- Module này chỉ dùng cho môi trường benchmark/đánh giá (workbench), KHÔNG dùng cho bản chạy thật trên Raspberry Pi.
+- Bản chạy thật trên xe nằm tại `AI/app/main.py` và `AI/scripts/telemetry.py`.
+
 - Đo thông lượng thực tế (FPS), phân vị độ trễ từng chặng (P50, P90, P95, P99, Max),
   chiều sâu hàng đợi (queue_depth) và mức tăng trưởng bộ nhớ (RAM).
 - Không can thiệp hay thiết kế thuật toán AI; chỉ quan sát hạ tầng luồng.

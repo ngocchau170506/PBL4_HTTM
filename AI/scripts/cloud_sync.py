@@ -6,6 +6,7 @@ Hỗ trợ gửi bất đồng bộ qua HTTP REST API và lưu đệm SQLite (Of
 from __future__ import annotations
 
 import base64
+import contextlib
 from dataclasses import dataclass, field
 import json
 import os
@@ -19,6 +20,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import urllib.error
 import urllib.request
 import cv2
+
+from AI.scripts.diagnostic_log import emit_error_event
 
 try:
     from AI.scripts.gps_service import GpsManager
@@ -249,6 +252,10 @@ class CloudSyncManager:
             self.db_path = Path(db_path)
 
         self._lock = threading.RLock()
+        self.last_lock_wait_ms: float = 0.0
+        self.max_lock_wait_ms: float = 0.0
+        self.last_lock_hold_ms: float = 0.0
+        self.max_lock_hold_ms: float = 0.0
         self._init_sqlite()
 
         self._violation_queue: queue.Queue[Dict[str, Any]] = queue.Queue(maxsize=8)
@@ -275,8 +282,27 @@ class CloudSyncManager:
         if self.enabled and self.server_url:
             self._start_worker()
 
+    @contextlib.contextmanager
+    def _acquire_lock(self):
+        """Đo thời gian chờ (wait_ms) và thời gian giữ (hold_ms) của RLock thực tế (PROPOSE-CR-001 Bước 3)."""
+        t0 = time.perf_counter()
+        self._lock.acquire()
+        t_acq = time.perf_counter()
+        wait_ms = (t_acq - t0) * 1000.0
+        self.last_lock_wait_ms = round(wait_ms, 3)
+        if wait_ms > self.max_lock_wait_ms:
+            self.max_lock_wait_ms = round(wait_ms, 3)
+        try:
+            yield
+        finally:
+            hold_ms = (time.perf_counter() - t_acq) * 1000.0
+            self.last_lock_hold_ms = round(hold_ms, 3)
+            if hold_ms > self.max_lock_hold_ms:
+                self.max_lock_hold_ms = round(hold_ms, 3)
+            self._lock.release()
+
     def _init_sqlite(self):
-        with self._lock:
+        with self._acquire_lock():
             conn = sqlite3.connect(self.db_path, check_same_thread=False)
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS pending_queue (
@@ -292,7 +318,7 @@ class CloudSyncManager:
             conn.close()
 
     def set_context(self, esp=None, pipeline=None, camera_source=None, gps=None):
-        with self._lock:
+        with self._acquire_lock():
             if esp is not None:
                 self.esp_context = esp
             if pipeline is not None:
@@ -303,7 +329,7 @@ class CloudSyncManager:
                 self.gps_manager = gps
 
     def update_state(self, state: Dict[str, Any]):
-        with self._lock:
+        with self._acquire_lock():
             self.latest_state = dict(state)
 
     def _start_worker(self):
@@ -325,7 +351,7 @@ class CloudSyncManager:
                 pass
 
     def build_telemetry_payload(self) -> Dict[str, Any]:
-        with self._lock:
+        with self._acquire_lock():
             st = dict(self.latest_state)
             esp = self.esp_context
             cam = self.camera_context
@@ -611,6 +637,15 @@ class CloudSyncManager:
             self._violation_queue.put_nowait(job)
         except queue.Full:
             # Hàng đợi đầy (mất mạng kéo dài): lưu thẳng xuống SQLite theo bản không ảnh để không mất sự kiện
+            emit_error_event(
+                code="E_RESP_BUFFER_OVERRUN",
+                source="response",
+                node_path="response.cloud_sync.violation_queue",
+                err_class="performance",
+                message=f"Hàng đợi vi phạm RAM đầy (maxsize=8) cho {alert_type}; chuyển sang SQLite spool",
+                recoverable=True,
+                trace_id=event_id,
+            )
             job["frame"] = None
             self._spool_to_db("/api/v1/violation", self._build_violation_payload(job))
 
@@ -681,6 +716,15 @@ class CloudSyncManager:
                 if ok:
                     self.total_violations_sent += 1
                 else:
+                    emit_error_event(
+                        code="E_RESP_SEND",
+                        source="response",
+                        node_path="response.cloud_sync.violation",
+                        err_class="source",
+                        message=f"Gửi vi phạm {v_item.get('alert_type')} thất bại ({resp}) -> lưu SQLite spool",
+                        recoverable=True,
+                        trace_id=str(v_item.get("event_id", "vio")),
+                    )
                     self._spool_to_db("/api/v1/violation", v_item)
 
             if now - last_telemetry_time >= self.telemetry_interval:
@@ -695,8 +739,18 @@ class CloudSyncManager:
                     if resp != "VIA_ESP32":
                         self._drain_spool()
                 else:
+                    was_online = self.server_online
                     self.server_online = False
                     self.last_sync_status = f"MẤT_KẾT_NỐI ({resp})"
+                    if was_online:
+                        emit_error_event(
+                            code="E_RESP_SEND",
+                            source="response",
+                            node_path="response.cloud_sync.telemetry",
+                            err_class="source",
+                            message=f"Mất kết nối đồng bộ máy chủ ({self.server_url}): {resp}",
+                            recoverable=True,
+                        )
                     # Dò lại IP Server bằng UDP broadcast (nhẹ), lùi dần 30s -> 300s để không tạo
                     # các đợt tải mạng/CPU định kỳ khi Server tắt lâu.
                     if now - last_discover_time >= self._discover_backoff_s:
@@ -760,11 +814,13 @@ class CloudSyncManager:
     def _spool_to_db(self, endpoint: str, payload: Dict[str, Any]):
         """Lưu gói tin vào SQLite khi mất kết nối mạng."""
         try:
-            with self._lock:
+            payload_json = json.dumps(payload, ensure_ascii=False)
+            now_ts = time.time()
+            with self._acquire_lock():
                 conn = sqlite3.connect(self.db_path, check_same_thread=False)
                 conn.execute(
                     "INSERT INTO pending_queue (endpoint, payload, created_at, attempts) VALUES (?, ?, ?, 0)",
-                    (endpoint, json.dumps(payload, ensure_ascii=False), time.time()),
+                    (endpoint, payload_json, now_ts),
                 )
                 conn.commit()
                 # Đếm số lượng chờ gửi
@@ -776,9 +832,13 @@ class CloudSyncManager:
             print(f"[CLOUD SYNC DB ERROR] {e}")
 
     def _drain_spool(self, max_items: int = 20):
-        """Gửi bù các gói tin vi phạm/telemetry đã bị nghẽn trong lúc mất mạng."""
+        """Gửi bù các gói tin vi phạm/telemetry đã bị nghẽn trong lúc mất mạng.
+
+        PROPOSE-CR-001 Bước 3: Tuyệt đối KHÔNG giữ self._lock trong lúc gọi mạng _http_post()
+        để không bao giờ chặn luồng suy luận AI khi update_state().
+        """
         try:
-            with self._lock:
+            with self._acquire_lock():
                 conn = sqlite3.connect(self.db_path, check_same_thread=False)
                 cur = conn.cursor()
                 rows = cur.execute(
@@ -790,30 +850,39 @@ class CloudSyncManager:
                     self.pending_spool_count = cur.fetchone()[0]
                     conn.close()
                     return
+                conn.close()
 
-                for row_id, endpoint, payload_str, attempts in rows:
-                    try:
-                        payload = json.loads(payload_str)
-                        ok, _ = self._http_post(endpoint, payload, timeout_s=2.5)
-                        if ok:
-                            conn.execute("DELETE FROM pending_queue WHERE id = ?", (row_id,))
-                            conn.commit()
-                            if endpoint == "/api/v1/violation":
-                                self.total_violations_sent += 1
-                            else:
-                                self.total_packets_sent += 1
-                        else:
-                            # Tăng thời gian chờ thử lại (Exponential backoff)
-                            next_at = time.time() + min(60.0, 2.0 ** min(attempts, 6))
-                            conn.execute(
-                                "UPDATE pending_queue SET attempts = attempts + 1, next_attempt_at = ? WHERE id = ?",
-                                (next_at, row_id),
-                            )
-                            conn.commit()
-                            break  # Tạm ngừng xả queue nếu server lại nghẽn
-                    except Exception:
-                        pass
+            # Thực hiện truyền HTTP hoàn toàn BÊN NGOÀI khóa RLock
+            delivered_ids: List[Tuple[int, str]] = []
+            failed_update: Optional[Tuple[float, int]] = None
+            for row_id, endpoint, payload_str, attempts in rows:
+                try:
+                    payload = json.loads(payload_str)
+                    ok, _ = self._http_post(endpoint, payload, timeout_s=2.5)
+                    if ok:
+                        delivered_ids.append((row_id, endpoint))
+                    else:
+                        next_at = time.time() + min(60.0, 2.0 ** min(attempts, 6))
+                        failed_update = (next_at, row_id)
+                        break  # Tạm ngừng xả queue nếu server lại nghẽn
+                except Exception:
+                    pass
 
+            with self._acquire_lock():
+                conn = sqlite3.connect(self.db_path, check_same_thread=False)
+                cur = conn.cursor()
+                for row_id, endpoint in delivered_ids:
+                    conn.execute("DELETE FROM pending_queue WHERE id = ?", (row_id,))
+                    if endpoint == "/api/v1/violation":
+                        self.total_violations_sent += 1
+                    else:
+                        self.total_packets_sent += 1
+                if failed_update is not None:
+                    conn.execute(
+                        "UPDATE pending_queue SET attempts = attempts + 1, next_attempt_at = ? WHERE id = ?",
+                        failed_update,
+                    )
+                conn.commit()
                 cur.execute("SELECT COUNT(*) FROM pending_queue")
                 self.pending_spool_count = cur.fetchone()[0]
                 conn.close()
@@ -828,7 +897,7 @@ class CloudSyncManager:
         if now_m - getattr(self, "_spool_count_ts", 0.0) >= 5.0:
             self._spool_count_ts = now_m
             try:
-                with self._lock:
+                with self._acquire_lock():
                     conn = sqlite3.connect(self.db_path, check_same_thread=False)
                     cur = conn.cursor()
                     cur.execute("SELECT COUNT(*) FROM pending_queue")
@@ -853,6 +922,12 @@ class CloudSyncManager:
             "uplink_mode": self.uplink_mode,
             "telemetry_route": self.last_telemetry_route,
             "telemetry_via_esp": self.telemetry_via_esp,
+            "lock_metrics": {
+                "last_wait_ms": self.last_lock_wait_ms,
+                "max_wait_ms": self.max_lock_wait_ms,
+                "last_hold_ms": self.last_lock_hold_ms,
+                "max_hold_ms": self.max_lock_hold_ms,
+            },
             "access_info": {
                 "local_ip": self.access_info.local_ip,
                 "dashboard_url": self.access_info.dashboard_url,

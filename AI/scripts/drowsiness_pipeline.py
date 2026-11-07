@@ -27,6 +27,7 @@ from AI.scripts.calibration import (
     calculate_mar,
     validate_baseline,
 )
+from AI.scripts.diagnostic_log import emit_error_event
 from AI.scripts.esp_communication import EspCommunicator
 from AI.scripts.sensor_fusion import SensorFusion
 from AI.scripts.telemetry import Telemetry
@@ -272,7 +273,14 @@ class DrowsinessPipeline:
             self.model = YOLO(str(model_path))
         except Exception as exc:
             self.model_error = str(exc)
-            print(f"[STARTUP] YOLO unavailable; MediaPipe-only mode: {exc}")
+            emit_error_event(
+                code="E_PROC_MODEL_LOAD",
+                source="process.ai",
+                node_path="process.ai.yolo_load",
+                err_class="process",
+                message=f"YOLO unavailable; MediaPipe-only mode: {exc}",
+                recoverable=True,
+            )
         self.fusion = SensorFusion(drowsy_threshold, yawning_threshold)
         self.enable_perf_log = bool(enable_perf_log)
         perf_csv_path = (
@@ -1074,6 +1082,11 @@ class DrowsinessPipeline:
 
         state["frame_age_ms"] = max(0.0, (time.monotonic() - monotonic_time) * 1000)
         state["alert_latency_ms"] = self._alert_latency_ms
+        if self.cloud_sync is not None:
+            try:
+                self.cloud_sync.update_state(state)
+            except Exception:
+                pass
         self.telemetry.record(state)
         return rendered, state
 

@@ -10,6 +10,8 @@ from typing import Callable, Optional
 
 import cv2
 
+from AI.scripts.diagnostic_log import emit_error_event
+
 
 class CameraFrameSource:
     """Capture frames once and expose only the newest frame to inference."""
@@ -106,6 +108,15 @@ class CameraFrameSource:
                 ok, frame = False, None
 
             if not ok or frame is None:
+                if self.error != "CAMERA_DISCONNECTED":
+                    emit_error_event(
+                        code="E_CONN_LOST",
+                        source="connect.camera",
+                        node_path="connect.camera.capture_loop",
+                        err_class="source",
+                        message="Mat tin hieu khung hinh tu camera ngoai (RTSP/USB); dang thu ket noi lai",
+                        recoverable=True,
+                    )
                 self.error = "CAMERA_DISCONNECTED"
                 if self._capture_factory is not None:
                     try:

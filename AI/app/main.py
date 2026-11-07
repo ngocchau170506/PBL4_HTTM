@@ -1,3 +1,11 @@
+"""ĐIỂM KHỞI CHẠY CHÍNH TRÊN XE (PRODUCTION ENTRYPOINT — PROPOSE-CR-001).
+
+- Dịch vụ `driver-monitor.service` khởi chạy trực tiếp `python -m AI.app.main`.
+- Vòng lặp thời gian thực điều phối trực tiếp các luồng trong `AI/scripts/*`
+  (CameraFrameSource, DrowsinessPipeline, EspCommunicator, CloudSyncManager, EmbeddedFpsGovernor).
+- Sử dụng kiểu dữ liệu chẩn đoán chuẩn (`ErrorCode`, `ErrorEvent`) rút từ `src/contracts/logic.py`
+  qua `AI/scripts/diagnostic_log.py`. KHÔNG đi qua khung mô phỏng `src/fd_flow/FlowEngine`.
+"""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 from pathlib import Path

@@ -11,6 +11,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, Optional
 
+from AI.scripts.diagnostic_log import emit_error_event
 from AI.scripts.fd_frame import (
     FRAME_TYPE_COMMAND,
     FRAME_TYPE_DOWNLINK_ACK,
@@ -164,6 +165,14 @@ class EspCommunicator:
             print(f"[ESP SERIAL] Da ket noi cong {self.port} ({self.baudrate} baud | High-Speed={self.is_high_speed})")
         except Exception as exc:
             self._serial = None
+            emit_error_event(
+                code="E_CONN_OPEN",
+                source="connect.esp32",
+                node_path="connect.esp32.serial_open",
+                err_class="source",
+                message=f"Could not open ESP serial port {self.port}: {exc}",
+                recoverable=True,
+            )
             self.last_result = SendResult(
                 packet="",
                 sent=False,
@@ -533,6 +542,14 @@ class EspCommunicator:
                     self.last_delivery_status = f"{clean_cmd} [ACK: {ack_line}]"
                 elif self.require_ack:
                     self.last_delivery_status = f"{clean_cmd} [NO_ACK_TIMEOUT]"
+                    emit_error_event(
+                        code="E_RESP_NO_ACK",
+                        source="response",
+                        node_path="response.esp32.ack",
+                        err_class="source",
+                        message=f"ESP32 khong phan hoi ACK cho lenh {clean_cmd} ({status})",
+                        recoverable=True,
+                    )
                 else:
                     self.last_delivery_status = f"{clean_cmd} [SENT]"
             print(f"[ESP SERIAL] Sent {clean_cmd} ({status}) | ACK={acknowledged} {ack_line}".rstrip())
