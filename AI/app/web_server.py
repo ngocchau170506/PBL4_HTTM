@@ -18,6 +18,7 @@ import threading
 import time
 from typing import Any, Dict, Optional
 import cv2
+import numpy as np
 
 from AI.scripts.telemetry import get_system_metrics
 
@@ -1227,6 +1228,12 @@ class DriverMonitorWebServer:
                         "distracted_duration": state.get("distracted_duration", 0.0),
                         "head_pose": state.get("head_pose"),
                         "detected_classes": state.get("detected_classes", []),
+                        "active_phase": state.get("active_phase", "YOLO_PHASE"),
+                        "model_stage": state.get("active_phase", "YOLO_PHASE"),
+                        "mp_phase_remaining": state.get("mp_phase_remaining", 0.0),
+                        "mp_latency_ms": state.get("mp_latency_ms", 0.0),
+                        "recording_mode": state.get("recording_mode", "VIDEO_CLIP_10S"),
+                        "clip_recorder": state.get("clip_recorder", {}),
                         "hardware": hw,
                         "esp": esp_info,
                         "gps": gps_snap,

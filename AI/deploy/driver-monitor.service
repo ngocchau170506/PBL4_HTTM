@@ -8,13 +8,14 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-User=pi
-Group=pi
-WorkingDirectory=/home/pi/driver-monitor
-Environment="PYTHONPATH=/home/pi/driver-monitor:/home/pi/driver-monitor/src"
+User=raspberrypi
+Group=raspberrypi
+SupplementaryGroups=dialout video
+WorkingDirectory=/home/raspberrypi/iot_cam_project
+Environment="PYTHONPATH=/home/raspberrypi/iot_cam_project:/home/raspberrypi/iot_cam_project/src"
 Environment="MPLCONFIGDIR=/tmp/matplotlib"
-EnvironmentFile=-/home/pi/driver-monitor/AI/deploy/pi.env
-ExecStart=/home/pi/driver-monitor/.venv/bin/python -m AI.app.main
+EnvironmentFile=-/home/raspberrypi/iot_cam_project/AI/deploy/pi.env
+ExecStart=/home/raspberrypi/iot_cam_project/venv/bin/python -m AI.app.main
 Restart=on-failure
 RestartSec=10s
 # Nice=-5 trước đây giành CPU của kernel/mạng/UART -> hệ thống đơ khi AI bận. Dùng mức trung tính.
@@ -29,7 +30,7 @@ SyslogIdentifier=driver-monitor
 # Bao ve he thong
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/home/pi/driver-monitor/logs /home/pi/driver-monitor/AI/calibration /home/pi/driver-monitor/AI/data /home/pi/driver-monitor/AI/evidence
+ReadWritePaths=/home/raspberrypi/iot_cam_project/logs /home/raspberrypi/iot_cam_project/AI/calibration /home/raspberrypi/iot_cam_project/AI/data /home/raspberrypi/iot_cam_project/AI/evidence
 
 [Install]
 WantedBy=multi-user.target

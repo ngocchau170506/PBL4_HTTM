@@ -45,25 +45,6 @@ def _autoload_pi_env() -> None:
         pass
 
 
-def _arm64_lacks_aes() -> bool:
-    """Kiểm tra nhanh (<0.1ms) xem CPU ARM64 trên Linux (ví dụ BCM2711 Cortex-A72 của Pi 4)
-    có thiếu tập lệnh phần cứng AES hay không để tránh lỗi SIGILL khi nạp MediaPipe."""
-    if not sys.platform.startswith("linux"):
-        return False
-    try:
-        cpuinfo = Path("/proc/cpuinfo")
-        if not cpuinfo.exists():
-            return False
-        text = cpuinfo.read_text(encoding="utf-8", errors="ignore")
-        for line in text.splitlines():
-            if line.lower().startswith("features"):
-                feats = set(line.split(":", 1)[-1].lower().split())
-                return "aes" not in feats
-    except Exception:
-        pass
-    return False
-
-
 _autoload_pi_env()
 
 from AI.scripts.telemetry import EmbeddedFpsGovernor, configure_embedded_threads
@@ -72,10 +53,6 @@ from AI.scripts.telemetry import EmbeddedFpsGovernor, configure_embedded_threads
 configure_embedded_threads(max_threads=2)
 
 import cv2
-try:
-    import mediapipe as mp
-except ImportError:
-    mp = None
 
 try:
     from AI.app.dashboard import Dashboard
@@ -89,7 +66,10 @@ from AI.scripts.calibration import (
     CALIBRATION_SECONDS,
     MODEL_PATH,
     CalibrationSession,
+    arm64_lacks_aes,
     calculate_head_pose,
+    create_face_landmarker,
+    make_mp_image,
 )
 from AI.scripts.camera_config import open_camera, wait_for_external_camera
 from AI.scripts.camera_frame_source import CameraFrameSource
@@ -98,16 +78,15 @@ from AI.scripts.drowsiness_pipeline import DrowsinessPipeline
 from AI.scripts.esp_communication import EspCommunicator
 from AI.scripts.event_recorder import EventRecorder
 
+_arm64_lacks_aes = arm64_lacks_aes
+
 WINDOW_TITLE = "Assess the driver's condition"
 STABLE_FRAMES_REQUIRED = 15
 
 
 def _detect_alignment(frame, landmarker, timestamp):
     height, width = frame.shape[:2]
-    image = mp.Image(
-        image_format=mp.ImageFormat.SRGB,
-        data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
-    )
+    image = make_mp_image(frame, landmarker)
     result = landmarker.detect_for_video(image, timestamp)
     if not result.face_landmarks:
         return False, {"FACE": "KHONG THAY"}
@@ -144,6 +123,44 @@ class HeadlessDashboard:
     def show_monitor(self, frame, state=None):
         if self._web:
             self._web.update_frame(frame, state)
+
+    def show_alignment(self, frame, status, metrics, can_continue):
+        if self._web and frame is not None:
+            rendered = frame.copy()
+            cv2.putText(rendered, f"ALIGNMENT: {status}", (12, 28),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 215, 255), 2)
+            self._web.update_frame(rendered, {
+                "confirmed_alert": "CALIBRATING",
+                "active_phase": "MEDIAPIPE_PHASE",
+                "status": status,
+                "mp_active": True,
+            })
+
+    def show_calibration(self, frame, data):
+        if self._web and frame is not None:
+            rendered = frame.copy()
+            rem = float(data.get("remaining", 0.0))
+            cv2.putText(rendered, f"MEDIAPIPE CALIBRATION ({rem:.1f}s)", (12, 28),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 215, 255), 2)
+            self._web.update_frame(rendered, {
+                "confirmed_alert": "CALIBRATING",
+                "active_phase": "MEDIAPIPE_PHASE",
+                "mp_phase_remaining": round(rem, 2),
+                "mp_ear": data.get("ear"),
+                "mp_mar": data.get("mar"),
+                "mp_active": True,
+                "status": f"MediaPipe do baseline ({rem:.1f}s)",
+            })
+
+    def show_message(self, frame, title, body, can_start=False):
+        if self._web and frame is not None:
+            rendered = frame.copy()
+            cv2.putText(rendered, str(title), (12, 28),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            self._web.update_frame(rendered, {
+                "confirmed_alert": "NORMAL",
+                "status": f"{title}: {body}",
+            })
 
     def poll_action(self):
         return None
@@ -199,36 +216,9 @@ def run():
     camera_source = None
     event_recorder = None
     try:
-        try:
-            if os.getenv("DISABLE_MEDIAPIPE", "0") == "1":
-                raise RuntimeError("Disabled via DISABLE_MEDIAPIPE=1")
-            if _arm64_lacks_aes():
-                raise RuntimeError("ARM64 CPU lacks hardware AES (Pi 4 Cortex-A72); skipped to prevent SIGILL")
-            probe = subprocess.run(
-                [
-                    sys.executable,
-                    "-c",
-                    "import mediapipe as mp; "
-                    f"opts = mp.tasks.vision.FaceLandmarkerOptions("
-                    f"base_options=mp.tasks.BaseOptions(model_asset_path={str(model_path)!r}), "
-                    f"running_mode=mp.tasks.vision.RunningMode.VIDEO, num_faces=1); "
-                    "lm = mp.tasks.vision.FaceLandmarker.create_from_options(opts); lm.close()",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            if probe.returncode != 0:
-                err_msg = (probe.stderr or probe.stdout or f"exit code {probe.returncode}").strip()
-                raise RuntimeError(err_msg.splitlines()[0] if err_msg else f"Subprocess failed ({probe.returncode})")
-            options = mp.tasks.vision.FaceLandmarkerOptions(
-                base_options=mp.tasks.BaseOptions(model_asset_path=str(model_path)),
-                running_mode=mp.tasks.vision.RunningMode.VIDEO,
-                num_faces=1,
-            )
-            landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
-        except Exception as exc:
-            print(f"[STARTUP] MediaPipe unavailable; YOLO-only mode ({exc})")
+        landmarker = create_face_landmarker(model_path)
+        if landmarker is None:
+            print("[STARTUP] MediaPipe unavailable; YOLO-only mode")
         if cap is not None and landmarker is not None and os.getenv("SKIP_CALIBRATION", "0") != "1":
             timestamp = -1
             stable_frames = 0
@@ -264,7 +254,7 @@ def run():
                     break
 
             if can_continue:
-                # GIAI DOAN 2: Do baseline ca nhan (Personal Calibration)
+                # GIAI DOAN 2: Do baseline ca nhan bang MediaPipe (10~15s)
                 session = CalibrationSession(duration=CALIBRATION_SECONDS)
                 session.start()
 
@@ -286,6 +276,13 @@ def run():
                 else:
                     print("[CALIBRATION] Khong du mau hop le de tao baseline moi, giu baseline hien tai.")
 
+                # Dong MediaPipe ngay sau khi ket thuc 10~15s xac dinh de giai phong RAM/CPU cho YOLO
+                try:
+                    landmarker.close()
+                except Exception:
+                    pass
+                landmarker = None
+
                 # Thong bao hoan tat truoc khi khoi dong giam sat
                 msg_end = time.monotonic() + 1.5
                 while time.monotonic() < msg_end:
@@ -295,7 +292,7 @@ def run():
                     dashboard.show_message(
                         frame,
                         "CALIBRATION COMPLETE",
-                        "Do baseline ca nhan thanh cong!\nDang khoi dong he thong giam sat...",
+                        "Do baseline ca nhan thanh cong!\nDang chuyen sang che do 100% YOLO...",
                         can_start=False,
                     )
                     if dashboard.poll_action() == "quit":
@@ -304,11 +301,21 @@ def run():
         # Chuyen ownership landmarker sang pipeline.
         # Pipeline se goi landmarker.close() trong pipeline.close().
         # Dat landmarker = None de finally block khong double-close.
-        use_recorder = os.getenv("ENABLE_EVENT_RECORDER", "0") == "1"
-        event_recorder = EventRecorder(str(Path(__file__).resolve().parents[1] / "data")) if use_recorder else None
+        use_recorder = os.getenv("ENABLE_EVENT_RECORDER", "1") == "1"
+        event_recorder = (
+            EventRecorder(
+                str(Path(__file__).resolve().parents[1] / "data"),
+                cloud_sync=cloud_sync,
+            )
+            if use_recorder
+            else None
+        )
+        # Không truyền on_frame=event_recorder.append_frame vào CameraFrameSource để tránh
+        # 2 luồng (camera-capture và pipeline 30FPS) cùng chèn frame gây lệch thứ tự.
+        # DrowsinessPipeline.process() là chủ sở hữu duy nhất đẩy frame theo đúng thứ tự đơn điệu.
         camera_source = CameraFrameSource(
             cap,
-            on_frame=(event_recorder.append_frame if event_recorder else None),
+            on_frame=None,
             capture_factory=open_camera,
         )
         cap = None
@@ -327,16 +334,13 @@ def run():
 
         fps_governor = EmbeddedFpsGovernor()
         last_frame_id = 0
-        last_cam_fps = 0.0
+        camera_source.set_max_fps(max(30.0, fps_governor.base_fps))
         while True:
             plan = fps_governor.wait_for_next_slot()
-            # Đồng bộ nhịp giải mã camera với nhịp AI (+20% dự phòng) -> không giải mã BGR thừa
-            cam_fps = round(plan.fps * 1.2, 1)
-            if cam_fps != last_cam_fps:
-                last_cam_fps = cam_fps
-                camera_source.set_max_fps(cam_fps)
             ok, frame, frame_id, capture_timestamp_ns, capture_time_utc = camera_source.read_latest(
                 after_frame_id=last_frame_id,
+                timeout=1.0,
+                allow_repeat=True,
             )
             if not ok:
                 esp.send_status("NORMAL")

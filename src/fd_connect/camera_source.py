@@ -694,15 +694,20 @@ class CameraSource:
             shared.clear()
 
     def self_test(self) -> Tuple[bool, str]:
+        was_open = self._is_open
         err = self.open(trace_id="cam-selftest-open")
         if err is not None:
             return False, f"{err.code}: {err.message}"
-        pkt = self.read_packet(trace_id="cam-selftest-read")
-        if isinstance(pkt, ErrorEvent):
-            return False, f"{pkt.code}: {pkt.message}"
-        cached = self.get_cached_frame(self._seq)
-        cached_status = "co_cache" if cached is not None else "khong_cache"
-        return True, (
-            f"CameraSource OK (source={self._source}, mock={self._is_mock}, "
-            f"payload={len(pkt.payload)}B, cache={cached_status})"
-        )
+        try:
+            pkt = self.read_packet(trace_id="cam-selftest-read")
+            if isinstance(pkt, ErrorEvent):
+                return False, f"{pkt.code}: {pkt.message}"
+            cached = self.get_cached_frame(self._seq)
+            cached_status = "co_cache" if cached is not None else "khong_cache"
+            return True, (
+                f"CameraSource OK (source={self._source}, mock={self._is_mock}, "
+                f"payload={len(pkt.payload)}B, cache={cached_status})"
+            )
+        finally:
+            if not was_open:
+                self.close()

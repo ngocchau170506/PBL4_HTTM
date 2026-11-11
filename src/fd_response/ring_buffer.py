@@ -52,18 +52,23 @@ class FrameRingBuffer:
         pre_event_ms: int,
         store_images: bool = True,
         image_size: Optional[Tuple[int, int]] = (224, 224),
+        max_clip_ms: int = 10000,
     ) -> None:
         if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 1:
             raise ValueError("capacity phải là số nguyên >= 1")
         if isinstance(pre_event_ms, bool) or not isinstance(pre_event_ms, int) or pre_event_ms < 0:
             raise ValueError("pre_event_ms phải là số nguyên >= 0")
+        if isinstance(max_clip_ms, bool) or not isinstance(max_clip_ms, int) or max_clip_ms <= pre_event_ms:
+            raise ValueError("max_clip_ms phải là số nguyên lớn hơn pre_event_ms")
         self._capacity: int = capacity
         self._pre_ms: int = pre_event_ms
+        self._max_clip_ms: int = max_clip_ms
         self._store_images: bool = bool(store_images)
         self._image_size: Optional[Tuple[int, int]] = image_size
         self._frames: Deque[Tuple[int, int, Any]] = deque(maxlen=capacity)
         self._phase: ViolationPhase = "WATCHING"
         self._t0_ms: Optional[int] = None
+        self._segment_index: int = 0
         self._health: Health = "OK"
         self._overrun_count: int = 0
 
@@ -168,6 +173,31 @@ class FrameRingBuffer:
             raise ValueError("t0_ms phải là số nguyên")
         self._move("ACTIVE")
         self._t0_ms = t0_ms
+        self._segment_index += 1
+
+    @property
+    def segment_index(self) -> int:
+        return self._segment_index
+
+    @property
+    def max_clip_ms(self) -> int:
+        return self._max_clip_ms
+
+    def is_clip_duration_reached(self, current_ts_ms: int) -> bool:
+        """Kiểm tra xem tổng thời lượng đoạn clip (từ t0 - pre_event_ms đến current_ts_ms) đã đủ 10s chưa."""
+        if self._phase != "ACTIVE" or self._t0_ms is None:
+            return False
+        clip_start_ms = self._t0_ms - self._pre_ms
+        return (current_ts_ms - clip_start_ms) >= self._max_clip_ms
+
+    def rollover_violation(self, new_t0_ms: int) -> Tuple[int, ...]:
+        """Tự động đóng đoạn clip 10s hiện tại và mở ngay đoạn mới nếu người vi phạm chưa tỉnh."""
+        closed_clip = self.close_violation()
+        self._move("WATCHING")
+        self._t0_ms = None
+        self.mark_suspect()
+        self.begin_violation(new_t0_ms)
+        return closed_clip
 
     def ts_of(self, frame_id: int) -> Optional[int]:
         """ts_ms của khung còn nằm trong buffer; None nếu khung đã bị đẩy ra hoặc chưa từng vào."""

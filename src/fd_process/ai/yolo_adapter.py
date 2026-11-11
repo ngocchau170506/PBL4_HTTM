@@ -157,46 +157,12 @@ class YoloAdapter:
         landmarker = None
         try:
             # Import trực tiếp từ phân hệ AI
-            import mediapipe as mp
+            from AI.scripts.calibration import create_face_landmarker
             from AI.scripts.drowsiness_pipeline import DrowsinessPipeline
             from AI.scripts.esp_communication import EspCommunicator
 
             if landmarker_file.is_file():
-                try:
-                    probe = subprocess.run(
-                        [
-                            sys.executable,
-                            "-c",
-                            "import mediapipe as mp; "
-                            f"opts = mp.tasks.vision.FaceLandmarkerOptions("
-                            f"base_options=mp.tasks.BaseOptions(model_asset_path={str(landmarker_file)!r}), "
-                            f"running_mode=mp.tasks.vision.RunningMode.VIDEO, num_faces=1); "
-                            "lm = mp.tasks.vision.FaceLandmarker.create_from_options(opts); lm.close()",
-                        ],
-                        capture_output=True,
-                        text=True,
-                        timeout=15,
-                    )
-                    if probe.returncode != 0:
-                        err_msg = (probe.stderr or probe.stdout or f"exit code {probe.returncode}").strip()
-                        raise RuntimeError(err_msg.splitlines()[0] if err_msg else f"Subprocess failed ({probe.returncode})")
-                    options = mp.tasks.vision.FaceLandmarkerOptions(
-                        base_options=mp.tasks.BaseOptions(
-                            model_asset_path=str(landmarker_file)
-                        ),
-                        running_mode=mp.tasks.vision.RunningMode.VIDEO,
-                        num_faces=1,
-                    )
-                    landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(
-                        options
-                    )
-                except Exception as mp_exc:
-                    logger.warning(
-                        "Không thể khởi tạo MediaPipe FaceLandmarker từ %s: %s",
-                        landmarker_file,
-                        mp_exc,
-                    )
-                    landmarker = None
+                landmarker = create_face_landmarker(landmarker_file)
 
             # Sử dụng MOCK communicator bên trong pipeline để giao quyền ESP32 hoàn toàn cho src/
             dummy_esp = EspCommunicator(mode="MOCK")
@@ -291,7 +257,7 @@ class YoloAdapter:
 
                 if drowsy_state == "CONFLICT" or (eye_active is False and mp_eye is False):
                     items.append(Detection(label="Attentive eye", conf=0.98))
-                elif eye_active or state.get("confirmed_alert") in ("DROWSY", "SUSPECTED"):
+                elif eye_active or drowsy_state in ("CONFIRMED", "SUSPECTED"):
                     items.append(Detection(label="Eyeclosed", conf=0.95))
 
                 yawning_state = state.get("yawning_state", "IDLE")
@@ -300,7 +266,7 @@ class YoloAdapter:
 
                 if yawning_state == "CONFLICT" or (mouth_active is False and mp_mouth is False):
                     items.append(Detection(label="noYawn", conf=0.98))
-                elif mouth_active or state.get("confirmed_alert") == "YAWNING":
+                elif mouth_active or yawning_state in ("CONFIRMED", "SUSPECTED"):
                     items.append(Detection(label="Yawn", conf=0.95))
 
                 # Đảm bảo có nhãn bình thường nếu không phát hiện bất kỳ đối tượng nào

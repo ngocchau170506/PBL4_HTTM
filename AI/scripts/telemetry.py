@@ -261,10 +261,11 @@ class ThermalPolicy:
 
 
 class EmbeddedFpsGovernor:
-    """Bộ điều tiết nhịp suy luận AI: FPS + duty-cycle + lịch luân phiên YOLO/MediaPipe theo nhiệt độ."""
+    """Bộ điều tiết nhịp thời gian thực: khóa cứng luồng pipeline ở 30.0 FPS (base_fps),
+    đồng thời điều tiết tần suất suy luận AI nền theo mức nhiệt (L0..L3) để bảo vệ SoC."""
 
     def __init__(self, base_fps: float | None = None, sampler: Optional[HardwareSampler] = None):
-        self.base_fps = float(base_fps if base_fps is not None else os.getenv("SAMPLER_TARGET_FPS", "5.0"))
+        self.base_fps = float(base_fps if base_fps is not None else os.getenv("SAMPLER_TARGET_FPS", "30.0"))
         self.base_imgsz = int(os.getenv("YOLO_IMGSZ", "320"))
         self._sampler = sampler or HardwareSampler.get()
         self.policy = ThermalPolicy()
@@ -272,6 +273,7 @@ class EmbeddedFpsGovernor:
         self._tick = 0
         self._last_policy_check = 0.0
         self._slot_start = 0.0
+        self._next_slot_time = 0.0
         self._plan = self._build_plan(0)
 
     @property
@@ -283,31 +285,26 @@ class EmbeddedFpsGovernor:
         return self._plan
 
     def _build_plan(self, level: int) -> ThrottlePlan:
-        b = self.base_fps
+        # Khóa cứng tốc độ luồng chính ở self.base_fps (mặc định 30.0 FPS) để không bao giờ tụt FPS.
+        # Khi nhiệt độ tăng (L1..L3), chỉ giãn nhịp suy luận AI ngầm (every_y) và tăng TTL cache (hold_s).
+        fps = self.base_fps
         if level <= 0:
-            fps, duty, every_y, every_m, imgsz = b, 1.0, 1, 1, self.base_imgsz
+            duty, every_y, every_m, hold, imgsz = 1.0, 1, 1, 0.90, self.base_imgsz
         elif level == 1:
-            fps, duty, every_y, every_m, imgsz = min(b, 4.0), 0.80, 1, 2, self.base_imgsz
+            duty, every_y, every_m, hold, imgsz = 1.0, 2, 2, 1.10, self.base_imgsz
         elif level == 2:
-            fps, duty, every_y, every_m, imgsz = min(b, 3.0), 0.60, 2, 2, self.base_imgsz
+            duty, every_y, every_m, hold, imgsz = 1.0, 3, 3, 1.35, self.base_imgsz
         else:
-            # L3 giữ imgsz tối thiểu 320 (nếu base_imgsz >= 320) để không mất các box mắt nhỏ (Eye_Closed/Eye_Open),
-            # vì tần suất YOLO đã giảm còn 1 Hz (fps<=2, every_y=2) và duty_cap=0.40 đã đủ hạ nhiệt.
             l3_imgsz = min(self.base_imgsz, 320) if self.base_imgsz >= 320 else self.base_imgsz
-            fps, duty, every_y, every_m, imgsz = min(b, 2.0), 0.40, 2, 2, l3_imgsz
-        interval = 1.0 / max(0.5, fps)
-        hold = max(every_y, every_m) * interval * 1.25 + 0.25
-        # Lịch luân phiên: mỗi model chạy khi tick % every == offset (YOLO offset 0, MP offset 1)
+            duty, every_y, every_m, hold, imgsz = 1.0, 4, 4, 1.60, l3_imgsz
+        # Chế độ đơn mô hình tuần tự (Pha 1 chỉ MediaPipe, Pha 2 chỉ YOLO):
+        # Không bao giờ bật cả run_yolo và run_mp trong cùng 1 nhịp.
         run_y = (self._tick % every_y) == 0
-        run_m = (self._tick % every_m) == (1 % every_m) if every_m > 1 else True
-        if every_y == 1 and every_m == 1:
-            run_y = run_m = True
-        if not run_y and not run_m:  # không để nhịp rỗng
-            run_y = True
+        run_m = False
         return ThrottlePlan(level, fps, duty, run_y, run_m, hold, imgsz)
 
     def wait_for_next_slot(self) -> ThrottlePlan:
-        """Nghỉ đủ để giữ FPS + duty-cycle, trả về kế hoạch cho nhịp sắp chạy."""
+        """Khóa pha theo deadline đơn điệu (drift-free) để giữ vững 30.0 FPS ổn định."""
         now = time.monotonic()
         if (now - self._last_policy_check) >= 1.0:
             self._last_policy_check = now
@@ -321,15 +318,16 @@ class EmbeddedFpsGovernor:
 
         plan = self._build_plan(self.policy.level)
         self.current_target_fps = plan.fps
-        if self._slot_start > 0.0:
-            work_s = now - self._slot_start
-            min_interval = 1.0 / plan.fps
-            sleep_s = min_interval - work_s
-            if plan.duty_cap < 1.0:
-                # Ví dụ duty 0.4: làm 100ms thì phải nghỉ ≥150ms
-                sleep_s = max(sleep_s, work_s * (1.0 / plan.duty_cap - 1.0))
-            if sleep_s > 0.005:
-                time.sleep(min(sleep_s, 2.0))
+        target_interval = 1.0 / max(1.0, plan.fps)
+        if self._next_slot_time <= 0.0:
+            self._next_slot_time = now
+        else:
+            self._next_slot_time += target_interval
+            if self._next_slot_time < now - target_interval:
+                self._next_slot_time = now
+            sleep_s = self._next_slot_time - now
+            if sleep_s > 0.0005:
+                time.sleep(min(sleep_s, 1.0))
         self._slot_start = time.monotonic()
         self._tick += 1
         self._plan = plan

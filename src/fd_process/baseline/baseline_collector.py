@@ -27,8 +27,8 @@ class BaselineCollector:
 
     def __init__(
         self,
-        seconds_min: int = 5,
-        seconds_max: int = 10,
+        seconds_min: int = 10,
+        seconds_max: int = 15,
         min_frames: int = 5,
         storage: Optional[BaselineStorage] = None,
     ) -> None:

@@ -25,7 +25,7 @@ class CameraFrameSource:
         self._capture = capture
         self._on_frame = on_frame
         self._capture_factory = capture_factory
-        self._max_fps = float(os.getenv("CAMERA_CAPTURE_FPS", "10.0"))
+        self._max_fps = float(os.getenv("CAMERA_CAPTURE_FPS", "30.0"))
         self._target_w = int(os.getenv("CAMERA_WIDTH", "640"))
         self._target_h = int(os.getenv("CAMERA_HEIGHT", "480"))
         self.error = None
@@ -38,11 +38,30 @@ class CameraFrameSource:
         self._thread.start()
 
     def set_max_fps(self, fps: float) -> None:
-        """Đồng bộ tần số giải mã BGR với nhịp AI (governor) để không giải mã thừa khung hình."""
+        """Đồng bộ tần số giải mã BGR với nhịp mục tiêu."""
         self._max_fps = max(1.0, float(fps))
 
-    def read_latest(self, after_frame_id: int = 0, timeout: float = 1.0):
+    def read_latest(
+        self,
+        after_frame_id: int = 0,
+        timeout: float = 1.0,
+        allow_repeat: bool = False,
+    ):
         with self._condition:
+            if allow_repeat and self._latest is not None:
+                if self._latest_id <= after_frame_id and not self._closed:
+                    self._condition.wait_for(
+                        lambda: self._closed or self._latest_id > after_frame_id,
+                        timeout=min(timeout, 0.003),
+                    )
+                if self._closed or self._latest is None:
+                    return False, None, after_frame_id, None, None
+                frame, frame_id, timestamp_ns, capture_time_utc = self._latest
+                if frame_id <= after_frame_id:
+                    timestamp_ns = time.monotonic_ns()
+                    capture_time_utc = datetime.now(timezone.utc).isoformat()
+                return True, frame, frame_id, timestamp_ns, capture_time_utc
+
             ready = self._condition.wait_for(
                 lambda: self._closed or self._latest_id > after_frame_id,
                 timeout=timeout,
@@ -92,9 +111,7 @@ class CameraFrameSource:
 
             try:
                 now_mono = time.monotonic()
-                # Hãm xung giải mã BGR trên luồng RTSP: dùng grab() nhẹ CPU để xả buffer mạng,
-                # chỉ gọi retrieve() giải mã ảnh theo đúng tần số CAMERA_CAPTURE_FPS (mặc định 10 FPS)
-                if (now_mono - last_decode_ts) < min_decode_interval:
+                if self._max_fps < 25.0 and (now_mono - last_decode_ts) < min_decode_interval:
                     ok_grab = self._capture.grab()
                     if not ok_grab:
                         ok, frame = False, None

@@ -21,6 +21,18 @@ class CnnFrame:
     face_valid: Optional[bool] = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    def clone_for_segment(self) -> "CnnFrame":
+        """Tạo bản sao vỏ bọc độc lập cho đoạn video đang lưu (giữ nguyên mảng ảnh bất biến,
+        tách rời metadata để frame lưu không bao giờ bị ghi đè hay chèn lẫn bởi frame mới)."""
+        return CnnFrame(
+            frame_id=self.frame_id,
+            capture_timestamp_ns=self.capture_timestamp_ns,
+            capture_time_utc=self.capture_time_utc,
+            image=self.image,
+            face_valid=self.face_valid,
+            metadata=dict(self.metadata),
+        )
+
 
 class CnnFrameBuffer:
     """Thread-safe bounded sampler. Images are stored in OpenCV BGR format."""
@@ -28,8 +40,8 @@ class CnnFrameBuffer:
     def __init__(
         self,
         buffer_seconds: float = 5.0,
-        sample_fps: float = 5.0,
-        image_size: tuple[int, int] = (224, 224),
+        sample_fps: float = 10.0,
+        image_size: tuple[int, int] = (320, 240),
         max_frames: Optional[int] = None,
     ):
         if buffer_seconds <= 0 or sample_fps <= 0:
@@ -107,7 +119,7 @@ class CnnFrameBuffer:
         with self._lock:
             self._purge_locked(timestamp_ns)
             return [
-                frame for frame in self._frames
+                frame.clone_for_segment() for frame in self._frames
                 if lower <= frame.capture_timestamp_ns <= timestamp_ns
             ]
 

@@ -1,30 +1,31 @@
 
 """YOLO driver monitoring with temporal alert confirmation and RAM buffering."""
 
+from collections import deque
 from enum import Enum
 import json
 import os
 from pathlib import Path
+import threading
 import time
 
 import cv2
-try:
-    import mediapipe as mp
-except ImportError:
-    mp = None
 from ultralytics import YOLO
 
 from AI.scripts.calibration import (
     BASELINE_PATH,
+    CALIBRATION_SECONDS,
     LEFT_EYE,
     MOUTH_BOTTOM,
     MOUTH_LEFT,
     MOUTH_RIGHT,
     MOUTH_TOP,
     RIGHT_EYE,
+    CalibrationSession,
     calculate_ear,
     calculate_head_pose,
     calculate_mar,
+    make_mp_image,
     validate_baseline,
 )
 from AI.scripts.diagnostic_log import emit_error_event
@@ -155,10 +156,12 @@ class PerformanceMonitor:
         self.total_yolo_time = 0.0
         self.total_mp_time = 0.0
         self.total_pipeline_time = 0.0
+        self.yolo_inferences_in_window = 0
         self.mp_activations_in_window = 0
         self.total_mp_activations = 0
 
         self._last_frame_time = None
+        self._frame_times = deque(maxlen=31)
         self.fps = 0.0
 
         self.yolo_latency_ms = 0.0
@@ -179,6 +182,7 @@ class PerformanceMonitor:
         mp_time_s: float,
         pipeline_time_s: float,
         mp_active: bool,
+        async_mode: bool = False,
     ):
         now = time.monotonic()
         self.frame_count += 1
@@ -186,19 +190,28 @@ class PerformanceMonitor:
         self.total_mp_time += mp_time_s
         self.total_pipeline_time += pipeline_time_s
 
-        self.yolo_latency_ms = round(yolo_time_s * 1000.0, 2)
-        self.mp_latency_ms = round(mp_time_s * 1000.0, 2)
+        if yolo_time_s > 0.0:
+            self.yolo_inferences_in_window += 1
+            self.yolo_latency_ms = round(yolo_time_s * 1000.0, 2)
+        elif not async_mode or mp_active:
+            self.yolo_latency_ms = 0.0
+
+        if mp_time_s > 0.0:
+            self.mp_latency_ms = round(mp_time_s * 1000.0, 2)
+        elif not async_mode or not mp_active:
+            self.mp_latency_ms = 0.0
+
         self.pipeline_latency_ms = round(pipeline_time_s * 1000.0, 2)
 
-        if mp_active:
+        if mp_active and (mp_time_s > 0.0 or not async_mode):
             self.mp_activations_in_window += 1
             self.total_mp_activations += 1
 
-        if self._last_frame_time is not None:
-            delta = now - self._last_frame_time
-            if delta > 0:
-                instant_fps = 1.0 / delta
-                self.fps = round(self.fps * 0.9 + instant_fps * 0.1, 1) if self.fps > 0 else round(instant_fps, 1)
+        self._frame_times.append(now)
+        if len(self._frame_times) >= 2:
+            span = self._frame_times[-1] - self._frame_times[0]
+            if span > 0:
+                self.fps = round((len(self._frame_times) - 1) / span, 1)
         self._last_frame_time = now
 
         if self.enable_logging and (now - self.last_log_time >= self.log_interval):
@@ -207,7 +220,11 @@ class PerformanceMonitor:
     def _print_summary(self, now: float):
         elapsed = now - self.last_log_time
         if self.frame_count > 0:
-            avg_yolo = (self.total_yolo_time / self.frame_count) * 1000.0
+            avg_yolo = (
+                (self.total_yolo_time / self.yolo_inferences_in_window) * 1000.0
+                if self.yolo_inferences_in_window > 0
+                else 0.0
+            )
             avg_pipeline = (self.total_pipeline_time / self.frame_count) * 1000.0
             avg_mp = (
                 (self.total_mp_time / self.mp_activations_in_window) * 1000.0
@@ -240,6 +257,7 @@ class PerformanceMonitor:
         self.total_yolo_time = 0.0
         self.total_mp_time = 0.0
         self.total_pipeline_time = 0.0
+        self.yolo_inferences_in_window = 0
         self.mp_activations_in_window = 0
 
 
@@ -309,16 +327,30 @@ class DrowsinessPipeline:
         self.metadata_path = self.evidence_dir / "events.jsonl"
         self.last_event = None
 
-        # MediaPipe Face Landmarker (tái sử dụng từ giai đoạn calibration,
-        # không khởi tạo lại trong vòng lặp).
-        # Pipeline nhận ownership: close() sẽ giải phóng instance này.
+        # MediaPipe Face Landmarker:
+        # Chế độ tuần tự 2 giai đoạn (Sequential 2-Phase Mode):
+        # - Giai đoạn 1 (0 -> mp_phase_seconds, mặc định 12s trong khoảng 10~15s):
+        #   CHỈ CHẠY MEDIAPIPE để xác định khuôn mặt & baseline cá nhân (EAR, MAR, Head Pose 3D),
+        #   YOLO hoàn toàn nghỉ (không chạy song song cả 2 mô hình).
+        # - Giai đoạn 2 (sau 10~15s):
+        #   Đóng & giải phóng hoàn toàn MediaPipe, chuyển 100% sang YOLO thực hiện giám sát.
         self._landmarker = face_landmarker
+        self.mp_phase_seconds = float(
+            os.getenv("MEDIAPIPE_PHASE_SECONDS", str(CALIBRATION_SECONDS))
+        )
+        self._mp_phase_started_at = None
+        self._mp_phase_done = self._landmarker is None or self.mp_phase_seconds <= 0.0
+        self._mp_cal_session = (
+            CalibrationSession(duration=self.mp_phase_seconds)
+            if not self._mp_phase_done
+            else None
+        )
         # Timestamp tăng đơn điệu cho MediaPipe VIDEO mode.
         # Khởi tạo từ thời gian thực để đảm bảo lớn hơn timestamp calibration.
         self._mp_last_timestamp: int = int(time.monotonic() * 1000)
         print(
-            f"[Pipeline] MediaPipe landmarker: "
-            f"{'SAN SANG (tái sử dụng)' if self._landmarker else 'KHONG CO (chi dung YOLO)'}"
+            f"[Pipeline] Chế độ tuần tự 2 pha: "
+            f"{f'Pha 1 MediaPipe ({self.mp_phase_seconds:.1f}s) -> Pha 2 chỉ chạy YOLO' if not self._mp_phase_done else 'Pha 2 chỉ chạy YOLO (MediaPipe đã tắt)'}"
         )
 
         # Baseline cá nhân và ngưỡng động EAR / MAR / Head Pose
@@ -364,12 +396,29 @@ class DrowsinessPipeline:
         self._yolo_max_det = int(os.getenv("YOLO_MAX_DET", "8"))
 
         # Bộ nhớ đệm kết quả mô hình bị bỏ qua theo lịch nhiệt (ThrottlePlan): (thời điểm, giá trị)
-        self._yolo_cache = None   # (t, detections, yolo_eye, yolo_mouth, yolo_error)
+        self._yolo_cache = None   # (t, detections, boxes_xyxy, plotted, yolo_error)
         self._mp_cache = None     # (t, mp_result)
         self._speed_cache = ("", 0.0)
         self.skipped_yolo = 0
         self.skipped_mp = 0
         self._warmup_yolo()
+
+        # Luồng suy luận AI bất đồng bộ (Background AI Worker) để luồng pipeline chính
+        # luôn giữ vững 30.0 FPS (~1.5 ms/frame) mà không bị nghẽn bởi thời gian chạy YOLO/MediaPipe.
+        self._infer_lock = threading.Lock()
+        self._infer_event = threading.Event()
+        self._infer_stop = threading.Event()
+        self._infer_task = None       # ("MP" | "YOLO", frame, monotonic_time, imgsz)
+        self._infer_busy = False
+        self._mp_async_done = None    # (monotonic_time, mp_result, dt_s)
+        self._yolo_async_done = None  # (monotonic_time, detections, boxes_xyxy, plotted, yolo_error, dt_s)
+        self._last_yolo_submit_mono = 0.0
+        self._infer_thread = threading.Thread(
+            target=self._infer_worker_loop,
+            name="ai-infer-worker",
+            daemon=True,
+        )
+        self._infer_thread.start()
 
         self._head_pose_smooth = None
         self._distracted_started = None
@@ -398,7 +447,10 @@ class DrowsinessPipeline:
         if self.event_recorder is None and enable_event_recorder:
             self.event_recorder = EventRecorder(
                 event_storage_dir or str(PROJECT_ROOT / "AI" / "data"),
+                cloud_sync=self.cloud_sync,
             )
+        elif self.event_recorder is not None and hasattr(self.event_recorder, "set_cloud_sync"):
+            self.event_recorder.set_cloud_sync(self.cloud_sync)
 
     def _run_mediapipe(self, frame, monotonic_time: float) -> dict:
         """Thực thi suy luận MediaPipe Face Landmarker có điều kiện trên frame.
@@ -416,10 +468,7 @@ class DrowsinessPipeline:
         timestamp_ms = max(self._mp_last_timestamp + 1, int(monotonic_time * 1000))
         self._mp_last_timestamp = timestamp_ms
 
-        image = mp.Image(
-            image_format=mp.ImageFormat.SRGB,
-            data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
-        )
+        image = make_mp_image(frame, self._landmarker)
         try:
             result = self._landmarker.detect_for_video(image, timestamp_ms)
         except Exception as exc:
@@ -447,6 +496,19 @@ class DrowsinessPipeline:
                 "valid": False, "ear": None, "mar": None, "pose": None,
                 "timestamp": monotonic_time, "reason": "DEGENERATE_LANDMARKS"
             }
+
+        if (
+            self._mp_cal_session is not None
+            and pose is not None
+            and (monotonic_time - self._mp_cal_session.last_sample_at) >= self._mp_cal_session.sample_interval
+        ):
+            yaw, pitch, roll = pose
+            self._mp_cal_session.ear_values.append(ear)
+            self._mp_cal_session.mar_values.append(mar)
+            self._mp_cal_session.yaw_values.append(yaw)
+            self._mp_cal_session.pitch_values.append(pitch)
+            self._mp_cal_session.roll_values.append(roll)
+            self._mp_cal_session.last_sample_at = monotonic_time
 
         return {
             "valid": True,
@@ -590,6 +652,59 @@ class DrowsinessPipeline:
             error = str(exc)
         return detections, boxes_xyxy, None, error
 
+    def _infer_worker_loop(self) -> None:
+        """Luồng nền thực thi tuần tự: Pha 1 chỉ chạy MediaPipe, Pha 2 chỉ chạy YOLO."""
+        while not self._infer_stop.is_set():
+            if not self._infer_event.wait(timeout=0.1):
+                continue
+            self._infer_event.clear()
+            if self._infer_stop.is_set():
+                break
+            with self._infer_lock:
+                task = self._infer_task
+                self._infer_task = None
+                if task is None:
+                    self._infer_busy = False
+                    continue
+                self._infer_busy = True
+
+            kind, task_frame, task_mono, task_imgsz = task
+            try:
+                if kind == "MP":
+                    t0 = time.perf_counter()
+                    mp_res = self._run_mediapipe(task_frame, task_mono)
+                    dt_s = time.perf_counter() - t0
+                    with self._infer_lock:
+                        self._mp_async_done = (task_mono, mp_res, dt_s)
+                elif kind == "YOLO":
+                    t0 = time.perf_counter()
+                    dets, boxes, plotted, err = self._run_yolo(task_frame, task_imgsz)
+                    if not self.enable_behavior_alerts:
+                        if dets:
+                            dets = [
+                                (name, conf)
+                                for name, conf in dets
+                                if not (_is_smoking(name) or _is_phone(name))
+                            ]
+                        if boxes:
+                            boxes = [
+                                b for b in boxes if not (_is_smoking(b[0]) or _is_phone(b[0]))
+                            ]
+                    dt_s = time.perf_counter() - t0
+                    with self._infer_lock:
+                        self._yolo_async_done = (task_mono, dets, boxes, plotted, err, dt_s)
+            finally:
+                with self._infer_lock:
+                    self._infer_busy = False
+
+    def _wait_infer_idle(self, timeout: float = 0.25) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._infer_lock:
+                if not self._infer_busy and self._infer_task is None:
+                    return
+            time.sleep(0.002)
+
     def process(
         self,
         frame,
@@ -604,38 +719,116 @@ class DrowsinessPipeline:
             if capture_timestamp_ns is not None else time.monotonic()
         )
         wall_time = local_now()
-        run_yolo = plan.run_yolo if plan is not None else True
-        run_mp = plan.run_mp if plan is not None else True
         hold_s = plan.hold_s if plan is not None else 0.0
         imgsz = plan.imgsz if plan is not None else self._yolo_imgsz
+        async_mode = plan is not None and os.getenv("ASYNC_AI_INFER", "1") == "1"
+
+        # Điều phối tuần tự 2 giai đoạn (KHÔNG BAO GIỜ chạy cả MediaPipe và YOLO cùng lúc):
+        # - Giai đoạn 1 (0 -> mp_phase_seconds, mặc định 12s trong 10~15s): CHỈ CHẠY MEDIAPIPE.
+        # - Giai đoạn 2 (sau 10~15s): Đóng MediaPipe hoàn toàn -> CHỈ CHẠY YOLO.
+        if not self._mp_phase_done and self._landmarker is not None:
+            if self._mp_phase_started_at is None:
+                self._mp_phase_started_at = monotonic_time
+                print(
+                    f"[Pipeline] PHA 1 (0 -> {self.mp_phase_seconds:.1f}s): "
+                    f"CHI CHAY MEDIAPIPE de xac dinh khuon mat & baseline ca nhan (YOLO tam nghi)..."
+                )
+            mp_elapsed = max(0.0, monotonic_time - self._mp_phase_started_at)
+            if mp_elapsed < self.mp_phase_seconds:
+                run_mp = True
+                run_yolo = False
+                active_phase = "MEDIAPIPE_PHASE"
+                mp_phase_remaining = max(0.0, self.mp_phase_seconds - mp_elapsed)
+            else:
+                if async_mode:
+                    self._wait_infer_idle(timeout=0.25)
+                    with self._infer_lock:
+                        self._mp_async_done = None
+                if self._mp_cal_session is not None:
+                    self._mp_cal_session.finished = True
+                    if self._mp_cal_session.save(self.baseline_path, minimum_samples=MIN_VALID_SAMPLES):
+                        print(
+                            f"[Pipeline] Hoan tat {self.mp_phase_seconds:.1f}s MediaPipe: "
+                            f"Da cap nhat baseline ca nhan tai {self.baseline_path}"
+                        )
+                        self._load_and_compute_thresholds()
+                    self._mp_cal_session = None
+                try:
+                    self._landmarker.close()
+                except Exception:
+                    pass
+                self._landmarker = None
+                self._mp_phase_done = True
+                self._mp_cache = None
+                print(
+                    f"[Pipeline] PHA 2 (>{self.mp_phase_seconds:.1f}s): "
+                    f"Da dong MediaPipe hoan toan -> Chuyen 100% sang YOLO thuc hien!"
+                )
+                run_mp = False
+                run_yolo = plan.run_yolo if plan is not None else True
+                active_phase = "YOLO_PHASE"
+                mp_phase_remaining = 0.0
+        else:
+            self._mp_phase_done = True
+            run_mp = False
+            run_yolo = plan.run_yolo if plan is not None else True
+            active_phase = "YOLO_PHASE"
+            mp_phase_remaining = 0.0
 
         # Independent measurements: no detection is unknown, not a normal vote.
         # Mô hình bị bỏ qua theo lịch nhiệt dùng lại kết quả cũ trong TTL (hold_s); quá TTL -> "không biết".
-        t_yolo_start = time.perf_counter()
         detections = []
+        boxes_xyxy = []
+        plotted = None
         yolo_error = None
+        yolo_time_s = 0.0
+        yolo_ran_actual = False
         rendered = frame  # chỉ copy khi thật sự cần vẽ lên ảnh (tiết kiệm 1 lần copy 0.9MB/khung)
-        if run_yolo or self.model is None:
-            detections, boxes_xyxy, plotted, yolo_error = self._run_yolo(frame, imgsz)
-            if not self.enable_behavior_alerts:
-                if detections:
-                    detections = [
-                        (name, conf)
-                        for name, conf in detections
-                        if not (_is_smoking(name) or _is_phone(name))
-                    ]
-                if boxes_xyxy:
-                    boxes_xyxy = [
-                        b for b in boxes_xyxy if not (_is_smoking(b[0]) or _is_phone(b[0]))
-                    ]
-            self._yolo_cache = (monotonic_time, detections, boxes_xyxy, None, yolo_error)
-        elif self._yolo_cache is not None and (monotonic_time - self._yolo_cache[0]) <= hold_s:
-            _, detections, boxes_xyxy, _, yolo_error = self._yolo_cache
-            plotted = None
-            self.skipped_yolo += 1
-        else:
-            boxes_xyxy, plotted = [], None
-            self.skipped_yolo += 1
+
+        if active_phase == "YOLO_PHASE":
+            if async_mode:
+                with self._infer_lock:
+                    if self._yolo_async_done is not None:
+                        done_mono, dets, boxes, plot_img, err, dt_s = self._yolo_async_done
+                        self._yolo_async_done = None
+                        self._yolo_cache = (done_mono, dets, boxes, plot_img, err)
+                        yolo_time_s = dt_s
+                        yolo_ran_actual = True
+                    worker_free = not self._infer_busy and self._infer_task is None
+                min_yolo_interval = 0.11 + (0.06 * (plan.level if plan is not None else 0))
+                if worker_free and run_yolo and (monotonic_time - self._last_yolo_submit_mono) >= min_yolo_interval:
+                    with self._infer_lock:
+                        self._infer_task = ("YOLO", frame, monotonic_time, imgsz)
+                        self._infer_busy = True
+                    self._last_yolo_submit_mono = monotonic_time
+                    self._infer_event.set()
+                if self._yolo_cache is not None and (monotonic_time - self._yolo_cache[0]) <= max(hold_s, 1.2):
+                    _, detections, boxes_xyxy, plotted, yolo_error = self._yolo_cache
+                elif not yolo_ran_actual:
+                    self.skipped_yolo += 1
+            else:
+                if run_yolo:
+                    t_yolo_start = time.perf_counter()
+                    detections, boxes_xyxy, plotted, yolo_error = self._run_yolo(frame, imgsz)
+                    if not self.enable_behavior_alerts:
+                        if detections:
+                            detections = [
+                                (name, conf)
+                                for name, conf in detections
+                                if not (_is_smoking(name) or _is_phone(name))
+                            ]
+                        if boxes_xyxy:
+                            boxes_xyxy = [
+                                b for b in boxes_xyxy if not (_is_smoking(b[0]) or _is_phone(b[0]))
+                            ]
+                    self._yolo_cache = (monotonic_time, detections, boxes_xyxy, None, yolo_error)
+                    yolo_time_s = time.perf_counter() - t_yolo_start
+                    yolo_ran_actual = True
+                else:
+                    if self._yolo_cache is not None and (monotonic_time - self._yolo_cache[0]) <= hold_s:
+                        _, detections, boxes_xyxy, _, yolo_error = self._yolo_cache
+                    self.skipped_yolo += 1
+
         if plotted is not None:
             rendered = plotted
         elif boxes_xyxy:
@@ -654,7 +847,7 @@ class DrowsinessPipeline:
                 cv2.rectangle(rendered, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(rendered, f"{name} {conf:.2f}", (x1, max(18, y1 - 6)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        yolo_time_s = time.perf_counter() - t_yolo_start
+
         detected_classes = [name for name, _ in detections]
         yolo_eye = yolo_mouth = None
         yolo_normal = False
@@ -681,21 +874,55 @@ class DrowsinessPipeline:
                     yolo_smoking = True
                 if _is_phone(name):
                     yolo_phone = True
-        t_mp_start = time.perf_counter()
-        if run_mp or self._mp_cache is None:
-            mp_result = self._run_mediapipe(frame, monotonic_time)
-            self._mp_cache = (monotonic_time, mp_result)
-        elif (monotonic_time - self._mp_cache[0]) <= hold_s:
-            mp_result = self._mp_cache[1]
-            self.skipped_mp += 1
+
+        mp_time_s = 0.0
+        mp_ran_actual = False
+        if run_mp:
+            if async_mode:
+                with self._infer_lock:
+                    if self._mp_async_done is not None:
+                        done_mono, mp_res, dt_s = self._mp_async_done
+                        self._mp_async_done = None
+                        self._mp_cache = (done_mono, mp_res)
+                        mp_time_s = dt_s
+                        mp_ran_actual = True
+                    worker_free = not self._infer_busy and self._infer_task is None
+                if worker_free:
+                    with self._infer_lock:
+                        self._infer_task = ("MP", frame, monotonic_time, imgsz)
+                        self._infer_busy = True
+                    self._infer_event.set()
+                if self._mp_cache is not None:
+                    mp_result = self._mp_cache[1]
+                else:
+                    mp_result = {
+                        "valid": False, "ear": None, "mar": None, "pose": None,
+                        "timestamp": monotonic_time, "reason": "WARMING_UP",
+                    }
+            else:
+                t_mp_start = time.perf_counter()
+                mp_result = self._run_mediapipe(frame, monotonic_time)
+                self._mp_cache = (monotonic_time, mp_result)
+                mp_time_s = time.perf_counter() - t_mp_start
+                mp_ran_actual = True
+            if self._headless:
+                rendered = frame.copy()
+                mp_status = (
+                    f"PHA 1 MEDIAPIPE ({mp_phase_remaining:.1f}s) | "
+                    f"EAR={mp_result['ear'] if mp_result['valid'] else '--'} "
+                    f"MAR={mp_result['mar'] if mp_result['valid'] else '--'}"
+                )
+                cv2.putText(
+                    rendered, mp_status, (12, 28),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 215, 255), 2,
+                )
         else:
             mp_result = {
-                "valid": False, "ear": None, "mar": None,
-                "timestamp": monotonic_time, "reason": "SKIPPED_THERMAL",
+                "valid": False, "ear": None, "mar": None, "pose": None,
+                "timestamp": monotonic_time,
+                "reason": "PHASE2_YOLO_ONLY" if self._mp_phase_done else "SKIPPED_THERMAL",
             }
-            self.skipped_mp += 1
-        mp_time_s = time.perf_counter() - t_mp_start
-        mp_active = self._landmarker is not None
+        mp_active = self._landmarker is not None and not self._mp_phase_done
         mp_eye = mp_result["ear"] < self.ear_threshold if mp_result["valid"] else None
         mp_mouth = mp_result["mar"] > self.mar_threshold if mp_result["valid"] else None
         decisions, tracking_lost = self.fusion.update(
@@ -706,6 +933,7 @@ class DrowsinessPipeline:
             or yolo_mouth is not None
             or yolo_normal
             or yolo_distracted,
+            single_model_mode=True,
         )
         instantaneous_drowsy = decisions["eye"].active
         instantaneous_yawning = decisions["mouth"].active
@@ -796,20 +1024,6 @@ class DrowsinessPipeline:
         else:
             self.distracted_state = AlertState.IDLE
 
-        if self.event_recorder is not None:
-            if instantaneous_drowsy and drowsy_duration == 0.0:
-                self.event_recorder.start_event(
-                    "DROWSY",
-                    capture_timestamp_ns or time.monotonic_ns(),
-                    capture_time_utc or iso_timestamp(self._drowsy_started_at or wall_time),
-                )
-            if instantaneous_yawning and yawning_duration == 0.0:
-                self.event_recorder.start_event(
-                    "YAWNING",
-                    capture_timestamp_ns or time.monotonic_ns(),
-                    capture_time_utc or iso_timestamp(self._yawning_started_at or wall_time),
-                )
-
         self.drowsy_state = AlertState(decisions["eye"].state)
         self.yawning_state = AlertState(decisions["mouth"].state)
         drowsy_duration = decisions["eye"].duration
@@ -821,10 +1035,35 @@ class DrowsinessPipeline:
         yawning_vote_ratio = float(mp_mouth is True)
 
         if self.event_recorder is not None:
-            event_timestamp_ns = capture_timestamp_ns or time.monotonic_ns()
+            event_timestamp_ns = (
+                int(capture_timestamp_ns)
+                if capture_timestamp_ns is not None
+                else int(monotonic_time * 1_000_000_000)
+            )
+            if instantaneous_drowsy and drowsy_duration == 0.0:
+                self.event_recorder.start_event(
+                    "DROWSY",
+                    event_timestamp_ns,
+                    capture_time_utc or iso_timestamp(self._drowsy_started_at or wall_time),
+                )
+            if instantaneous_yawning and yawning_duration == 0.0:
+                self.event_recorder.start_event(
+                    "YAWNING",
+                    event_timestamp_ns,
+                    capture_time_utc or iso_timestamp(self._yawning_started_at or wall_time),
+                )
+            if instantaneous_distracted and distracted_duration == 0.0:
+                self.event_recorder.start_event(
+                    "DISTRACTED",
+                    event_timestamp_ns,
+                    capture_time_utc or iso_timestamp(self._distracted_started_at or wall_time),
+                )
+
             event_metadata = {
+                "active_phase": active_phase,
                 "yolo_status": (
                     "DROWSY" if yolo_eye is True else "YAWNING" if yolo_mouth is True
+                    else "DISTRACTED" if instantaneous_distracted
                     else "NORMAL" if yolo_eye is not None or yolo_mouth is not None else "UNKNOWN"
                 ),
                 "eye_source": decisions["eye"].source,
@@ -841,15 +1080,29 @@ class DrowsinessPipeline:
                 "ear": mp_result.get("ear") if mp_result else None,
                 "mar": mp_result.get("mar") if mp_result else None,
             }
-            for event_type, active, local_state, confirmed in (
+
+            # Đẩy khung hình liên tục từ duy nhất luồng 30FPS theo thứ tự đơn điệu
+            # (chống hoàn toàn lỗi chèn frame cũ/mới giữa 2 luồng)
+            self.event_recorder.append_frame(
+                rendered,
+                capture_timestamp_ns=event_timestamp_ns,
+                capture_time_utc=capture_time_utc or iso_timestamp(wall_time),
+                face_valid=bool(mp_result.get("valid")) if mp_result is not None else None,
+                metadata=event_metadata,
+                frame_id=frame_id,
+            )
+
+            for event_type, active, local_state, confirmed, yolo_act in (
                 ("DROWSY", instantaneous_drowsy, self.drowsy_state.value,
                  self.drowsy_state in {
                      AlertState.CONFIRMED, AlertState.SUSPECTED, AlertState.CONFLICT
-                 }),
+                 }, yolo_eye),
                 ("YAWNING", instantaneous_yawning, self.yawning_state.value,
                  self.yawning_state in {
                      AlertState.CONFIRMED, AlertState.SUSPECTED, AlertState.CONFLICT
-                 }),
+                 }, yolo_mouth),
+                ("DISTRACTED", instantaneous_distracted, self.distracted_state.value,
+                 self.distracted_state == AlertState.CONFIRMED, instantaneous_distracted),
             ):
                 self.event_recorder.update_event(
                     event_type,
@@ -859,7 +1112,7 @@ class DrowsinessPipeline:
                     {
                         "frame_id": frame_id,
                         **event_metadata,
-                        "yolo_active": yolo_eye if event_type == "DROWSY" else yolo_mouth,
+                        "yolo_active": yolo_act,
                         "local_state": local_state,
                         "face_valid": (
                             bool(mp_result.get("valid"))
@@ -868,6 +1121,7 @@ class DrowsinessPipeline:
                     },
                     confirmed_at_ns=event_timestamp_ns if confirmed else None,
                     confirmed_at_time=capture_time_utc if confirmed else None,
+                    currently_active=active,
                 )
                 if not active:
                     self.event_recorder.end_detection(event_type, event_timestamp_ns)
@@ -1093,7 +1347,14 @@ class DrowsinessPipeline:
             "baseline_valid": self.baseline_valid,
             "ear_threshold": self.ear_threshold,
             "mar_threshold": self.mar_threshold,
-            "status": ", ".join(detected_classes) if detected_classes else "Chua phat hien doi tuong",
+            "active_phase": active_phase,
+            "mp_phase_seconds": self.mp_phase_seconds,
+            "mp_phase_remaining": round(mp_phase_remaining, 2),
+            "status": (
+                f"PHA 1: MediaPipe xac dinh ({mp_phase_remaining:.1f}s)"
+                if active_phase == "MEDIAPIPE_PHASE"
+                else (", ".join(detected_classes) if detected_classes else "Chua phat hien doi tuong")
+            ),
             "last_event": self.last_event,
             "ai_fps": self.perf_monitor.fps,
             "yolo_latency_ms": self.perf_monitor.yolo_latency_ms,
@@ -1103,6 +1364,15 @@ class DrowsinessPipeline:
             "thermal_level": plan.level if plan is not None else 0,
             "yolo_ran": run_yolo,
             "mp_ran": run_mp,
+            "clip_recorder": (
+                self.event_recorder.get_status_snapshot(
+                    int(capture_timestamp_ns)
+                    if capture_timestamp_ns is not None
+                    else int(monotonic_time * 1_000_000_000)
+                )
+                if self.event_recorder is not None and hasattr(self.event_recorder, "get_status_snapshot")
+                else None
+            ),
         }
         state["esp_mode"] = self.esp.mode_label
         state["esp_connected"] = self.esp.connected
@@ -1116,6 +1386,7 @@ class DrowsinessPipeline:
             mp_time_s=mp_time_s,
             pipeline_time_s=pipeline_time_s,
             mp_active=mp_active and run_mp,
+            async_mode=async_mode,
         )
         state["ai_fps"] = self.perf_monitor.fps
         state["yolo_latency_ms"] = self.perf_monitor.yolo_latency_ms
@@ -1151,6 +1422,22 @@ class DrowsinessPipeline:
         self, frame, alert_type, started_at, confirmed_at,
         duration_seconds, confidence,
     ):
+        # Khi EventRecorder (luồng lưu video liên tục 10s: -3s -> 0s -> 2s -> 10s) đang bật:
+        # KHÔNG gọi cv2.imwrite lưu ảnh đơn lẻ đồng bộ trên luồng chính 30FPS nữa để tránh đè luồng.
+        # Toàn bộ việc đóng gói video .mp4 10s và gửi Server / lưu thẻ nhớ SD do UploadWorker xử lý ngầm.
+        if self.event_recorder is not None and os.getenv("SAVE_SINGLE_IMAGE_EVIDENCE", "0") != "1":
+            evidence_file = f"{alert_type}_{filename_timestamp(confirmed_at)}_10s.mp4"
+            return {
+                "timestamp": iso_timestamp(confirmed_at),
+                "event_started_at": iso_timestamp(started_at),
+                "confirmed_at": iso_timestamp(confirmed_at),
+                "alert_type": alert_type,
+                "duration_seconds": round(max(0.0, duration_seconds), 3),
+                "confidence": confidence,
+                "evidence_file": evidence_file,
+                "recording_mode": "VIDEO_CLIP_10S",
+            }
+
         evidence_file = None
         if self.save_evidence:
             self.evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -1199,11 +1486,20 @@ class DrowsinessPipeline:
         self.phone_duration = 0.0
         self._head_pose_smooth = None
         self._active_esp_alert = None
+        if not self._mp_phase_done and self._landmarker is not None:
+            self._mp_phase_started_at = None
+            self._mp_cal_session = CalibrationSession(duration=self.mp_phase_seconds)
         if self.event_recorder is not None:
             self.event_recorder.interrupt()
         self._alert_recorded = self._conflict_recorded = False
 
     def close(self):
+        self._infer_stop.set()
+        self._infer_event.set()
+        try:
+            self._infer_thread.join(timeout=1.0)
+        except Exception:
+            pass
         self.telemetry.close()
         if self.event_recorder is not None:
             self.event_recorder.close()

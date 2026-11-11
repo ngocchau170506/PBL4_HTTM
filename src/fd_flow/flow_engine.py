@@ -439,6 +439,8 @@ class FlowEngine:
                 continue
             if ring.phase == "SUSPECT":
                 ring.begin_violation(first_ts)
+            elif ring.phase == "ACTIVE" and ring.is_clip_duration_reached(ev.ts_ms):
+                self._last_clip = ring.rollover_violation(ev.ts_ms)
             pre = ring.pre_event_frames()
             merged_events.append(
                 dataclasses.replace(
@@ -599,17 +601,32 @@ class FlowEngine:
             return None
         self._push_ring(sampled_or_err)
 
-        edge_err = self.send_across_edge(
-            "process.sampler", "process.baseline", sampled_or_err, trace_id
-        )
-        if edge_err is not None:
-            return edge_err
-        base_in_pkt = self._queues.dequeue("process.sampler", "process.baseline")
+        if not self._baseline.is_locked:
+            edge_err = self.send_across_edge(
+                "process.sampler", "process.baseline", sampled_or_err, trace_id
+            )
+            if edge_err is not None:
+                return edge_err
+            base_in_pkt = self._queues.dequeue("process.sampler", "process.baseline")
 
-        base_or_err = self._baseline.process_frame(base_in_pkt, driver_id_override=driver_id)
-        if isinstance(base_or_err, ErrorEvent):
-            return self._dispatch_error(base_or_err)
-        self._sync_baseline_state(base_or_err)
+            base_or_err = self._baseline.process_frame(base_in_pkt, driver_id_override=driver_id)
+            if isinstance(base_or_err, ErrorEvent):
+                return self._dispatch_error(base_or_err)
+            self._sync_baseline_state(base_or_err)
+            # Chế độ tuần tự 2 pha: Khi đang ở Pha 1 (COLLECTING 10~15s MediaPipe),
+            # không chạy song song YOLO (process.ai) trên cùng khung hình.
+            if base_or_err.state == "COLLECTING":
+                return DetectionResult(
+                    trace_id=sampled_or_err.trace_id,
+                    ts_ms=sampled_or_err.ts_ms,
+                    source="process.ai",
+                    frame_id=sampled_or_err.frame_id,
+                    label="baseline_collecting",
+                    confidence=1.0,
+                    boxes=(),
+                    latency_ms=0.0,
+                    adapter="mediapipe_phase1",
+                )
 
         edge_err = self.send_across_edge(
             "process.sampler", "process.ai", sampled_or_err, trace_id
