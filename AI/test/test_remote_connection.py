@@ -28,7 +28,10 @@ for p in (str(repo_root), str(repo_root / "AI"), str(repo_root / "src"), str(ser
         sys.path.insert(0, p)
 
 from AI.scripts.cloud_sync import CloudSyncManager
-from server import FriendServerHandler, ThreadingHTTPServer, CONNECTED_VEHICLES, VIOLATION_HISTORY
+try:
+    from AI.scripts.mock_friend_server import FriendServerHandler, ThreadingHTTPServer, CONNECTED_VEHICLES, VIOLATION_HISTORY
+except ImportError:
+    from server import FriendServerHandler, ThreadingHTTPServer, CONNECTED_VEHICLES, VIOLATION_HISTORY
 import cv2
 
 
@@ -128,10 +131,10 @@ def run_tests():
         confidence=0.91,
     )
 
-    # Cho worker thu gui va dem vao SQLite (toi da 4s)
+    # Cho worker thu gui va dem vao SQLite (toi da 8s de vuot qua timeout ket noi)
     spool_ok = False
-    for _ in range(20):
-        time.sleep(0.2)
+    for _ in range(30):
+        time.sleep(0.3)
         stats = sync.get_sync_stats()
         if stats["pending_spool"] >= 1:
             spool_ok = True

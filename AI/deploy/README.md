@@ -15,10 +15,10 @@ Cắm nguồn và kết nối Raspberry Pi cùng mạng WiFi/LAN với máy tín
   *(Hoặc xem danh sách thiết bị trong trang quản trị Router / ứng dụng Fing)*
 - Giả sử IP của Pi là `192.168.1.150` (thay bằng IP thực tế của bạn).
 
-### Bước 0.2: Sao chép thư mục dự án `IOTv2` lên Pi qua SCP
+### Bước 0.2: Sao chép thư mục dự án `IOTv4` lên Pi qua SCP
 Chạy lệnh sau từ máy tính (trong PowerShell tại thư mục `E:\AI`):
 ```powershell
-scp -r E:\AI\IOTv2 pi@192.168.1.150:~/IOTv2
+scp -r E:\AI\IOTv4 pi@192.168.1.150:~/IOTv4
 ```
 *(Nếu dùng user khác, thay `pi` bằng tên tài khoản của bạn trên Pi).*
 
@@ -34,7 +34,7 @@ ssh pi@192.168.1.150
 Sau khi SSH vào Pi, bạn chỉ cần thực hiện 1 lệnh duy nhất để chạy kiểm thử và mở Web Server:
 
 ```bash
-cd ~/IOTv2
+cd ~/IOTv4
 chmod +x AI/deploy/*.sh
 bash AI/deploy/test_pi_web.sh
 ```

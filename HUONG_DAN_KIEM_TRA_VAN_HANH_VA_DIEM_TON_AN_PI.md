@@ -115,8 +115,10 @@ nc -zv -w 3 192.168.1.210 554
 
 # 4. Kiểm tra đọc thử 1 khung hình thật từ Camera bằng OpenCV FFmpeg (không ảnh hưởng đến service đang chạy)
 ~/iot_cam_project/venv/bin/python -c "
-import cv2
-url = 'rtsp://192.168.1.210:554/user=admin_password=tlJwpbo6_channel=1_stream=0&protocol=unicast&onvif=ture.sdp?real_stream'
+import cv2, os
+pwd = os.getenv('FD_CAMERA_PASSWORD', '<MAT_KHAU_CAM>')
+cam_ip = os.getenv('FD_CAMERA_IP', '192.168.1.210')
+url = f'rtsp://{cam_ip}:554/user=admin_password={pwd}_channel=1_stream=0&protocol=unicast&onvif=ture.sdp?real_stream'
 cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
 ok, frame = cap.read()
 print('CAM_OPEN:', cap.isOpened(), '| READ_OK:', ok, '| SHAPE:', frame.shape if ok else None)

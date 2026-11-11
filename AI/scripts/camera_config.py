@@ -26,10 +26,11 @@ except Exception:
     pass
 
 # Thông tin xác thực và địa chỉ mặc định của Camera IP Vantech / Dahua (Dự án IOTv3)
-DEFAULT_CAMERA_IP = "192.168.1.210"
-DEFAULT_CAMERA_PORT = 554
-DEFAULT_CAMERA_USER = "admin"
-DEFAULT_CAMERA_PASSWORD = "tlJwpbo6"
+# Lưu ý: Mật khẩu và IP thật đọc từ biến môi trường (AI/deploy/pi.env), không gán cứng mật khẩu vào mã nguồn.
+DEFAULT_CAMERA_IP = os.getenv("FD_CAMERA_IP", "192.168.1.210").strip() or "192.168.1.210"
+DEFAULT_CAMERA_PORT = int(os.getenv("FD_CAMERA_PORT", "554"))
+DEFAULT_CAMERA_USER = os.getenv("FD_CAMERA_USER", "admin").strip() or "admin"
+DEFAULT_CAMERA_PASSWORD = os.getenv("FD_CAMERA_PASSWORD", "").strip()
 
 # Danh sách các định dạng URL RTSP chuẩn của Camera IP Vantech (192.168.1.210)
 DEFAULT_RTSP_CANDIDATES = [
@@ -405,7 +406,9 @@ def wait_for_external_camera(
     print("\n" + "=" * 70)
     print(" [HỆ THỐNG GIÁM SÁT] KHỞI ĐỘNG CHẾ ĐỘ QUÉT CAMERA NGOẠI (RTSP + USB)")
     print(f" -> Danh sách mục tiêu quét: {candidates}")
-    print(f" -> Mật khẩu camera IP:      {creds['password']}")
+    pwd_raw = creds.get("password", "")
+    pwd_masked = (pwd_raw[:2] + "***" + pwd_raw[-1:]) if len(pwd_raw) > 3 else ("***" if pwd_raw else "(chưa đặt)")
+    print(f" -> Mật khẩu camera IP:      {pwd_masked}")
     print(" -> QUY TẮC AN TOÀN:         TUYỆT ĐỐI KHÔNG SỬ DỤNG WEBCAM MÁY TÍNH TRÊN PC")
     print("=" * 70 + "\n")
 

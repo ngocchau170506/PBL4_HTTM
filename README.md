@@ -108,7 +108,7 @@ Trên Web Dashboard tích hợp sẵn:
 
 2. **Kiểm thử tự động toàn diện (Client $\leftrightarrow$ Server + Offline Spool SQLite)**:
    ```bash
-   python AI/scripts/test_remote_connection.py
+   python AI/test/test_remote_connection.py
    ```
 
 3. **Trình diễn định vị 3D XYZ không cần vệ tinh (Server-Assisted XYZ)**:

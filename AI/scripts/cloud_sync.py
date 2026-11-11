@@ -846,6 +846,7 @@ class CloudSyncManager:
                 cur = conn.cursor()
                 cur.execute("SELECT COUNT(*) FROM pending_queue")
                 self.pending_spool_count = cur.fetchone()[0]
+                self._spool_count_ts = time.monotonic()
                 conn.close()
         except Exception as e:
             print(f"[CLOUD SYNC DB ERROR] {e}")

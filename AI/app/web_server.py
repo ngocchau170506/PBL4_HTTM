@@ -232,6 +232,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="pulse-dot"></div>
     <h1>AI Driver Monitoring System</h1>
     <span id="conn-badge" class="badge badge-online">ĐANG KẾT NỐI</span>
+    <span id="auth-badge" class="badge" style="display:none; background:rgba(56,189,248,0.15); color:var(--accent); border:1px solid var(--accent); margin-left:6px;">🔒 ĐÃ XÁC THỰC</span>
   </div>
   <div>
     <span style="color:var(--muted); font-size:12px;">Thiết bị: Raspberry Pi 4 | Cổng Web: <b id="lbl-port">8080</b></span>
@@ -543,6 +544,40 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 <script>
   let lastEvents = [];
+  const _urlToken = new URLSearchParams(window.location.search).get('token');
+  if (_urlToken) {
+    localStorage.setItem('web_auth_token', _urlToken);
+  }
+  function authHeaders(custom = {}) {
+    const h = { ...custom };
+    const tok = localStorage.getItem('web_auth_token') || _urlToken;
+    if (tok) {
+      h['X-API-Token'] = tok;
+      h['Authorization'] = 'Bearer ' + tok;
+    }
+    return h;
+  }
+  function handleAuthError(res) {
+    if (res && res.status === 401) {
+      const input = prompt('Yêu cầu mã xác thực (WEB_AUTH_TOKEN) để thao tác:');
+      if (input) {
+        localStorage.setItem('web_auth_token', input.trim());
+        window.location.href = '/?token=' + encodeURIComponent(input.trim());
+      }
+      return true;
+    }
+    return false;
+  }
+  const _activeTok = localStorage.getItem('web_auth_token') || _urlToken;
+  if (_activeTok) {
+    const ab = document.getElementById('auth-badge');
+    if (ab) ab.style.display = 'inline-block';
+    const camImg = document.getElementById('cam-img');
+    if (camImg && camImg.getAttribute('src') === '/stream') {
+      camImg.src = '/stream?token=' + encodeURIComponent(_activeTok);
+    }
+  }
+
   function showToast(msg) {
     const t = document.getElementById('toast');
     t.innerText = msg;
@@ -555,8 +590,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     try {
       const res = await fetch('/api/sync/test', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: authHeaders({'Content-Type': 'application/json'}),
       });
+      if (handleAuthError(res)) return;
       const data = await res.json();
       if (data.ok) {
         showToast('✅ Thành công! Server bạn tôi đã nhận: ' + data.resp);
@@ -580,9 +616,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     try {
       const res = await fetch('/api/config', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ server_url: urlInput })
       });
+      if (handleAuthError(res)) return;
       const data = await res.json();
       if (data.ok) {
         showToast('✅ Đã lưu URL Server!');
@@ -635,9 +672,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     try {
       const res = await fetch('/api/set_pc_location', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: authHeaders({'Content-Type': 'application/json'}),
         body: JSON.stringify({ lat, lon, alt, source })
       });
+      if (handleAuthError(res)) return;
       const data = await res.json();
       if (data.ok) {
         showToast('✅ Đã đồng bộ tọa độ [' + lat.toFixed(4) + ', ' + lon.toFixed(4) + '] sang Pi!');
@@ -653,9 +691,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     try {
       const res = await fetch('/api/control', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: authHeaders({'Content-Type': 'application/json'}),
         body: JSON.stringify({cmd: cmd})
       });
+      if (handleAuthError(res)) return;
       const data = await res.json();
       if (data.ok) {
         showToast('Đã gửi [' + cmd + '] -> ACK: ' + (data.ack || 'Thành công'));
@@ -680,9 +719,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     try {
       const res = await fetch('/api/config', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: authHeaders({'Content-Type': 'application/json'}),
         body: JSON.stringify(payload)
       });
+      if (handleAuthError(res)) return;
       const data = await res.json();
       if (data.ok) {
         showToast('Đã cập nhật ngưỡng nhận diện thành công!');
@@ -697,6 +737,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   // Định kỳ 800ms cập nhật trạng thái thời gian thực
   async function fetchStatus() {
     try {
+      const res = await fetch('/api/status', { headers: authHeaders() });
+      if (res.status === 401) {
+        document.getElementById('conn-badge').className = 'badge badge-offline';
+        document.getElementById('conn-badge').innerText = 'KHÓA BẢO MẬT (401)';
+        return;
+      }
       const res = await fetch('/api/status');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
@@ -871,7 +917,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   async function measurePing() {
     const t0 = performance.now();
     try {
-      const res = await fetch('/api/ping?t=' + Date.now(), { cache: 'no-store' });
+      const res = await fetch('/api/ping?t=' + Date.now(), { headers: authHeaders(), cache: 'no-store' });
       if (res.ok) {
         const pingMs = Math.round(performance.now() - t0);
         const valNetPing = document.getElementById('val-net-ping');
@@ -900,12 +946,103 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </html>
 """
 
+UNLOCK_HTML = """<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Driver Monitor - Xác Thực Truy Cập</title>
+<style>
+  :root {
+    --bg: #0b0f19;
+    --card: #151d2f;
+    --border: #23314d;
+    --text: #f1f5f9;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 16px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 30px;
+    max-width: 420px;
+    width: 100%;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+  }
+  .icon { font-size: 40px; margin-bottom: 12px; }
+  h2 { font-size: 20px; font-weight: 700; margin-bottom: 8px; color: #fff; }
+  p { font-size: 13px; color: var(--muted); margin-bottom: 20px; line-height: 1.5; }
+  input {
+    width: 100%;
+    background: #0b0f19;
+    border: 1px solid var(--border);
+    color: #fff;
+    padding: 12px 14px;
+    border-radius: 8px;
+    font-size: 14px;
+    margin-bottom: 14px;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  button {
+    width: 100%;
+    background: var(--accent);
+    color: #0b0f19;
+    border: none;
+    padding: 12px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  button:hover { opacity: 0.9; }
+  .note {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 16px;
+    text-align: center;
+    line-height: 1.4;
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">🔒</div>
+  <h2>Bảo Vệ Bảng Điều Khiển</h2>
+  <p>Hệ thống giám sát xe đang kích hoạt bảo mật. Vui lòng nhập mã bảo vệ (<b>WEB_AUTH_TOKEN</b>) để tiếp tục.</p>
+  <form onsubmit="event.preventDefault(); const t = document.getElementById('token-input').value.trim(); if(t){ window.location.href = '/?token=' + encodeURIComponent(t); }">
+    <input type="password" id="token-input" placeholder="Nhập WEB_AUTH_TOKEN..." autofocus required />
+    <button type="submit">Mở Bảng Điều Khiển</button>
+  </form>
+  <div class="note">Mã này cấu hình trong <code>AI/deploy/pi.env</code> (hoặc truyền qua tham số <code>?token=...</code>)</div>
+</div>
+</body>
+</html>
+"""
+
 
 class DriverMonitorWebServer:
     """Multi-threaded web server serving live video and bi-directional REST APIs."""
 
-    def __init__(self, port: int = 8080):
+    def __init__(self, port: int = 8080, auth_token: Optional[str] = None):
         self.port = int(port)
+        self.auth_token = (
+            auth_token.strip()
+            if auth_token is not None
+            else os.getenv("WEB_AUTH_TOKEN", "").strip()
+        )
         self._frame = None
         self._state: Dict[str, Any] = {}
         self._events = []
@@ -1074,16 +1211,73 @@ class DriverMonitorWebServer:
             def log_message(self, format, *args):
                 pass  # Tắt log spam HTTP request
 
+            def _is_authorized(self) -> bool:
+                if not parent.auth_token:
+                    return True
+                client_ip = self.client_address[0] if self.client_address else ""
+                if client_ip in ("127.0.0.1", "::1", "localhost"):
+                    return True
+
+                auth_header = self.headers.get("Authorization", "")
+                if auth_header.startswith("Bearer "):
+                    if auth_header[7:].strip() == parent.auth_token:
+                        return True
+
+                if self.headers.get("X-API-Token", "").strip() == parent.auth_token:
+                    return True
+
+                from urllib.parse import urlparse, parse_qs
+                query = parse_qs(urlparse(self.path).query)
+                if query.get("token") and query["token"][0].strip() == parent.auth_token:
+                    return True
+
+                cookie_header = self.headers.get("Cookie", "")
+                if cookie_header:
+                    for part in cookie_header.split(";"):
+                        k, _, v = part.strip().partition("=")
+                        if k == "web_token" and v == parent.auth_token:
+                            return True
+
+                return False
+
             def do_GET(self):
-                if self.path == "/" or self.path == "/index.html":
+                from urllib.parse import urlparse, parse_qs
+                parsed_url = urlparse(self.path)
+                req_path = parsed_url.path
+                query = parse_qs(parsed_url.query)
+
+                is_auth = self._is_authorized()
+                has_valid_url_token = bool(query.get("token") and query["token"][0].strip() == parent.auth_token)
+
+                if req_path in ("/", "/index.html"):
+                    if parent.auth_token and not is_auth:
+                        auth_html = UNLOCK_HTML.encode("utf-8")
+                        self.send_response(401)
+                        self.send_header("Content-Type", "text/html; charset=utf-8")
+                        self.send_header("Content-Length", str(len(auth_html)))
+                        self.end_headers()
+                        self.wfile.write(auth_html)
+                        return
+
                     html_data = DASHBOARD_HTML.encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html; charset=utf-8")
                     self.send_header("Content-Length", str(len(html_data)))
+                    if parent.auth_token and (has_valid_url_token or is_auth):
+                        self.send_header("Set-Cookie", f"web_token={parent.auth_token}; Path=/; SameSite=Lax; Max-Age=2592000")
                     self.end_headers()
                     self.wfile.write(html_data)
 
-                elif self.path.startswith("/stream"):
+                elif req_path.startswith("/stream"):
+                    if parent.auth_token and not is_auth:
+                        self.send_response(401)
+                        self.send_header("Content-Type", "application/json")
+                        body = json.dumps({"ok": False, "error": "Unauthorized: Yêu cầu WEB_AUTH_TOKEN"}).encode("utf-8")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                        return
+
                     self.send_response(200)
                     self.send_header("Cache-Control", "no-cache, private")
                     self.send_header("Pragma", "no-cache")
@@ -1105,7 +1299,7 @@ class DriverMonitorWebServer:
                     except Exception:
                         pass
 
-                elif self.path.startswith("/api/ping"):
+                elif req_path.startswith("/api/ping"):
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Cache-Control", "no-cache, no-store")
@@ -1117,7 +1311,15 @@ class DriverMonitorWebServer:
                     self.end_headers()
                     self.wfile.write(body)
 
-                elif self.path in ("/api/status", "/api/state"):
+                elif req_path in ("/api/status", "/api/state"):
+                    if parent.auth_token and not is_auth:
+                        self.send_response(401)
+                        self.send_header("Content-Type", "application/json")
+                        body = json.dumps({"ok": False, "error": "Unauthorized: Yêu cầu WEB_AUTH_TOKEN"}).encode("utf-8")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                        return
                     with parent._condition:
                         state = dict(parent._state)
                     hw = get_system_metrics()
@@ -1254,6 +1456,9 @@ class DriverMonitorWebServer:
                     self.end_headers()
 
             def do_POST(self):
+                from urllib.parse import urlparse
+                req_path = urlparse(self.path).path
+
                 length = int(self.headers.get("Content-Length", 0))
                 raw_body = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
                 try:
@@ -1261,7 +1466,13 @@ class DriverMonitorWebServer:
                 except Exception:
                     payload = {}
 
-                if self.path == "/api/control":
+                if parent.auth_token:
+                    payload_tok = str(payload.get("token", "")).strip() if isinstance(payload, dict) else ""
+                    if not self._is_authorized() and payload_tok != parent.auth_token:
+                        self._json_response({"ok": False, "error": "Unauthorized: Yêu cầu WEB_AUTH_TOKEN"}, 401)
+                        return
+
+                if req_path == "/api/control":
                     cmd = payload.get("cmd", "").strip().upper()
                     if not cmd:
                         self._json_response({"ok": False, "error": "Missing cmd parameter"}, 400)
@@ -1317,7 +1528,7 @@ class DriverMonitorWebServer:
                         return
                     self._json_response({"ok": False, "error": "ESP32 chưa kết nối (trên cả Pi và PC)"}, 503)
 
-                elif self.path == "/api/esp_bridge":
+                elif req_path == "/api/esp_bridge":
                     # Cầu nối từ Máy tính (COM3 + GPS) đẩy sang Raspberry Pi qua mạng LAN
                     with parent._condition:
                         parent._remote_esp_ts = time.time()
@@ -1351,7 +1562,7 @@ class DriverMonitorWebServer:
                             )
                     self._json_response({"ok": True, "pending_commands": pending_cmds})
 
-                elif self.path == "/api/config":
+                elif req_path == "/api/config":
                     if not parent.pipeline and not parent.esp:
                         self._json_response({"ok": False, "error": "Pipeline/ESP not initialized"}, 503)
                         return
@@ -1389,10 +1600,10 @@ class DriverMonitorWebServer:
                                     replaced = False
                                     for line in lines:
                                         if line.startswith("REMOTE_SERVER_URL="):
-                                            new_lines.append(f"REMOTE_SERVER_URL={srv_in}")
-                                            replaced = True
+                                             new_lines.append(f"REMOTE_SERVER_URL={srv_in}")
+                                             replaced = True
                                         else:
-                                            new_lines.append(line)
+                                             new_lines.append(line)
                                     if not replaced:
                                         new_lines.append(f"REMOTE_SERVER_URL={srv_in}")
                                     env_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
@@ -1400,7 +1611,7 @@ class DriverMonitorWebServer:
                                 pass
                     self._json_response({"ok": True, "applied": payload})
 
-                elif self.path == "/api/sync/test":
+                elif req_path == "/api/sync/test":
                     if not parent.cloud_sync:
                         self._json_response({"ok": False, "error": "Chua khoi tao CloudSync"}, 503)
                         return
@@ -1413,7 +1624,7 @@ class DriverMonitorWebServer:
                         "vehicle_id": telemetry.get("vehicle_id"),
                     })
 
-                elif self.path in ("/api/set_pc_location", "/api/gps/inject"):
+                elif req_path in ("/api/set_pc_location", "/api/gps/inject"):
                     # Tiếp nhận tọa độ định vị từ Trình duyệt / Máy tính để bù GPS khi test phòng lab
                     lat = float(payload.get("lat", payload.get("y", 16.068500)))
                     lon = float(payload.get("lon", payload.get("x", 108.221500)))
@@ -1489,6 +1700,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Chạy Dashboard Xe cục bộ (Pi Web Server)")
     parser.add_argument("--port", type=int, default=8080, help="Cổng web (mặc định 8080)")
     parser.add_argument("--server", type=str, default="http://127.0.0.1:5000", help="URL máy chủ trung tâm (mặc định http://127.0.0.1:5000)")
+    parser.add_argument("--token", type=str, default=None, help="Mã xác thực WEB_AUTH_TOKEN (mặc định đọc từ env)")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[2]
@@ -1502,7 +1714,7 @@ if __name__ == "__main__":
     gps = GpsManager(simulation_mode=False)
     cloud_sync = CloudSyncManager(server_url=args.server, enabled=True, telemetry_interval=2.0, gps_manager=gps)
 
-    web = DriverMonitorWebServer(port=args.port)
+    web = DriverMonitorWebServer(port=args.port, auth_token=args.token)
     web.set_context(cloud_sync=cloud_sync, gps=gps)
 
     print("=" * 70)
