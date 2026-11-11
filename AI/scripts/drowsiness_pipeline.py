@@ -37,10 +37,15 @@ from AI.scripts.time_utils import filename_timestamp, iso_timestamp, local_now
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 YOLO_MODEL_PATH = PROJECT_ROOT / "AI" / "models" / "best.pt"
-CONFIDENCE_THRESHOLD = 0.2
+CONFIDENCE_THRESHOLD = float(os.getenv("YOLO_CONF", "0.08"))
+YOLO_EYE_CLOSED_CONF = float(os.getenv("YOLO_EYE_CLOSED_CONF", "0.10"))
+YOLO_EYE_OPEN_CONF = float(os.getenv("YOLO_EYE_OPEN_CONF", "0.22"))
+YOLO_MOUTH_CONF = float(os.getenv("YOLO_MOUTH_CONF", "0.15"))
+YAWN_MIN_ASPECT_RATIO = float(os.getenv("YAWN_MIN_ASPECT_RATIO", "0.48"))
 BUFFER_SIZE = 10
-DROWSY_THRESHOLD_SECONDS = 2.0
-YAWNING_THRESHOLD_SECONDS = 1.0
+DROWSY_THRESHOLD_SECONDS = float(os.getenv("DROWSY_THRESHOLD_SECONDS", "2.0"))
+YAWNING_THRESHOLD_SECONDS = float(os.getenv("YAWNING_THRESHOLD_SECONDS", "1.8"))
+TIMER_GRACE_SECONDS = float(os.getenv("TIMER_GRACE_SECONDS", "0.35"))
 
 # Minimum valid baseline samples; decisions use independent temporal evidence.
 MIN_VALID_SAMPLES = 5
@@ -48,11 +53,11 @@ MIN_VALID_SAMPLES = 5
 # Hệ số tính ngưỡng động từ baseline cá nhân
 EAR_BASELINE_FACTOR = 0.75            # Ngưỡng nhắm mắt = mean_ear * 0.75
 MAR_BASELINE_FACTOR = 1.8             # Ngưỡng ngáp = max(mean_mar * 1.8, MAR_MIN_THRESHOLD)
-MAR_MIN_THRESHOLD = 0.40              # Ngưỡng ngáp tối thiểu
+MAR_MIN_THRESHOLD = float(os.getenv("MAR_MIN_THRESHOLD", "0.50")) # Ngưỡng ngáp tối thiểu (nâng lên 0.50 để chống báo giả khi cười/nói)
 
 # Ngưỡng mặc định dự phòng khi chưa có baseline hợp lệ
 DEFAULT_EAR_THRESHOLD = 0.22
-DEFAULT_MAR_THRESHOLD = 0.50
+DEFAULT_MAR_THRESHOLD = 0.55
 
 
 class AlertState(str, Enum):
@@ -643,10 +648,38 @@ class DrowsinessPipeline:
                 if not self.enable_behavior_alerts and (_is_smoking(name) or _is_phone(name)):
                     continue
                 conf = float(box.conf[0].item())
-                detections.append((name, conf))
-                if self._headless:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                    boxes_xyxy.append((name, conf, x1, y1, x2, y2))
+                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                bw = max(1, x2 - x1)
+                bh = max(1, y2 - y1)
+                aspect_ratio = bh / bw
+
+                # Phân lớp với ngưỡng confidence tối ưu theo từng nhóm đặc trưng:
+                if _is_drowsy(name):
+                    # Mắt nhắm: đặc trưng khe mí mắt ở ảnh nén 320x320 có conf thấp hơn
+                    if conf >= YOLO_EYE_CLOSED_CONF:
+                        detections.append((name, conf))
+                        boxes_xyxy.append((name, conf, x1, y1, x2, y2))
+                elif _is_eye_open(name):
+                    # Mắt mở: có con ngươi và tròng trắng tương phản mạnh
+                    if conf >= YOLO_EYE_OPEN_CONF:
+                        detections.append((name, conf))
+                        boxes_xyxy.append((name, conf, x1, y1, x2, y2))
+                elif _is_yawning(name):
+                    if conf >= YOLO_MOUTH_CONF:
+                        # Kiểm tra hình học góc mở miệng:
+                        # Khi nói chuyện / cười: miệng bè ngang -> aspect_ratio < 0.48
+                        # Khi ngáp thật: hàm dưới trễ sâu xuống -> aspect_ratio >= 0.48
+                        if aspect_ratio >= YAWN_MIN_ASPECT_RATIO:
+                            detections.append((name, conf))
+                            boxes_xyxy.append((name, conf, x1, y1, x2, y2))
+                        else:
+                            # Gán nhãn mở miệng nói/cười (không kích hoạt còi cảnh báo ngáp)
+                            neutral_name = f"{name} (Smile/Talk)"
+                            boxes_xyxy.append((neutral_name, conf, x1, y1, x2, y2))
+                else:
+                    if conf >= 0.20:
+                        detections.append((name, conf))
+                        boxes_xyxy.append((name, conf, x1, y1, x2, y2))
             return detections, boxes_xyxy, plotted, error
         except Exception as exc:
             error = str(exc)
@@ -1408,14 +1441,23 @@ class DrowsinessPipeline:
         self, active, attribute, now, wall_attribute, wall_now
     ):
         started = getattr(self, attribute)
+        last_active_attr = f"{attribute}_last_active"
         if active:
             if started is None:
                 started = now
                 setattr(self, attribute, started)
                 setattr(self, wall_attribute, wall_now)
+            setattr(self, last_active_attr, now)
             return now - started
+
+        # Debounce: Nếu mất nhãn tạm thời hoặc chớp mắt ngắn (< TIMER_GRACE_SECONDS), không reset 0 tức thì
+        last_active = getattr(self, last_active_attr, None)
+        if started is not None and last_active is not None and (now - last_active) <= TIMER_GRACE_SECONDS:
+            return now - started
+
         setattr(self, attribute, None)
         setattr(self, wall_attribute, None)
+        setattr(self, last_active_attr, None)
         return 0.0
 
     def _record_event(
