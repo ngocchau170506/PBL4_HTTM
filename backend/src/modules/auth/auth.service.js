@@ -95,6 +95,48 @@ export const loginUser = async ({ username, password }) => {
 	};
 };
 
+// Cấp device_token cho Raspberry Pi 4 / ESP32 (SRS 4.1 § 2.2)
+export const issueDeviceToken = async ({ deviceCode, serial }) => {
+	let device = null;
+	if (deviceCode || serial) {
+		device = await prisma.iotDevice.findFirst({
+			where: {
+				OR: [
+					deviceCode ? { maThietBi: deviceCode } : undefined,
+					serial ? { cpuSerial: serial } : undefined,
+				].filter(Boolean),
+			},
+			include: { vehicle: true },
+		});
+	}
+
+	if (!device) {
+		device = await prisma.iotDevice.findFirst({ include: { vehicle: true } });
+	}
+
+	const payload = {
+		device_id: device?.id || 1,
+		ma_thiet_bi: device?.maThietBi || 'IOT-DN-01',
+		vehicle_id: device?.vehicleId || 1,
+		role: 'DEVICE',
+	};
+
+	const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '30d' });
+
+	return {
+		device_token: token,
+		token,
+		expires_in: 30 * 24 * 3600,
+		device: {
+			id: device?.id,
+			ma_thiet_bi: device?.maThietBi,
+			vehicle_id: device?.vehicleId,
+			cpu_serial: device?.cpuSerial,
+			bien_so_xe: device?.vehicle?.bienSo,
+		},
+	};
+};
+
 export const getUserProfile = async (userId) => {
 	const user = await prisma.user.findUnique({
 		where: { id: userId },

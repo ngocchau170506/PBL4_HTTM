@@ -43,28 +43,23 @@ const MainLayout = () => {
   } = useFleetStore();
 
   useEffect(() => {
-    syncFleetData();
+    useFleetStore.getState().syncFleetData();
     const token = localStorage.getItem("token");
     socketClient.connect(token, {
-      setSocketStatus,
-      handleTelemetrySocket,
-      handleNewViolationSocket,
-      handleDeviceHealthSocket,
-      tickRealtimeTelemetry,
-      syncFleetData,
+      setSocketStatus: useFleetStore.getState().setSocketStatus,
+      handleTelemetrySocket: useFleetStore.getState().handleTelemetrySocket,
+      handleNewViolationSocket:
+        useFleetStore.getState().handleNewViolationSocket,
+      handleDeviceHealthSocket:
+        useFleetStore.getState().handleDeviceHealthSocket,
+      tickRealtimeTelemetry: useFleetStore.getState().tickRealtimeTelemetry,
+      syncFleetData: useFleetStore.getState().syncFleetData,
     });
 
     return () => {
       socketClient.disconnect();
     };
-  }, [
-    syncFleetData,
-    setSocketStatus,
-    handleTelemetrySocket,
-    handleNewViolationSocket,
-    handleDeviceHealthSocket,
-    tickRealtimeTelemetry,
-  ]);
+  }, []);
 
   const handleLogout = () => {
     socketClient.disconnect();

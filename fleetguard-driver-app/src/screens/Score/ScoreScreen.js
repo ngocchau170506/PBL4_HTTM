@@ -12,20 +12,33 @@ import AppCard from "../../components/common/AppCard";
 import StatusBadge from "../../components/common/StatusBadge";
 
 export default function ScoreScreen({ user, biometricProfile, scoreLogs = [] }) {
+  const currentScore = user?.diem_uy_tin ?? 100;
+  const isRed = currentScore <= 20;
+  const isYellow = currentScore <= 65;
+  const badgeLabel = isRed ? "BÁO ĐỘNG ĐỎ" : isYellow ? "CẢNH CÁO VÀNG" : "HOẠT ĐỘNG TỐT";
+  const badgeType = isRed ? "danger" : isYellow ? "warning" : "safe";
+  const cardVariant = isRed ? "danger" : isYellow ? "warning" : "active";
+
+  const dynamicAssessment = (biometricProfile?.danh_gia || "Hồ sơ sức khỏe ổn định.")
+    .replace(/Điểm uy tín \d+/, `Điểm uy tín ${currentScore}`);
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 16 }}>
       {/* VÒNG ĐIỂM UY TÍN HIỆN TẠI */}
-      <AppCard variant="warning" style={styles.scoreHero}>
+      <AppCard variant={cardVariant} style={styles.scoreHero}>
         <View style={styles.scoreCircle}>
-          <Text style={styles.scoreNum}>{user?.diem_uy_tin ?? 58}</Text>
+          <Text style={styles.scoreNum}>{currentScore}</Text>
           <Text style={styles.scoreMax}>100 điểm</Text>
         </View>
         <View style={{ flex: 1 }}>
-          <StatusBadge label="CẢNH CÁO VÀNG" type="warning" />
+          <StatusBadge label={badgeLabel} type={badgeType} />
           <Text style={styles.heroTitle}>Hồ sơ Uy tín Tài xế</Text>
           <Text style={styles.heroSub}>
-            Điểm &le; 65: Giảm 30% tần suất gợi ý ca đêm. Nếu rơi xuống &le; 20
-            điểm sẽ bị khóa cứng nhận ca.
+            {isRed
+              ? "Báo động đỏ (Điểm <= 20): Tài khoản bị tạm khóa nhận ca mới. Cần liên hệ Quản trị viên để xét duyệt mở lại."
+              : isYellow
+                ? "Điểm ≤ 65: Giảm 30% tần suất gợi ý ca đêm. Nếu rơi xuống ≤ 20 điểm sẽ bị khóa cứng nhận ca."
+                : "Điểm > 65: Tài xế đạt chuẩn an toàn cao. Đủ điều kiện nhận ca đêm và hành trình dài."}
           </Text>
         </View>
       </AppCard>
@@ -56,7 +69,7 @@ export default function ScoreScreen({ user, biometricProfile, scoreLogs = [] }) 
             </Text>
           </View>
         </View>
-        <Text style={styles.bioDesc}>{biometricProfile?.danh_gia}</Text>
+        <Text style={styles.bioDesc}>{dynamicAssessment}</Text>
       </AppCard>
 
       {/* LỊCH SỬ SỔ CÁI ĐIỂM UY TÍN (driver_score_logs) */}

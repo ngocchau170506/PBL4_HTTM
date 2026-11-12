@@ -6,6 +6,7 @@ import {
 	handleGetUsers,
 	handleLogin,
 	handleRegister,
+	handleDeviceToken,
 	handleUpdateConfig,
 	handleUpdateUser,
 	handleUpdateOwnProfile,
@@ -17,6 +18,7 @@ const router = express.Router();
 
 router.post('/register', handleRegister);
 router.post('/login', handleLogin);
+router.post('/device-token', handleDeviceToken);
 
 router.use(requireAuth);
 

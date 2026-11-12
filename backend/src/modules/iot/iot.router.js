@@ -1,4 +1,5 @@
 import express from 'express';
+import jwt from 'jsonwebtoken';
 import {
 	handleIngestTelemetry,
 	handleIngestBatchTelemetry,
@@ -9,31 +10,43 @@ import { upload } from '../upload/upload.controller.js';
 
 const router = express.Router();
 
-// Middleware xác thực thiết bị IoT (Hỗ trợ cả x-device-token, Bearer device_token và chế độ Dev)
+// Middleware xác thực thiết bị IoT (Hỗ trợ cả x-device-token, JWT Bearer device_token và chế độ Dev)
 const requireDeviceAuth = (req, res, next) => {
 	const deviceToken =
 		req.headers['x-device-token'] || req.headers.authorization?.split(' ')[1];
 	const expectedToken = process.env.IOT_DEVICE_SECRET;
 
-	if (!expectedToken) {
-		if (process.env.NODE_ENV === 'production') {
-			return res.status(403).json({
-				success: false,
-				message: 'IoT device authentication not configured.',
-			});
-		}
+	// 1. Chấp nhận static token IOT_DEVICE_SECRET
+	if (deviceToken && expectedToken && deviceToken === expectedToken) {
 		return next();
 	}
 
-	if (!deviceToken || deviceToken !== expectedToken) {
-		return res.status(401).json({
-			success: false,
-			message:
-				'Thiết bị IoT không được xác thực. Vui lòng cung cấp x-device-token hợp lệ.',
-		});
+	// 2. Chấp nhận JWT device token cấp từ /api/v1/auth/device-token
+	if (deviceToken) {
+		try {
+			const secret =
+				process.env.ACCESS_JWT_SECRET ||
+				'pbl4_access_token_secret_key_2026_super_secure_node_jwt_auth_key';
+			const decoded = jwt.verify(deviceToken, secret);
+			if (decoded && (decoded.role === 'DEVICE' || decoded.device_id)) {
+				req.device = decoded;
+				return next();
+			}
+		} catch (err) {
+			// Tiếp tục kiểm tra fallback
+		}
 	}
 
-	next();
+	// 3. Fallback chế độ Dev nếu chưa cấu hình IOT_DEVICE_SECRET
+	if (!expectedToken && process.env.NODE_ENV !== 'production') {
+		return next();
+	}
+
+	return res.status(401).json({
+		success: false,
+		message:
+			'Thiết bị IoT không được xác thực. Vui lòng cung cấp x-device-token hoặc Bearer device_token hợp lệ.',
+	});
 };
 
 // 1. POST /api/v1/edge/telemetry (và /api/v1/iot/telemetry)

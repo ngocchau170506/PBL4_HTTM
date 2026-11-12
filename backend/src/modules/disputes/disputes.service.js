@@ -110,6 +110,13 @@ export const resolveDispute = async (disputeId, { decision, trang_thai, phan_hoi
 
   const isApproved = resolvedDecision === 'APPROVED';
   const newStatus = isApproved ? 'APPROVED' : 'REJECTED';
+  const refundPoints = dispute.violation?.diemTru || 5;
+  const currentUyTin = dispute.driver.uyTin;
+  const newUyTin = isApproved ? Math.min(100, currentUyTin + refundPoints) : currentUyTin;
+
+  let newWarning = 'NORMAL';
+  if (newUyTin <= 20) newWarning = 'SUSPENDED_RED';
+  else if (newUyTin <= 65) newWarning = 'WARNING_YELLOW';
 
   const result = await prisma.$transaction(async (tx) => {
     // 1. Cập nhật đơn khiếu nại
@@ -129,8 +136,6 @@ export const resolveDispute = async (disputeId, { decision, trang_thai, phan_hoi
     });
 
     if (isApproved) {
-      const refundPoints = dispute.violation?.diemTru || 5;
-
       // 2. Cập nhật vi phạm: trangThaiDiem = REFUNDED
       await tx.violation.update({
         where: { id: dispute.violationId },
@@ -138,12 +143,6 @@ export const resolveDispute = async (disputeId, { decision, trang_thai, phan_hoi
       });
 
       // 3. Hoàn điểm cho tài xế
-      const currentUyTin = dispute.driver.uyTin;
-      const newUyTin = Math.min(100, currentUyTin + refundPoints);
-      let newWarning = 'NORMAL';
-      if (newUyTin <= 20) newWarning = 'SUSPENDED_RED';
-      else if (newUyTin <= 65) newWarning = 'WARNING_YELLOW';
-
       await tx.driver.update({
         where: { userId: dispute.driverId },
         data: {
@@ -182,5 +181,13 @@ export const resolveDispute = async (disputeId, { decision, trang_thai, phan_hoi
     lyDo: note || (isApproved ? 'Chấp thuận khiếu nại và hoàn điểm' : 'Bác bỏ khiếu nại'),
   });
 
-  return formatDispute(result);
+  return {
+    ...formatDispute(result),
+    driver_id: dispute.driverId,
+    diem_truoc: currentUyTin,
+    diem_sau: newUyTin,
+    so_diem_thay_doi: isApproved ? refundPoints : 0,
+    cap_canh_bao: newWarning,
+    is_approved: isApproved,
+  };
 };

@@ -101,7 +101,11 @@ export default function ShiftsTable({
                             className="border-alert-warning/30 bg-alert-warning/15 text-alert-warning inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] font-medium"
                           >
                             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                            <span>{al.message || al.ly_do}</span>
+                            <span>
+                              {typeof al === "string"
+                                ? al
+                                : al.message || al.ly_do}
+                            </span>
                           </span>
                         ))}
                       </div>
