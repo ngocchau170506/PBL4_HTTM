@@ -159,33 +159,17 @@ export const updateTripStatus = async (id, trangThai) => {
 
 	const updatedTrip = await prisma.$transaction(async (tx) => {
 		if (trangThai === 'IN_PROGRESS') {
-			const activeDriverTrip = await tx.trip.findFirst({
+			// Tự động kết thúc các chuyến cũ bị treo của cùng tài xế hoặc cùng xe để không bị kẹt khi Demo
+			await tx.trip.updateMany({
 				where: {
-					driverId: trip.driverId,
+					OR: [{ driverId: trip.driverId }, { vehicleId: trip.vehicleId }],
 					trangThai: 'IN_PROGRESS',
 					id: { not: tripId },
 				},
+				data: { trangThai: 'COMPLETED', thoiGianKetThuc: new Date() },
 			});
-			if (activeDriverTrip) {
-				throw new Error(
-					'Tài xế đang có một chuyến xe khác đang chạy (IN_PROGRESS). Vui lòng kết thúc chuyến cũ trước.',
-				);
-			}
 
-			const activeVehicleTrip = await tx.trip.findFirst({
-				where: {
-					vehicleId: trip.vehicleId,
-					trangThai: 'IN_PROGRESS',
-					id: { not: tripId },
-				},
-			});
-			if (activeVehicleTrip) {
-				throw new Error(
-					'Phương tiện này đang thuộc về một chuyến xe khác đang chạy (IN_PROGRESS).',
-				);
-			}
-
-			data.thoiGianBatDau = new Date();
+			data.thoiGianBatDau = trip.thoiGianBatDau || new Date();
 			await tx.driver.update({
 				where: { userId: trip.driverId },
 				data: { trangThaiTaiXe: 'ON_TRIP' },
@@ -193,6 +177,17 @@ export const updateTripStatus = async (id, trangThai) => {
 			await tx.vehicle.update({
 				where: { id: trip.vehicleId },
 				data: { trangThai: 'IN_USE' },
+			});
+			if (trip.shiftId) {
+				await tx.shift.update({
+					where: { id: trip.shiftId },
+					data: { trangThai: 'IN_PROGRESS' },
+				});
+			}
+		} else if (trangThai === 'RESTING') {
+			await tx.driver.update({
+				where: { userId: trip.driverId },
+				data: { trangThaiTaiXe: 'ON_TRIP' },
 			});
 		} else if (trangThai === 'COMPLETED' || trangThai === 'CANCELLED') {
 			data.thoiGianKetThuc = new Date();
@@ -204,6 +199,14 @@ export const updateTripStatus = async (id, trangThai) => {
 				where: { id: trip.vehicleId },
 				data: { trangThai: 'AVAILABLE' },
 			});
+			if (trip.shiftId) {
+				await tx.shift.update({
+					where: { id: trip.shiftId },
+					data: {
+						trangThai: trangThai === 'COMPLETED' ? 'COMPLETED' : 'CANCELLED',
+					},
+				});
+			}
 		}
 
 		return tx.trip.update({
@@ -211,7 +214,7 @@ export const updateTripStatus = async (id, trangThai) => {
 			data,
 			include: {
 				driver: { include: { user: true } },
-				vehicle: true,
+				vehicle: { include: { iotDevice: true } },
 				route: true,
 			},
 		});
@@ -330,13 +333,14 @@ export const calibrateAndStartTrip = async ({
 	const pDriverId = parseInt(driverId, 10);
 	let targetTrip = null;
 
-	if (tripId) {
-		targetTrip = await prisma.trip.findUnique({
-			where: { id: parseInt(tripId, 10) },
-		});
-	} else if (shiftId) {
+	if (shiftId) {
 		targetTrip = await prisma.trip.findUnique({
 			where: { shiftId: parseInt(shiftId, 10) },
+		});
+	}
+	if (!targetTrip && tripId) {
+		targetTrip = await prisma.trip.findUnique({
+			where: { id: parseInt(tripId, 10) },
 		});
 	}
 
@@ -352,28 +356,23 @@ export const calibrateAndStartTrip = async ({
 					driverId: shift.driverId,
 					vehicleId: shift.vehicleId,
 					routeId: shift.routeId,
-					trangThai: 'IN_PROGRESS',
-					thoiGianBatDau: new Date(),
+					trangThai: 'PLANNED',
 				},
-			});
-			await prisma.shift.update({
-				where: { id: shift.id },
-				data: { trangThai: 'IN_PROGRESS' },
 			});
 		}
 	}
 
-	// Nếu đã có Trip thì chuyển sang IN_PROGRESS
-	if (targetTrip && targetTrip.trangThai !== 'IN_PROGRESS') {
+	// Chuyển Trip, Shift, Vehicle, Driver sang trạng thái đang vận hành (IN_PROGRESS / IN_USE / ON_TRIP)
+	if (targetTrip) {
 		targetTrip = await updateTripStatus(targetTrip.id, 'IN_PROGRESS');
 	}
 
-	// Lưu bản ghi hiệu chuẩn vào bảng DriverCalibrationData đúng schema.prisma
+	// Lưu dữ liệu hiệu chuẩn
 	await prisma.driverCalibrationData.create({
 		data: {
 			driverId: pDriverId,
 			tripId: targetTrip?.id || null,
-			shiftId: shiftId ? parseInt(shiftId, 10) : targetTrip?.shiftId || null,
+			shiftId: shiftId ? parseInt(shiftId, 10) : targetTrip?.shift_id || null,
 			vectorDacTrung: JSON.stringify({
 				ear_baseline: 0.285,
 				mode: isOfflineMode ? 'PENDING_CALIBRATION' : 'ONLINE_SUCCESS',
@@ -382,7 +381,7 @@ export const calibrateAndStartTrip = async ({
 		},
 	});
 
-	return targetTrip ? getTripById(targetTrip.id) : null;
+	return targetTrip;
 };
 
 export const switchActiveDriver = async (

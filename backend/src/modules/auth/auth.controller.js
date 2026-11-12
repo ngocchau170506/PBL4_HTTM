@@ -27,6 +27,25 @@ export const handleLogin = async (req, res, next) => {
 	}
 };
 
+export const handleDeviceToken = async (req, res, next) => {
+	try {
+		const { ma_thiet_bi, maThietBi, device_secret, deviceSecret, cpu_serial, cpuSerial } = req.body;
+		const deviceCode = ma_thiet_bi || maThietBi;
+		const secret = device_secret || deviceSecret;
+		const serial = cpu_serial || cpuSerial;
+
+		const expectedSecret = process.env.IOT_DEVICE_SECRET || 'your_iot_device_secret_token';
+		if (secret && secret !== expectedSecret) {
+			return res.status(401).json({ success: false, message: 'device_secret không chính xác.' });
+		}
+
+		const result = await authService.issueDeviceToken({ deviceCode, serial });
+		res.json({ success: true, data: result, ...result });
+	} catch (error) {
+		next(error);
+	}
+};
+
 export const handleGetMe = async (req, res, next) => {
 	try {
 		const user = await authService.getUserProfile(req.user.id);

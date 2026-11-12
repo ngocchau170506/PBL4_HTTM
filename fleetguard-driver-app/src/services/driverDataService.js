@@ -1,12 +1,13 @@
 // ============================================================================
 // CẤU HÌNH KẾT NỐI BACKEND CHO MOBILE APP (REACT NATIVE / WEB MOBILE PREVIEW)
 // ============================================================================
+import { API_CONFIG } from "../../mobileConfig";
 const USE_MOCK = false; // Đổi thành true nếu muốn chạy 100% dữ liệu giả lập
 // Lưu ý:
 // - Nếu chạy trên Web / iOS Simulator: dùng "http://localhost:3000/api/v1"
 // - Nếu chạy trên Android Emulator: đổi thành "http://10.0.2.2:3000/api/v1"
-// - Nếu chạy trên Điện thoại thật (Expo Go): đổi thành IP LAN máy tính, VD: "http://192.168.1.100:3000/api/v1"
-const API_BASE_URL = "http://192.168.111.91:3000/api/v1";
+// - Nếu chạy trên Điện thoại thật (Expo Go): đổi thành IP LAN máy tính, VD: "http://172.20.10.2:3000/api/v1"
+const API_BASE_URL = API_CONFIG.BASE_URL;
 
 let authToken = null;
 
@@ -202,22 +203,41 @@ export const driverDataService = {
         };
       }
 
+      // Ưu tiên lấy ca mới được giao (SCHEDULED / ACCEPTED) hoặc ca đang chạy (IN_PROGRESS)
+      const shiftList = Array.isArray(shifts) ? shifts : [];
       const latestShift =
-        Array.isArray(shifts) && shifts.length > 0 ? shifts[0] : null;
-      if (latestShift || activeTrip) {
-        const veh = activeTrip?.vehicle || latestShift?.vehicle || {};
-        const rt = activeTrip?.route || latestShift?.route || {};
+        shiftList.find((s) =>
+          ["SCHEDULED", "ACCEPTED"].includes(s.trang_thai || s.trangThai),
+        ) ||
+        shiftList.find(
+          (s) => (s.trang_thai || s.trangThai) === "IN_PROGRESS",
+        ) ||
+        shiftList[0] ||
+        null;
+
+      // Chỉ dùng activeTrip nếu nó thuộc về chính latestShift này
+      const matchedTrip =
+        latestShift &&
+        activeTrip &&
+        Number(activeTrip.shift_id || activeTrip.shiftId) ===
+          Number(latestShift.id)
+          ? activeTrip
+          : latestShift?.trip || (!latestShift ? activeTrip : null);
+
+      if (latestShift || matchedTrip) {
+        const veh = latestShift?.vehicle || matchedTrip?.vehicle || {};
+        const rt = latestShift?.route || matchedTrip?.route || {};
         const warnings = Array.isArray(latestShift?.canh_bao_khi_tao)
           ? latestShift.canh_bao_khi_tao.join(" ")
           : "";
 
         mockDriverState.currentShift = {
           ...mockDriverState.currentShift,
-          id: latestShift?.id || activeTrip?.shift_id || 2,
-          trip_id: activeTrip?.id || latestShift?.trip?.id || 2,
+          id: latestShift?.id || matchedTrip?.shift_id || 2,
+          trip_id: matchedTrip?.id || null,
           bien_so_xe: veh.bien_so_xe || veh.bienSo || "43H-567.89",
           loai_xe: veh.loai_xe || veh.loaiXe || "Xe tải thùng 8 tấn",
-          ma_thiet_bi: `${veh.iot_device?.ma_thiet_bi || "IOT-DN-02"} (Pi 4 + ESP32)`,
+          ma_thiet_bi: `${veh.iot_device?.ma_thiet_bi || veh.iotDevice?.maThietBi || "IOT-DN-02"} (Pi 4 + ESP32)`,
           ten_tuyen:
             rt.ten_tuyen ||
             rt.tenTuyen ||
@@ -225,28 +245,28 @@ export const driverDataService = {
           khoang_cach_km: rt.khoang_cach_km || rt.khoangCachKm || 138.0,
           thoi_gian_bat_dau: formatDateTimeVN(
             latestShift?.thoi_gian_bat_dau_du_kien ||
-              activeTrip?.thoi_gian_bat_dau,
+              matchedTrip?.thoi_gian_bat_dau,
           ),
           thoi_gian_ket_thuc: formatDateTimeVN(
             latestShift?.thoi_gian_ket_thuc_du_kien,
           ),
           tai_xe_chinh: mockDriverState.user.ho_ten,
           active_driver_name:
-            activeTrip?.driver?.user?.ho_ten || mockDriverState.user.ho_ten,
+            matchedTrip?.driver?.user?.ho_ten || mockDriverState.user.ho_ten,
           shift_status: latestShift?.trang_thai || "ACCEPTED",
           trip_status:
-            activeTrip?.trang_thai === "IN_PROGRESS"
+            matchedTrip?.trang_thai === "IN_PROGRESS"
               ? "IN_PROGRESS"
-              : activeTrip?.trang_thai === "RESTING"
+              : matchedTrip?.trang_thai === "RESTING"
                 ? "RESTING"
-                : activeTrip?.trang_thai === "COMPLETED"
+                : matchedTrip?.trang_thai === "COMPLETED"
                   ? "COMPLETED"
                   : "NOT_STARTED",
           canh_bao_sinh_hoc:
             warnings || mockDriverState.currentShift.canh_bao_sinh_hoc,
           telemetry: {
-            toc_do_kmh: activeTrip?.latest_telemetry?.toc_do_kmh ?? 64,
-            co2_ppm: activeTrip?.latest_telemetry?.co2_ppm ?? 780,
+            toc_do_kmh: matchedTrip?.latest_telemetry?.toc_do_kmh ?? 64,
+            co2_ppm: matchedTrip?.latest_telemetry?.co2_ppm ?? 780,
             cpu_temp_c: veh.iot_device?.cpu_temp_c ?? 63.5,
             nearest_rest_stop: "Trạm dịch vụ Tam Kỳ (Cách 14 km)",
           },
@@ -271,21 +291,43 @@ export const driverDataService = {
           const matchedDispute = disputeList.find(
             (d) => (d.violation_id || d.violationId) === v.id,
           );
+          const disputeStatus =
+            matchedDispute?.trang_thai ||
+            matchedDispute?.trangThai ||
+            v.dispute_status ||
+            v.dispute?.trangThai ||
+            null;
+          const disputeReason =
+            matchedDispute?.noi_dung_giai_trinh ||
+            matchedDispute?.noiDungGiaiTrinh ||
+            v.dispute_reason ||
+            v.dispute?.noiDungGiaiTrinh ||
+            null;
+          const disputeResponse =
+            matchedDispute?.phan_hoi ||
+            matchedDispute?.phanHoi ||
+            v.dispute?.phanHoi ||
+            null;
+          const pointStatus =
+            v.trang_thai_diem ||
+            v.trangThaiDiem ||
+            (disputeStatus === "APPROVED" ? "REFUNDED" : "APPLIED");
+
           return {
             id: v.id,
             ma_loai: v.ma_loai || v.loaiViPham,
             ten_loai: v.ten_loai || v.tenLoai || v.loaiViPham,
             diem_bi_tru: v.diem_bi_tru ?? v.diemTru,
             trang_thai_xac_thuc: v.trang_thai_xac_thuc || v.trangThai,
+            trang_thai_diem: pointStatus,
             thoi_gian: formatDateTimeVN(
               v.thoi_gian_chot_vi_pham || v.thoiGianViPham,
             ),
             mo_ta: v.mo_ta || v.moTa,
             video_url: v.video_url || v.videoUrl,
-            dispute_status: matchedDispute ? matchedDispute.trang_thai : null,
-            dispute_reason: matchedDispute
-              ? matchedDispute.noi_dung_giai_trinh
-              : null,
+            dispute_status: disputeStatus,
+            dispute_reason: disputeReason,
+            dispute_response: disputeResponse,
           };
         });
       }
@@ -450,6 +492,11 @@ export const driverDataService = {
       });
     }
     return { success: true };
+  },
+
+  // 11. LẤY TOKEN HIỆN TẠI ĐỂ KẾT NỐI SOCKET.IO
+  getAuthToken() {
+    return authToken;
   },
 };
 

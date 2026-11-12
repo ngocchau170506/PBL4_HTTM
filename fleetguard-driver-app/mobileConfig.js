@@ -1,7 +1,9 @@
+const SERVER_IP = "172.16.62.179";
+
 export const API_CONFIG = {
-  USE_MOCK: true,
-  BASE_URL: "http://10.0.2.2:5000/api/v1",
-  SOCKET_URL: "http://10.0.2.2:5000",
+  USE_MOCK: false,
+  BASE_URL: `http://${SERVER_IP}:3000/api/v1`,
+  SOCKET_URL: `http://${SERVER_IP}:3000`,
   TIMEOUT_MS: 15000,
 };
 

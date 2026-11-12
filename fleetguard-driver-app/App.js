@@ -9,6 +9,7 @@ import ScoreScreen from "./src/screens/Score/ScoreScreen";
 import TripScreen from "./src/screens/Trip/TripScreen";
 import ViolationsScreen from "./src/screens/Violations/ViolationsScreen";
 import driverDataService from "./src/services/driverDataService";
+import mobileSocket from "./src/services/mobileSocketService";
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -37,6 +38,50 @@ export default function App() {
       setViolations(data.violations);
     });
   }, []);
+
+  // KẾT NỐI SOCKET.IO THỜI GIAN THỰC CHO TÀI XẾ (P0/P1/P2 REALTIME)
+  useEffect(() => {
+    if (!user) return;
+
+    const token = driverDataService.getAuthToken();
+    const driverId = user.driver_id || user.id;
+
+    mobileSocket.connect(token, driverId, {
+      onScoreChanged: (data) => {
+        // Cập nhật điểm uy tín hiển thị tức thì
+        if (data.diem_sau !== undefined) {
+          setUser((prev) => (prev ? { ...prev, diem_uy_tin: data.diem_sau, cap_canh_bao: data.cap_canh_bao || prev.cap_canh_bao } : null));
+        }
+        loadDashboard();
+
+        const diff = data.so_diem_thay_doi;
+        const sign = diff > 0 ? "+" : "";
+        Alert.alert(
+          "Biến Động Điểm Uy Tín",
+          `${data.ly_do || "Cập nhật điểm uy tín"}\nThay đổi: ${sign}${diff ?? 0} điểm\nĐiểm hiện tại: ${data.diem_sau ?? user.diem_uy_tin}đ`
+        );
+      },
+      onViolationNew: (data) => {
+        loadDashboard();
+        Alert.alert(
+          "🚨 CẢNH BÁO VI PHẠM THỜI GIAN THỰC",
+          `Phát hiện: ${data.ten_loai || data.ma_loai || "Hành vi mất an toàn"}\nSố điểm bị trừ: -${data.diem_bi_tru || 10}đ\nHãy tập trung lái xe hoặc ghé trạm dừng nghỉ!`
+        );
+      },
+      onShiftUpdated: () => {
+        loadDashboard();
+      },
+    });
+
+    return () => {
+      mobileSocket.disconnect();
+    };
+  }, [user?.id, user?.driver_id]);
+
+  const handleLogout = () => {
+    mobileSocket.disconnect();
+    setUser(null);
+  };
 
   const handleLogin = async (username, password, consent) => {
     const loggedUser = await driverDataService.login(
@@ -108,7 +153,7 @@ export default function App() {
             isOfflineMode={isOfflineMode}
             onToggleOffline={() => setIsOfflineMode(!isOfflineMode)}
             onOpenProfile={() => setActiveTab("PROFILE")}
-            onLogout={() => setUser(null)}
+            onLogout={handleLogout}
           />
 
           <View style={styles.content}>

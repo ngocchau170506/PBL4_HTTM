@@ -41,7 +41,33 @@ export const processIotDataPacket = async ({
 	const rawCo2 = co2Level ?? co2_ppm;
 	const co2 = rawCo2 !== undefined && rawCo2 !== null ? parseFloat(rawCo2) : null;
 
-	// 1. Tự tìm chuyến IN_PROGRESS hoặc tìm deviceId từ tripId
+	// 1. Tự tìm thông tin Device và Chuyến đi (Hỗ trợ cả ID số, mã IOT-DN-xx, MAC hoặc CPU Serial)
+	let targetDevice = null;
+	if (!isNaN(parsedDeviceId) && parsedDeviceId > 0) {
+		targetDevice = await prisma.iotDevice.findUnique({
+			where: { id: parsedDeviceId },
+			include: { vehicle: true },
+		});
+	} else if (rawDeviceId) {
+		targetDevice = await prisma.iotDevice.findFirst({
+			where: {
+				OR: [
+					{ maThietBi: String(rawDeviceId) },
+					{ macAddress: String(rawDeviceId) },
+					{ cpuSerial: String(rawDeviceId) },
+				],
+			},
+			include: { vehicle: true },
+		});
+	}
+
+	if (!targetDevice) {
+		targetDevice = await prisma.iotDevice.findFirst({ include: { vehicle: true } });
+	}
+	if (targetDevice) {
+		parsedDeviceId = targetDevice.id;
+	}
+
 	let tripInfo = null;
 	if (parsedTripId) {
 		tripInfo = await prisma.trip.findUnique({
@@ -55,22 +81,20 @@ export const processIotDataPacket = async ({
 		if (tripInfo?.vehicle?.iotDevice?.id) {
 			parsedDeviceId = tripInfo.vehicle.iotDevice.id;
 		}
-	} else if (parsedDeviceId) {
-		const device = await prisma.iotDevice.findUnique({
-			where: { id: parsedDeviceId },
-			include: { vehicle: true },
+	} else if (targetDevice?.vehicleId) {
+		tripInfo = await prisma.trip.findFirst({
+			where: {
+				vehicleId: targetDevice.vehicleId,
+				trangThai: { in: ['IN_PROGRESS', 'RESTING', 'CALIBRATING'] },
+			},
+			include: {
+				driver: { include: { user: true } },
+				vehicle: { include: { iotDevice: true } },
+				route: true,
+			},
+			orderBy: { id: 'desc' },
 		});
-		if (device && device.vehicleId) {
-			tripInfo = await prisma.trip.findFirst({
-				where: { vehicleId: device.vehicleId, trangThai: 'IN_PROGRESS' },
-				include: {
-					driver: { include: { user: true } },
-					vehicle: { include: { iotDevice: true } },
-					route: true,
-				},
-			});
-			if (tripInfo) parsedTripId = tripInfo.id;
-		}
+		if (tripInfo) parsedTripId = tripInfo.id;
 	}
 
 	// 2. Lưu log Telemetry vào DB
@@ -326,6 +350,50 @@ export const processDeviceHeartbeat = async ({
 			trang_thai_ket_noi: updated.trangThaiKetNoi,
 			last_heartbeat_at: updated.lastHeartbeatAt,
 		});
+	}
+
+	// Tự động kích hoạt quy tắc chống gian lận rút cáp Camera USB khi xe đang chạy (SRS § 3.1 & AC_08)
+	if (trang_thai_ket_noi === 'ERROR_CAMERA' && updated.vehicleId) {
+		try {
+			const activeTrip = await prisma.trip.findFirst({
+				where: { vehicleId: updated.vehicleId, trangThai: 'IN_PROGRESS' },
+				include: { driver: { include: { user: true } }, vehicle: true },
+			});
+
+			if (activeTrip && activeTrip.driverId) {
+				const recentTampering = await prisma.violation.findFirst({
+					where: {
+						driverId: activeTrip.driverId,
+						tripId: activeTrip.id,
+						loaiViPham: 'DEVICE_TAMPERING',
+						thoiGianViPham: { gte: new Date(Date.now() - 5 * 60 * 1000) },
+					},
+				});
+
+				if (!recentTampering) {
+					const { violation: tamperViolation } = await createViolationRecord({
+						driverId: activeTrip.driverId,
+						tripId: activeTrip.id,
+						loaiViPham: 'DEVICE_TAMPERING',
+						diemTru: 15,
+						aiConfidenceScore: 0.99,
+						moTa: 'CẢNH BÁO: Mất tín hiệu Camera USB khi xe đang vận hành (Nghi vấn can thiệp thiết bị / rút cáp).',
+					});
+
+					if (ioInstance) {
+						ioInstance.emit('violation:new', {
+							...tamperViolation,
+							violation_id: tamperViolation.id,
+							bien_so_xe: activeTrip.vehicle?.bienSo || 'Xe IoT',
+							driver_name: activeTrip.driver?.user?.hoTen || 'Tài xế',
+							muc_do_nghiem_trong: 'CRITICAL',
+						});
+					}
+				}
+			}
+		} catch (err) {
+			console.error('Lỗi khi kích hoạt vi phạm rút cáp camera:', err);
+		}
 	}
 
 	return updated;

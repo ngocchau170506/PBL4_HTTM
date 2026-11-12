@@ -116,6 +116,16 @@ const BADGE_CONFIG = {
     style: "border-alert-info/30 bg-alert-info/15 text-alert-info",
     pingColor: "bg-alert-info",
   },
+  COMPLETED: {
+    label: "Đã hoàn thành",
+    style: "border-alert-safe/30 bg-alert-safe/15 text-alert-safe",
+    icon: CheckCircle2,
+  },
+  CANCELED: {
+    label: "Đã hủy",
+    style: "border-brand-border bg-brand-surface text-brand-text-muted",
+    icon: XCircle,
+  },
   OPEN: {
     label: "Chờ giải quyết (48h)",
     style: "border-alert-warning/40 bg-alert-warning/15 text-alert-warning",

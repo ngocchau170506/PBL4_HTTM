@@ -9,6 +9,7 @@ import {
   UserCheck,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import JsonDiffViewer from "../../components/common/JsonDiffViewer";
 import dataService from "../../services/dataService";
 import { formatFullDateTime } from "../../utils/formatDateTime";
 
@@ -320,32 +321,12 @@ export default function AdminAuditLogsPage() {
                 </div>
               </div>
 
-              {/* KHUNG DIFF TRƯỚC & SAU */}
-              <div className="space-y-3">
-                <div className="rounded-2xl border border-rose-500/30 bg-rose-950/20 p-3.5">
-                  <p className="mb-1.5 text-[11px] font-bold text-rose-400 uppercase">
-                    Giá trị trước thay đổi
-                  </p>
-                  <pre className="overflow-x-auto text-[11px] leading-relaxed text-rose-200">
-                    {JSON.stringify(selectedLog.gia_tri_truoc || {}, null, 2)}
-                  </pre>
-                </div>
-
-                <div className="flex justify-center">
-                  <div className="border-brand-border bg-brand-surface text-brand-blue-sky flex h-7 w-7 items-center justify-center rounded-full border">
-                    <ArrowRight className="h-3.5 w-3.5 rotate-90" />
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-emerald-500/30 bg-emerald-950/20 p-3.5">
-                  <p className="mb-1.5 text-[11px] font-bold text-emerald-400 uppercase">
-                    Giá trị sau thay đổi
-                  </p>
-                  <pre className="overflow-x-auto text-[11px] leading-relaxed text-emerald-200">
-                    {JSON.stringify(selectedLog.gia_tri_sau || {}, null, 2)}
-                  </pre>
-                </div>
-              </div>
+              {/* KHUNG JSON DIFF NÂNG CAO (P2 IMMUTABLE AUDIT VIEWER) */}
+              <JsonDiffViewer
+                before={selectedLog.gia_tri_truoc}
+                after={selectedLog.gia_tri_sau}
+                title={`Đối chiếu trường dữ liệu • ${selectedLog.doi_tuong_loai} #${selectedLog.doi_tuong_id}`}
+              />
             </div>
           ) : (
             <div className="text-brand-text-subtle py-16 text-center text-xs">

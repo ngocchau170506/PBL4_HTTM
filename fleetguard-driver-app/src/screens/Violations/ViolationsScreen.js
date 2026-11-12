@@ -21,7 +21,11 @@ export default function ViolationsScreen({ violations = [], onSubmitDispute }) {
 
       {violations.map((v) => {
         const isConfirmed = v.trang_thai_xac_thuc === "CONFIRMED";
-        const canDispute = isConfirmed && !v.dispute_status;
+        const isRefunded =
+          v.trang_thai_diem === "REFUNDED" || v.dispute_status === "APPROVED";
+        const isDisputeRejected = v.dispute_status === "REJECTED";
+        const isDisputeOpen = v.dispute_status === "OPEN";
+        const canDispute = isConfirmed && !v.dispute_status && !isRefunded;
 
         return (
           <AppCard key={v.id}>
@@ -29,25 +33,60 @@ export default function ViolationsScreen({ violations = [], onSubmitDispute }) {
               <Text style={styles.vTitle}>
                 #{v.id} • {v.ten_loai}
               </Text>
-              <Text style={styles.penaltyText}>-{v.diem_bi_tru} điểm</Text>
+              <View style={{ alignItems: "flex-end" }}>
+                <Text
+                  style={[
+                    styles.penaltyText,
+                    isRefunded && {
+                      color: COLORS.alertSafe,
+                      textDecorationLine: "line-through",
+                      fontSize: 12,
+                    },
+                  ]}
+                >
+                  -{v.diem_bi_tru} điểm
+                </Text>
+                {isRefunded && (
+                  <Text
+                    style={{
+                      color: COLORS.alertSafe,
+                      fontWeight: "bold",
+                      fontSize: 11,
+                    }}
+                  >
+                    +0đ (Đã hoàn lại)
+                  </Text>
+                )}
+              </View>
             </View>
 
             <Text style={styles.timeText}>{v.thoi_gian}</Text>
             <Text style={styles.descText}>{v.mo_ta}</Text>
 
             <View style={styles.badgeRow}>
-              <StatusBadge
-                label={
-                  isConfirmed
-                    ? "ĐÃ XÁC NHẬN TRỪ ĐIỂM"
-                    : "CHỜ ĐIỀU PHỐI VIÊN DUYỆT"
-                }
-                type={isConfirmed ? "danger" : "warning"}
-              />
-              {v.dispute_status === "OPEN" && (
+              {isRefunded ? (
+                <StatusBadge label="ĐÃ HOÀN ĐIỂM KHIẾU NẠI" type="safe" />
+              ) : isDisputeRejected ? (
+                <>
+                  <StatusBadge label="ĐÃ XÁC NHẬN TRỪ ĐIỂM" type="danger" />
+                  <StatusBadge label="KHIẾU NẠI BỊ BÁC BỎ" type="danger" />
+                </>
+              ) : isDisputeOpen ? (
+                <>
+                  <StatusBadge label="ĐÃ XÁC NHẬN TRỪ ĐIỂM" type="danger" />
+                  <StatusBadge
+                    label="ĐANG CHỜ GIẢI QUYẾT KHIẾU NẠI"
+                    type="info"
+                  />
+                </>
+              ) : (
                 <StatusBadge
-                  label="ĐANG CHỜ GIẢI QUYẾT KHIẾU NẠI"
-                  type="info"
+                  label={
+                    isConfirmed
+                      ? "ĐÃ XÁC NHẬN TRỪ ĐIỂM"
+                      : "CHỜ ĐIỀU PHỐI VIÊN DUYỆT"
+                  }
+                  type={isConfirmed ? "danger" : "warning"}
                 />
               )}
             </View>
@@ -56,6 +95,32 @@ export default function ViolationsScreen({ violations = [], onSubmitDispute }) {
               <View style={styles.disputeBox}>
                 <Text style={styles.disputeText}>
                   Đơn khiếu nại đã gửi: “{v.dispute_reason}”
+                </Text>
+              </View>
+            )}
+
+            {v.dispute_response && (
+              <View
+                style={[
+                  styles.disputeBox,
+                  {
+                    marginTop: 6,
+                    borderColor: isRefunded
+                      ? "rgba(52, 211, 153, 0.4)"
+                      : "rgba(248, 113, 113, 0.4)",
+                    backgroundColor: isRefunded
+                      ? "rgba(6, 78, 59, 0.3)"
+                      : "rgba(127, 29, 29, 0.3)",
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.disputeText,
+                    { color: isRefunded ? COLORS.alertSafe : COLORS.alertDanger },
+                  ]}
+                >
+                  Phản hồi từ Điều phối viên: “{v.dispute_response}”
                 </Text>
               </View>
             )}

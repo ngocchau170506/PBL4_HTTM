@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import dataService from "../../services/dataService";
+import { useFleetStore } from "../../store/useFleetStore";
 import CreateShiftModal from "./components/CreateShiftModal";
 import RealTripsTable from "./components/RealTripsTable";
 import ShiftDetailModal from "./components/ShiftDetailModal";
@@ -8,6 +9,10 @@ import ShiftsTable from "./components/ShiftsTable";
 import TripsHeader from "./components/TripsHeader";
 
 export default function TripsPage() {
+  // Lắng nghe storeVehicles / violations từ Zustand (mỗi khi Socket.io bắn sự kiện từ Mobile, syncFleetData sẽ chạy và kích hoạt loadData)
+  const storeVehicles = useFleetStore((state) => state.vehicles);
+  const syncFleetData = useFleetStore((state) => state.syncFleetData);
+
   const [activeTab, setActiveTab] = useState("SHIFTS");
   const [shifts, setShifts] = useState([]);
   const [trips, setTrips] = useState([]);
@@ -19,23 +24,30 @@ export default function TripsPage() {
       dataService.getShifts(),
       dataService.getTrips(),
     ]);
-    setShifts([...shiftList]);
-    setTrips([...tripList]);
+    setShifts([...(shiftList || [])]);
+    setTrips([...(tripList || [])]);
   };
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [storeVehicles]);
 
   const handleAddShift = async (newShift) => {
-    await dataService.createShift(newShift);
-    await loadData();
+    try {
+      await dataService.createShift(newShift);
+      await loadData();
+      await syncFleetData();
+      toast.success("Đã tạo ca phân công mới thành công!", { icon: "📅" });
+    } catch (err) {
+      toast.error(err.message || "Không thể tạo ca phân công!");
+    }
   };
 
   const handleUpdateShift = async (shiftId, updatedData) => {
     try {
       await dataService.updateShift(shiftId, updatedData);
       await loadData();
+      await syncFleetData();
       toast.success(`Đã cập nhật thành công Ca #${shiftId}!`, { icon: "✅" });
     } catch (err) {
       toast.error(err.message || "Không thể cập nhật ca!");
@@ -46,6 +58,7 @@ export default function TripsPage() {
     try {
       await dataService.deleteShift(shiftId);
       await loadData();
+      await syncFleetData();
       toast.success(`Đã xóa/hủy Ca #${shiftId} khỏi lịch phân công!`, {
         icon: "🗑️",
       });

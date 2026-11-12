@@ -52,10 +52,14 @@ export const handleResolveDispute = async (req, res) => {
 
 		const io = getSocketIO();
 		if (io) {
-			io.emit('violation:updated', resolved.violation);
+			io.emit('violation:updated', resolved.violation || { violation_id: resolved.violation_id });
 			io.emit('driver:score_changed', {
 				driver_id: resolved.driver_id,
-				ly_do: `Giải quyết khiếu nại #${resolved.id}: ${resolved.trang_thai}`,
+				diem_sau: resolved.diem_sau,
+				diem_truoc: resolved.diem_truoc,
+				so_diem_thay_doi: resolved.so_diem_thay_doi,
+				cap_canh_bao: resolved.cap_canh_bao,
+				ly_do: `Giải quyết khiếu nại #${resolved.id}: ${resolved.trang_thai} (${resolved.is_approved ? `+${resolved.so_diem_thay_doi}đ` : 'Không hoàn điểm'})`,
 			});
 		}
 

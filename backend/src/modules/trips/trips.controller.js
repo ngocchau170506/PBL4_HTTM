@@ -1,4 +1,5 @@
 import * as tripsService from './trips.service.js';
+import { getSocketIO } from '../iot/iot.service.js';
 
 export const getTrips = async (req, res) => {
 	try {
@@ -45,6 +46,8 @@ export const getTripById = async (req, res) => {
 export const createTrip = async (req, res) => {
 	try {
 		const trip = await tripsService.createTrip(req.body);
+		const io = getSocketIO();
+		if (io) io.emit('violation:updated', { type: 'TRIP_CREATED', trip });
 		res.status(201).json({ success: true, data: trip, trip });
 	} catch (error) {
 		res.status(400).json({ success: false, message: error.message });
@@ -57,14 +60,20 @@ export const updateTripStatus = async (req, res) => {
 		const { trangThai, trang_thai } = req.body;
 		const status = trangThai || trang_thai;
 		if (!status) {
-			return res
-				.status(400)
-				.json({
-					success: false,
-					message: 'Vui lòng cung cấp trạng thái mới cho chuyến xe.',
-				});
+			return res.status(400).json({
+				success: false,
+				message: 'Vui lòng cung cấp trạng thái mới cho chuyến xe.',
+			});
 		}
 		const trip = await tripsService.updateTripStatus(id, status);
+
+		// Bắn Socket.io để Web Dashboard đồng bộ lại danh sách Xe, Tài xế và Bản đồ ngay lập tức
+		const io = getSocketIO();
+		if (io) {
+			io.emit('violation:updated', { type: 'TRIP_STATUS_CHANGED', trip });
+			io.emit('driver:score_changed', { driver_id: trip.driver_id });
+		}
+
 		res.json({ success: true, data: trip, trip });
 	} catch (error) {
 		res.status(400).json({ success: false, message: error.message });
@@ -93,6 +102,13 @@ export const handleCalibrateAndStart = async (req, res) => {
 			tripId: req.params.id || req.body.tripId || req.body.trip_id,
 			isOfflineMode: Boolean(req.body.isOfflineMode),
 		});
+
+		// Bắn Socket.io để Web Dashboard thấy ngay xe đã chuyển sang "Đang vận hành"
+		const io = getSocketIO();
+		if (io) {
+			io.emit('violation:updated', { type: 'TRIP_STARTED', trip });
+		}
+
 		res.json({ success: true, data: trip, trip });
 	} catch (error) {
 		res.status(400).json({ success: false, message: error.message });
@@ -102,6 +118,10 @@ export const handleCalibrateAndStart = async (req, res) => {
 export const handleSwitchDriver = async (req, res) => {
 	try {
 		const trip = await tripsService.switchActiveDriver(req.params.id, req.body);
+		const io = getSocketIO();
+		if (io) {
+			io.emit('violation:updated', { type: 'DRIVER_SWITCHED', trip });
+		}
 		res.json({ success: true, data: trip, trip });
 	} catch (error) {
 		res.status(400).json({ success: false, message: error.message });
