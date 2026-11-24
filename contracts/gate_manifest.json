@@ -1,0 +1,95 @@
+{
+  "manifest_version": "1.0.0",
+  "project": "PI_AI",
+  "stages": {
+    "pc-preflight": [
+      {
+        "gate_id": "G1_CODE_SYNTAX",
+        "title": "Compile all Python sources with SyntaxWarning as error",
+        "kind": "command",
+        "command": ["{python}", "-W", "error::SyntaxWarning", "-m", "compileall", "-q", "contracts", "server_ai", "pi_edge", "CNN_IOT"],
+        "min_tests": 0,
+        "require_zero_warnings": true
+      },
+      {
+        "gate_id": "G1_STATIC_POLICY",
+        "title": "Forbid nmcli/sudo network mutation & hardcoded secrets in pi_edge/deploy",
+        "kind": "policy_scan",
+        "targets": ["pi_edge"]
+      },
+      {
+        "gate_id": "G2_STAGE_CONNECTIVITY",
+        "title": "Stage-Lock Guard: 7 cross-layer connectivity links (API/Burst/ESP32/Media/Deploy/Vault)",
+        "kind": "connectivity_guard"
+      },
+      {
+        "gate_id": "G3_GATE_DEFENSE",
+        "title": "Fail-closed Gate Runner negative tests (blocks F-001, F-002, 0 tests)",
+        "kind": "unittest",
+        "module": "contracts.test_gate_runner_defense",
+        "min_tests": 5
+      },
+      {
+        "gate_id": "G3_VAULT_AND_HITL",
+        "title": "2-Mechanism SecretVault, Dual-Token Grace, H.264 MP4, HITL review, 10s window & Stage-Lock tests",
+        "kind": "unittest",
+        "module": "contracts.test_stage_vault_hitl",
+        "min_tests": 8
+      },
+      {
+        "gate_id": "G3_EDGE_UNIT_SECURITY",
+        "title": "pi_edge unit, perf, ACK/NACK, blind-hold, strict RBAC & local 0-egress tests",
+        "kind": "unittest",
+        "module": "pi_edge.tests.test_edge_security_and_perf",
+        "min_tests": 10
+      },
+      {
+        "gate_id": "G4_SERVER_SECURITY_CNN",
+        "title": "server_ai security, anti-storm, CNN verifier, MP4 stitcher & DB integrity tests",
+        "kind": "unittest",
+        "module": "server_ai.tests.test_security_and_edge",
+        "min_tests": 12
+      },
+      {
+        "gate_id": "G4_CROSS_CONTRACT",
+        "title": "Cross-system integration: real pi_edge payloads -> real server_ai FastAPI",
+        "kind": "unittest",
+        "module": "contracts.test_cross_contract",
+        "min_tests": 6
+      },
+      {
+        "gate_id": "G4_CNN_B1_HANDOFF",
+        "title": "Optional Tier-2 CNN_IOT B1 handoff verifier unit & thread-safety tests",
+        "kind": "unittest",
+        "module": "CNN_IOT.test_b1_verifier",
+        "min_tests": 6
+      }
+    ],
+    "hardware-bench": [
+      {
+        "gate_id": "HW1_SERVER_LAN",
+        "title": "Real Remote Server (Cloudflare Tunnel HTTPS or LAN) + Dashboard + HTTP 206 clip playback",
+        "kind": "manual_hardware",
+        "device": "Remote Server PC (server_ai + cloudflared)"
+      },
+      {
+        "gate_id": "HW2_ESP32_AUDIO_GPS",
+        "title": "Real ESP32 #1 (AUDIO_MQ135_NODE @ 115200: MAX98357A <5ms + VOL + software MUTE + MQ-135) + ESP32 #2 (COMMS_BLE_GPS_HUB @ 115200: BLE + GPS UART2 + Wi-Fi Survival)",
+        "kind": "manual_hardware",
+        "device": "ESP32 #1 + ESP32 #2 (LCK-05 v3)"
+      },
+      {
+        "gate_id": "HW3_PI_CAMERA_SOAK",
+        "title": "Real Pi 4 + RTSP 192.168.1.210 local/server split + 30-60m thermal soak",
+        "kind": "manual_hardware",
+        "device": "Raspberry Pi 4 + Camera RTSP"
+      },
+      {
+        "gate_id": "HW4_E2E_FULL",
+        "title": "Full E2E: Camera -> Pi Edge -> ESP32 Speaker + PC Server DeepVerifier CNN + offline spool recovery",
+        "kind": "manual_hardware",
+        "device": "PC + Pi 4 + Camera + ESP32 #1"
+      }
+    ]
+  }
+}

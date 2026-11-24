@@ -1,0 +1,33 @@
+# Runtime & Secrets (NEVER commit)
+*.env
+pi.env
+wifi_config.h
+tokens.json
+.vault/
+server_ai/bin/
+.theia/
+baseline.json
+baseline_*.json
+*.db
+*.db-wal
+*.db-shm
+*.jsonl
+logs/
+data/
+server_ai/evidence/
+violations/
+evidence_server/
+gate_reports/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Large model binaries (provisioned locally / synced via deploy allowlist)
+pi_edge/models/*.pt
+pi_edge/models/*.task
+pi_edge/models/*.onnx
+server_ai/models/*.pt
+server_ai/models/*.onnx
+APP_IOT.zip

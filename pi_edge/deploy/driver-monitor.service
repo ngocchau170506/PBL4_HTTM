@@ -1,0 +1,41 @@
+[Unit]
+Description=PI_AI Driver Monitoring Edge Safety Reflex (Raspberry Pi 4)
+After=network.target time-sync.target
+Wants=network-online.target
+# Safety device MUST keep recovering after transient boot/USB errors (never lock into start-limit-hit!)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=raspberrypi
+Group=raspberrypi
+SupplementaryGroups=dialout video input
+WorkingDirectory=/home/raspberrypi/pi_ai_edge
+Environment="PYTHONPATH=/home/raspberrypi/pi_ai_edge"
+Environment="MPLCONFIGDIR=/tmp/matplotlib"
+Environment="YOLO_CONFIG_DIR=/tmp/ultralytics"
+Environment="TORCH_HOME=/tmp/torch"
+Environment="XDG_CACHE_HOME=/tmp/xdg_cache"
+Environment="OMP_NUM_THREADS=2"
+Environment="OPENBLAS_NUM_THREADS=1"
+Environment="MKL_NUM_THREADS=1"
+Environment="PYTHONUNBUFFERED=1"
+# Single source of truth: RUN_MODE=local|server & tokens live ONLY in pi.env (NO hardcoded WEB_PORT=0 override!)
+EnvironmentFile=/home/raspberrypi/pi_ai_edge/pi_edge/deploy/pi.env
+ExecStart=/home/raspberrypi/pi_ai_edge/venv/bin/python -m pi_edge.app.main
+Restart=always
+RestartSec=3s
+LimitNOFILE=4096
+Nice=0
+CPUQuota=300%
+MemoryMax=1536M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pi-ai-edge
+
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/raspberrypi/pi_ai_edge/pi_edge/logs /home/raspberrypi/pi_ai_edge/pi_edge/calibration /home/raspberrypi/pi_ai_edge/pi_edge/violations
+
+[Install]
+WantedBy=multi-user.target

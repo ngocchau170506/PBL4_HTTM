@@ -1,0 +1,12 @@
+// Optional compile-time fallback for ESP32 #2 (COMMS_BLE_WIFI_HUB).
+// Copy to wifi_config.h ONLY if you want hardcoded defaults; otherwise Pi 4
+// pushes URL/token/Wi-Fi dynamically into NVS Flash via UART (CFG_SERVER/CFG_TOKEN/CFG_WIFI).
+// NEVER commit wifi_config.h to Git!
+
+#pragma once
+
+#define UPLINK_VEHICLE_ID  "XE-01"
+#define UPLINK_SERVER_URL  "https://replace-with-cloudflare-tunnel.trycloudflare.com"
+#define UPLINK_AUTH_TOKEN  "REPLACE_WITH_DEVICE_ROLE_TOKEN"
+#define UPLINK_WIFI_SSID   "REPLACE_WITH_HOTSPOT_SSID"
+#define UPLINK_WIFI_PASS   "REPLACE_WITH_HOTSPOT_PASS"

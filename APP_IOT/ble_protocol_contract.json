@@ -1,0 +1,43 @@
+{
+  "contract_version": "1.0.0",
+  "owner": "PI_AI IoT Edge + Server Team -> App Team (APP_IOT)",
+  "esp32_hub_target": {
+    "role": "COMMS_BLE_GPS_HUB",
+    "firmware": "PI_AI_3.0 (LCK-05 v3)",
+    "device_name_prefix": "PI_AI_HUB_",
+    "default_device_name": "PI_AI_HUB_XE-01",
+    "pairing_mode": "OPEN_NO_PIN",
+    "nus_service_uuid": "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
+    "nus_char_rx_uuid_write": "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
+    "nus_char_tx_uuid_notify": "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
+    "ble_mtu_note": "Default BLE ATT MTU is 20 bytes per notify packet; app MUST buffer incoming chunks until '\\n' before parsing JSON!"
+  },
+  "commands_phone_to_esp2": [
+    {"cmd": "MUTE", "aliases": ["MUTE_ALERT", "M"], "effect": "Silences ESP32 #1 speaker for 30s and logs alert_dismissed on Server"},
+    {"cmd": "SOS", "aliases": ["HELP"], "effect": "Raises CRITICAL SOS_PRESSED incident on Server (0 driver Safety Score penalty!)"},
+    {"cmd": "ACK", "aliases": ["ACK_AWAKE", "OK"], "effect": "Logs driver awake confirmation event"},
+    {"cmd": "REST_START", "aliases": ["REST_BREAK_START"], "effect": "Marks driver rest break started"},
+    {"cmd": "REST_END", "aliases": ["REST_BREAK_END"], "effect": "Marks driver rest break ended"},
+    {"cmd": "STATUS", "aliases": ["?"], "effect": "Requests immediate STATUS:{...} JSON snapshot from ESP32 #2"}
+  ],
+  "notifications_esp2_to_phone": [
+    {"prefix": "ALERT:", "example": "ALERT:DROWSY|Eye_Closed 2.1s", "meaning": "Real-time safety alert forwarded from Pi 4 -> ESP2 -> Phone"},
+    {"prefix": "GPS:", "example": "GPS:{\"fix\":true,\"lat\":16.061234,\"lon\":108.212345,\"spd\":32.5,\"sats\":8}", "meaning": "Live UART2 hardware GPS pushed every 2s while BLE connected"},
+    {"prefix": "STATUS:", "example": "STATUS:{\"role\":\"COMMS_BLE_GPS_HUB\",\"fw\":\"PI_AI_3.0\",\"pi_alive\":true,...}", "meaning": "Full ESP2 hub status JSON on STATUS command"},
+    {"prefix": "OK:", "example": "OK:MUTE_ALERT", "meaning": "Command accepted by ESP2 and forwarded over USB UART to Pi 4"},
+    {"prefix": "WARN:", "example": "WARN:Pi silent >=3.5s -> Wi-Fi Survival ON", "meaning": "ESP2 survival bridge / hardware warning"},
+    {"prefix": "ERR:", "example": "ERR:UNKNOWN_CMD (...)", "meaning": "Unrecognized BLE command"}
+  ],
+  "optional_server_http_endpoints": {
+    "pair_otp_issue_operator": "POST /api/v1/phone/pair_otp (alias /api/v1/phone/pair/otp also supported; requires operator token; returns 5-min single-use pair_code)",
+    "pair_phone_redeem": "POST /api/v1/phone/pair (no prior login needed on /driver; rate-limited; body: {vehicle_id, pair_code, driver_id}; returns driver_phone_token)",
+    "phone_telemetry_fallback": "POST /api/v1/phone/telemetry (Bearer driver_phone_token; sends phone_gps fallback when hardware GPS indoors)",
+    "phone_action_direct": "POST /api/v1/phone/action (Bearer driver_phone_token; action in MUTE_ALERT|SOS|ACK_AWAKE|REST_BREAK_START|REST_BREAK_END)",
+    "phone_notifications_pull": "GET /api/v1/phone/notifications?vehicle_id=XE-01 (Bearer driver_phone_token)"
+  },
+  "web_bluetooth_constraints": [
+    "Chrome/Edge Android requires HTTPS (use Cloudflare Tunnel or localhost) — plain http://192.168.x.x is blocked by browser security policy.",
+    "Safari on iOS does NOT implement Web Bluetooth; iPhone users must use Bluefy browser or a native/Flutter app.",
+    "Do NOT remove newline '\\n' terminator when writing to NUS RX characteristic."
+  ]
+}

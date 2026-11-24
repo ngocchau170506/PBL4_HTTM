@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "B1_PRETRAINED_HD",
+  "description": "Configuration for Tier-2 Server Pretrained Verifier (YOLO HD + MediaPipe FaceLandmarker HD + optional custom ONNX hook). AI team may tune thresholds here without editing server_ai code.",
+  "max_frames_per_burst": 16,
+  "min_luma_non_black": 8.0,
+  "min_temporal_duration_s": 0.35,
+  "models": {
+    "yolo_weights": [
+      "CNN_IOT/models/server_yolo.pt",
+      "CNN_IOT/models/yolov8m.pt",
+      "pi_edge/models/best.pt"
+    ],
+    "face_landmarker_task": [
+      "CNN_IOT/models/face_landmarker.task",
+      "pi_edge/models/face_landmarker.task"
+    ],
+    "yolo_imgsz": 640,
+    "custom_onnx_path": "CNN_IOT/models/custom_tier2.onnx",
+    "use_custom_onnx": false
+  },
+  "thresholds": {
+    "drowsy_ear_max": 0.21,
+    "drowsy_min_frame_ratio": 0.45,
+    "yawning_mar_min": 0.55,
+    "yawning_min_frame_ratio": 0.35,
+    "distracted_yaw_ratio_min": 0.34,
+    "distracted_min_frame_ratio": 0.45,
+    "phone_conf_min": 0.40,
+    "phone_min_frame_ratio": 0.25,
+    "smoking_conf_min": 0.40,
+    "smoking_min_frame_ratio": 0.25,
+    "custom_onnx_prob_min": 0.50
+  },
+  "class_aliases": {
+    "PHONE": ["phone", "cell phone", "mobile", "smartphone", "using_phone"],
+    "SMOKING": ["smoking", "cigarette", "cigar", "vape"],
+    "DROWSY": ["eye_closed", "drowsy", "closed_eye", "sleep"],
+    "YAWNING": ["mouth_open", "yawn", "yawning"],
+    "DISTRACTED": ["distracted head", "distracted", "looking_away"]
+  },
+  "non_penalty_alert_types": [
+    "SOS",
+    "ESP_BROWNOUT",
+    "ESP_HUB_BROWNOUT",
+    "AUTO_CO2_CRIT",
+    "AUTO_CO2_WARN",
+    "CO2_CRIT",
+    "CO2_WARN"
+  ]
+}

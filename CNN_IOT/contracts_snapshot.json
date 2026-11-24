@@ -1,0 +1,54 @@
+{
+  "contract_version": "1.0.0",
+  "owner": "PI_AI IoT Edge + Server Team -> AI Team (CNN_IOT)",
+  "immutable_rules": [
+    "NEVER move Tier-2 heavy inference or MP4 encoding onto Raspberry Pi 4 (LCK-02).",
+    "NEVER change /api/v1/violation_burst HTTP multipart fields ('meta' JSON + 'frames' JPEG list).",
+    "NEVER return arbitrary status strings; status MUST be exactly 'SERVER_CNN_CONFIRMED' or 'SERVER_CNN_REJECTED'.",
+    "NEVER penalize non_penalty_alert_types (SOS, AUTO_CO2_CRIT, AUTO_CO2_WARN, CO2_CRIT, CO2_WARN, ESP_BROWNOUT).",
+    "All inference backends MUST be thread-safe (DeepVerifierEngine runs 2 concurrent worker threads)."
+  ],
+  "input_from_pi_edge": {
+    "endpoint": "POST /api/v1/violation_burst",
+    "headers": {
+      "Authorization": "Bearer <device_token>",
+      "Idempotency-Key": "IDEM_<vehicle_id>_<event_id>"
+    },
+    "frame_resolution": "800x448 (16:9, rotated 180 deg on Pi before upload)",
+    "frame_count": "0 frames (SOS/CO2/ESP_BROWNOUT) or 10-20 JPEG keyframes (~10s window: -3s..+7s)",
+    "meta_example": {
+      "schema_version": "1.0.0",
+      "event_id": "EVT_1795443835860_a1b2c3",
+      "idempotency_key": "IDEM_XE-01_EVT_1795443835860_a1b2c3",
+      "vehicle_id": "XE-01",
+      "driver_name": "Tai xe 01",
+      "alert_state": "EDGE_TRIGGERED",
+      "alert_type": "DROWSY | YAWNING | DISTRACTED | PHONE | SMOKING | SOS | AUTO_CO2_CRIT | AUTO_CO2_WARN | ESP_BROWNOUT",
+      "verification_mode": "YOLO_BLAZEFACE_SEQ | SINGLE_MODEL_YOLO",
+      "behavior_detail": "Eye_Closed 2.1s",
+      "started_at": 1795443833.5,
+      "confirmed_at": 1795443835.6,
+      "duration_seconds": 2.1,
+      "confidence": 0.86,
+      "burst_fps": 4.0,
+      "gps": {"lat": 16.06, "lon": 108.21, "speed_kmh": 35.0, "is_valid": true},
+      "co2_ppm": 450.0
+    }
+  },
+  "output_to_server_ai": {
+    "dataclass": "VerificationVerdict(status, confidence, model_version, latency_ms, detail)",
+    "status_enum": ["SERVER_CNN_CONFIRMED", "SERVER_CNN_REJECTED"],
+    "confidence_range": [0.0, 1.0],
+    "model_version_prefix_convention": {
+      "b1_pretrained": "b1-pretrained:<backend_name>",
+      "custom_onnx": "onnx-cnn:<filename.onnx>",
+      "heuristic_fallback": "temporal-baseline-v1"
+    },
+    "side_effects_handled_by_server_ai": [
+      "If SERVER_CNN_CONFIRMED & frames>=2: Server stitches H.264/WebM MP4 (0% Pi CPU)",
+      "If SERVER_CNN_CONFIRMED & not in non_penalty_alert_types: Server deducts Trip safety_score once",
+      "If SERVER_CNN_REJECTED: Server archives burst + verdict.json to server_ai/data/hard_negatives/ for retraining",
+      "Server publishes SSE event 'cnn_verdict' to Fleet Dashboard"
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+# PI_AI Dual-ESP32 udev rules for Raspberry Pi 4 (LCK-05 v3 — unified 115200 baud)
+# Both CP2102 boards share ATTRS{serial}=="0001", so pin by physical USB port KERNELS instead!
+# Verified on Pi 4 (192.168.1.9 — after ESP32 v3 re-flash & reconnect):
+#   KERNELS=="1-1.4" -> AUDIO_MQ135_NODE (/dev/esp_audio)
+#   KERNELS=="1-1.3" -> COMMS_BLE_GPS_HUB (/dev/esp_ble)
+#
+# Install:
+#   sudo cp pi_edge/deploy/99-pi-ai-esp32.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# Note: pi_edge also auto-verifies both boards via WHOAMI on startup and recovers from swaps!
+
+# ESP32 #1 — AUDIO_MQ135_NODE (Speaker MAX98357A <5ms + MQ-135; Wi-Fi/BT/GPS OFF) -> /dev/esp_audio
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", KERNELS=="1-1.4", SYMLINK+="esp_audio", MODE="0660", GROUP="dialout"
+
+# ESP32 #2 — COMMS_BLE_GPS_HUB (BLE App + GPS UART2 GPIO16/17 + On-Demand Wi-Fi Survival) -> /dev/esp_ble
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", KERNELS=="1-1.3", SYMLINK+="esp_ble", MODE="0660", GROUP="dialout"

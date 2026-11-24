@@ -1,0 +1,24 @@
+#pragma once
+
+// ============================================================================
+// DEPRECATED FOR ESP32 #1 (LCK-05 v3):
+// ESP32 #1 (AUDIO_MQ135_NODE) disables Wi-Fi & BT completely to eliminate brownout.
+// Wi-Fi Survival Bridge now lives on ESP32 #2:
+//   firmware/esp32_ble_wifi_hub/wifi_config.h.example
+// Placeholder-only legacy template kept for backwards reference (NEVER put real secrets here).
+// ============================================================================
+struct UplinkWifiAp {
+  const char *ssid;
+  const char *pass;
+  const char *server_url;
+};
+
+static const UplinkWifiAp UPLINK_WIFI_LIST[] = {
+  { "REPLACE_WIFI_SSID_1", "REPLACE_WIFI_PASS_1", "https://replace-with-server-url" },
+  { "REPLACE_WIFI_SSID_2", "REPLACE_WIFI_PASS_2", "http://192.168.1.100:5000" }
+};
+#define UPLINK_WIFI_COUNT (sizeof(UPLINK_WIFI_LIST) / sizeof(UPLINK_WIFI_LIST[0]))
+
+#define UPLINK_SERVER_URL  "https://replace-with-server-url"
+#define UPLINK_AUTH_TOKEN  "REPLACE_WITH_DEVICE_ROLE_TOKEN"
+#define UPLINK_VEHICLE_ID  "XE-01"
