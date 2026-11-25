@@ -5,7 +5,10 @@ class MobileSocketService {
   socket = null;
 
   connect(token, driverId, callbacks = {}) {
-    if (this.socket?.connected) return;
+    if (this.socket) {
+      this.socket.disconnect();
+      this.socket = null;
+    }
 
     this.socket = io(driverDataService.getSocketUrl(), {
       auth: { token },
@@ -16,6 +19,10 @@ class MobileSocketService {
 
     this.socket.on("connect", () => {
       console.log("📱 Mobile Socket Connected:", this.socket.id);
+    });
+
+    this.socket.on("telemetry:update", (data) => {
+      callbacks.onTelemetryUpdate?.(data);
     });
 
     this.socket.on("driver:score_changed", (data) => {

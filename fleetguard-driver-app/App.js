@@ -22,12 +22,16 @@ export default function App() {
   const [violations, setViolations] = useState([]);
 
   const loadDashboard = async () => {
-    const data = await driverDataService.getDriverDashboard();
-    setUser(data.user);
-    setShift(data.currentShift);
-    setBiometricProfile(data.biometricProfile);
-    setScoreLogs(data.scoreLogs);
-    setViolations(data.violations);
+    try {
+      const data = await driverDataService.getDriverDashboard();
+      if (data.user) setUser(data.user);
+      setShift(data.currentShift);
+      setBiometricProfile(data.biometricProfile);
+      setScoreLogs(data.scoreLogs);
+      setViolations(data.violations);
+    } catch (err) {
+      console.warn("Load dashboard error:", err?.message || err);
+    }
   };
 
   useEffect(() => {
@@ -47,6 +51,35 @@ export default function App() {
     const driverId = user.driver_id || user.id;
 
     mobileSocket.connect(token, driverId, {
+      onTelemetryUpdate: (data) => {
+        setShift((prev) => {
+          if (!prev) return prev;
+          const matchesTrip =
+            data?.trip_id &&
+            prev.trip_id &&
+            Number(data.trip_id) === Number(prev.trip_id);
+          const matchesPlate =
+            data?.bien_so_xe && prev.bien_so_xe === data.bien_so_xe;
+          if (!matchesTrip && !matchesPlate) return prev;
+
+          const nextSpeed = data?.toc_do_kmh ?? data?.speed;
+          const nextCo2 = data?.co2_ppm ?? data?.co2Level;
+          return {
+            ...prev,
+            telemetry: {
+              ...prev.telemetry,
+              toc_do_kmh:
+                nextSpeed !== undefined && nextSpeed !== null
+                  ? Math.round(Number(nextSpeed))
+                  : prev.telemetry?.toc_do_kmh,
+              co2_ppm:
+                nextCo2 !== undefined && nextCo2 !== null
+                  ? Math.round(Number(nextCo2))
+                  : prev.telemetry?.co2_ppm,
+            },
+          };
+        });
+      },
       onScoreChanged: (data) => {
         // Cập nhật điểm uy tín hiển thị tức thì
         if (data.diem_sau !== undefined) {

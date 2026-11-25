@@ -14,10 +14,15 @@ import StatusBadge from "../../components/common/StatusBadge";
 export default function ScoreScreen({ user, biometricProfile, scoreLogs = [] }) {
   const currentScore = user?.diem_uy_tin ?? 100;
   const isRed = currentScore <= 20;
-  const isYellow = currentScore <= 65;
+  const isYellow = !isRed && currentScore <= 65;
   const badgeLabel = isRed ? "BÁO ĐỘNG ĐỎ" : isYellow ? "CẢNH CÁO VÀNG" : "HOẠT ĐỘNG TỐT";
   const badgeType = isRed ? "danger" : isYellow ? "warning" : "safe";
   const cardVariant = isRed ? "danger" : isYellow ? "warning" : "active";
+  const scoreColor = isRed
+    ? COLORS.alertDanger
+    : isYellow
+      ? COLORS.alertWarning
+      : COLORS.alertSafe;
 
   const dynamicAssessment = (biometricProfile?.danh_gia || "Hồ sơ sức khỏe ổn định.")
     .replace(/Điểm uy tín \d+/, `Điểm uy tín ${currentScore}`);
@@ -26,8 +31,8 @@ export default function ScoreScreen({ user, biometricProfile, scoreLogs = [] }) 
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 16 }}>
       {/* VÒNG ĐIỂM UY TÍN HIỆN TẠI */}
       <AppCard variant={cardVariant} style={styles.scoreHero}>
-        <View style={styles.scoreCircle}>
-          <Text style={styles.scoreNum}>{currentScore}</Text>
+        <View style={[styles.scoreCircle, { borderColor: scoreColor }]}>
+          <Text style={[styles.scoreNum, { color: scoreColor }]}>{currentScore}</Text>
           <Text style={styles.scoreMax}>100 điểm</Text>
         </View>
         <View style={{ flex: 1 }}>
@@ -77,7 +82,12 @@ export default function ScoreScreen({ user, biometricProfile, scoreLogs = [] }) 
         <Text style={styles.sectionTitle}>
           Lịch sử Biến động Sổ cái
         </Text>
-        {scoreLogs.map((log) => {
+        {scoreLogs.length === 0 ? (
+          <Text style={[styles.bioDesc, { marginTop: 8 }]}>
+            Chưa có lịch sử biến động điểm uy tín.
+          </Text>
+        ) : (
+          scoreLogs.map((log) => {
           const isMinus = log.so_diem_thay_doi < 0;
           return (
             <View key={log.id} style={styles.logRow}>
@@ -118,7 +128,8 @@ export default function ScoreScreen({ user, biometricProfile, scoreLogs = [] }) 
               </View>
             </View>
           );
-        })}
+        })
+        )}
       </AppCard>
     </ScrollView>
   );

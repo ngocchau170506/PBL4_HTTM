@@ -1,9 +1,11 @@
-const SERVER_IP = "172.20.10.2";
+import { Platform } from "react-native";
+
+const DEFAULT_SERVER_URL =
+  Platform.OS === "web" ? "http://localhost" : "http://192.168.1.100";
 
 export const API_CONFIG = {
-  USE_MOCK: false,
-  BASE_URL: `http://${SERVER_IP}:3000/api/v1`,
-  SOCKET_URL: `http://${SERVER_IP}:3000`,
+  BASE_URL: `${DEFAULT_SERVER_URL}/api/v1`,
+  SOCKET_URL: DEFAULT_SERVER_URL,
   TIMEOUT_MS: 15000,
 };
 

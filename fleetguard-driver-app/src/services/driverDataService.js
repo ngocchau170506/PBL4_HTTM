@@ -4,7 +4,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { API_CONFIG } from "../../mobileConfig";
 
-const USE_MOCK = false; // Đổi thành true nếu muốn chạy 100% dữ liệu giả lập
 const STORAGE_KEYS = {
   SERVER_URL: "@fleetguard_server_url",
   TOKEN: "@fleetguard_auth_token",
@@ -18,14 +17,22 @@ const normalizeServerUrl = (raw) => {
     ? trimmed
     : `http://${trimmed}`;
   normalized = normalized.replace(/\/+$/, "").replace(/\/api\/v1$/i, "");
-  // Nếu user chỉ nhập IP (không có port), mặc định dùng cổng :3000 (Backend) hoặc :80 (Docker Caddy)
   return normalized;
 };
 
+const createEmptyDriverState = () => ({
+  user: null,
+  biometricProfile: null,
+  currentShift: null,
+  scoreLogs: [],
+  violations: [],
+});
+
 let currentServerUrl = normalizeServerUrl(API_CONFIG.SOCKET_URL);
 let authToken = null;
+let driverState = createEmptyDriverState();
 
-// Helper gọi API chuẩn (Không cần cài thêm thư viện ngoài, chạy được cả trên RN và Web)
+// Helper gọi API chuẩn với timeout AbortController
 async function apiRequest(endpoint, options = {}) {
   const headers = {
     "Content-Type": "application/json",
@@ -33,79 +40,39 @@ async function apiRequest(endpoint, options = {}) {
     ...(options.headers || {}),
   };
 
-  const response = await fetch(`${currentServerUrl}/api/v1${endpoint}`, {
-    ...options,
-    headers,
-  });
+  const controller = new AbortController();
+  const timeoutMs = API_CONFIG.TIMEOUT_MS || 15000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  const contentType = response.headers.get("content-type") || "";
-  const json = contentType.includes("application/json")
-    ? await response.json()
-    : { success: response.ok, message: await response.text() };
+  try {
+    const response = await fetch(`${currentServerUrl}/api/v1${endpoint}`, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
 
-  if (!response.ok || json.success === false) {
-    throw new Error(
-      json.message || json.error?.message || "Lỗi kết nối tới máy chủ",
-    );
+    const contentType = response.headers.get("content-type") || "";
+    const json = contentType.includes("application/json")
+      ? await response.json()
+      : { success: response.ok, message: await response.text() };
+
+    if (!response.ok || json.success === false) {
+      throw new Error(
+        json.message || json.error?.message || "Lỗi kết nối tới máy chủ",
+      );
+    }
+    return json.data !== undefined ? json.data : json;
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error(
+        `Kết nối máy chủ quá thời gian (${Math.round(timeoutMs / 1000)}s). Vui lòng kiểm tra lại địa chỉ Server hoặc mạng LAN.`,
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  return json.data !== undefined ? json.data : json;
 }
-
-// ============================================================================
-// STATE DỰ PHÒNG & ĐỒNG BỘ UI MOBILE (FALLBACK & LOCAL CACHE)
-// ============================================================================
-let mockDriverState = {
-  user: {
-    id: 4,
-    driver_id: 4,
-    username: "tx_hoangnam",
-    ho_ten: "Phạm Hoàng Nam",
-    email: "hoangnam.driver@fleetguard.vn",
-    so_dien_thoai: "0905444555",
-    hang_bang_lai: "Hạng C",
-    so_bang_lai: "C-430054321",
-    ngay_het_han_bang_lai: "15/08/2029",
-    diem_uy_tin: 58,
-    cap_canh_bao: "WARNING_YELLOW",
-    privacy_consent_at: "05/09/2026",
-    privacy_consent_version: "v1.2-ND13/2023",
-  },
-  biometricProfile: {
-    khung_gio_yeu_sinh_hoc: ["13:00 - 15:00", "01:00 - 04:00"],
-    thoi_gian_lai_toi_da_khuyen_nghi_phut: 180,
-    thoi_gian_lai_trung_binh_truoc_met_moi_phut: 145,
-    ear_baseline: 0.285,
-    danh_gia:
-      "Điểm uy tín 58 (Cảnh cáo vàng). Hệ thống khuyến nghị nghỉ giải lao 15 phút sau mỗi 2.5 giờ lái liên tục.",
-  },
-  currentShift: {
-    id: 2,
-    trip_id: 2,
-    bien_so_xe: "43H-567.89",
-    loai_xe: "Xe tải thùng 8 tấn",
-    ma_thiet_bi: "IOT-DN-02 (Pi 4 + ESP32)",
-    ten_tuyen: "KCN Hòa Khánh (Đà Nẵng) → KCN VSIP (Quảng Ngãi)",
-    khoang_cach_km: 138.0,
-    thoi_gian_bat_dau: "14:00 - 22/10/2026",
-    thoi_gian_ket_thuc: "18:30 - 22/10/2026",
-    tai_xe_chinh: "Phạm Hoàng Nam",
-    tai_xe_phu: "Võ Quốc Bảo",
-    active_driver_name: "Phạm Hoàng Nam",
-    shift_status: "SCHEDULED",
-    trip_status: "NOT_STARTED",
-    calibration_mode: null,
-    canh_bao_sinh_hoc:
-      "Lưu ý: Ca chạy đi qua khung giờ yếu sinh học (13:00 - 15:00). Bắt buộc dừng nghỉ tại Trạm Tam Kỳ (Km 72).",
-    telemetry: {
-      toc_do_kmh: 64,
-      co2_ppm: 780,
-      cpu_temp_c: 63.5,
-      nearest_rest_stop: "Trạm dịch vụ Tam Kỳ (Cách 14 km)",
-    },
-  },
-  scoreLogs: [],
-  violations: [],
-};
 
 const formatDateTimeVN = (isoStr) => {
   if (!isoStr) return "Chưa xác định";
@@ -138,13 +105,12 @@ export const driverDataService = {
         authToken = savedToken;
       }
       if (savedUserRaw) {
-        const parsedUser = JSON.parse(savedUserRaw);
-        mockDriverState.user = { ...mockDriverState.user, ...parsedUser };
+        driverState.user = JSON.parse(savedUserRaw);
       }
       return {
-        hasSession: Boolean(savedToken),
+        hasSession: Boolean(savedToken && driverState.user),
         serverUrl: currentServerUrl,
-        user: savedToken ? { ...mockDriverState.user } : null,
+        user: savedToken && driverState.user ? { ...driverState.user } : null,
       };
     } catch {
       return {
@@ -175,7 +141,8 @@ export const driverDataService = {
     if (!rawUrl || typeof rawUrl !== "string") return null;
     const trimmed = rawUrl.trim();
     if (!trimmed) return null;
-    const localBackendPrefix = /^https?:\/\/(localhost|127\.0\.0\.1):3000(\/uploads\/.+)$/i;
+    const localBackendPrefix =
+      /^https?:\/\/(localhost|127\.0\.0\.1):3000(\/uploads\/.+)$/i;
     const match = trimmed.match(localBackendPrefix);
     if (match) {
       return `${currentServerUrl}${match[2]}`;
@@ -187,6 +154,7 @@ export const driverDataService = {
 
   async logout() {
     authToken = null;
+    driverState = createEmptyDriverState();
     await Promise.all([
       AsyncStorage.removeItem(STORAGE_KEYS.TOKEN),
       AsyncStorage.removeItem(STORAGE_KEYS.USER),
@@ -204,8 +172,6 @@ export const driverDataService = {
       throw new Error("Vui lòng nhập đầy đủ tài khoản và mật khẩu!");
     }
 
-    if (USE_MOCK) return { ...mockDriverState.user };
-
     const res = await apiRequest("/auth/login", {
       method: "POST",
       body: JSON.stringify({ username: username.trim(), password }),
@@ -215,18 +181,19 @@ export const driverDataService = {
     const u = res.user || {};
     const drv = u.driver || {};
 
-    mockDriverState.user = {
-      ...mockDriverState.user,
+    driverState = createEmptyDriverState();
+    driverState.user = {
       id: u.id,
       driver_id: drv.userId || u.id,
       username: u.username,
-      ho_ten: u.ho_ten || u.hoTen || mockDriverState.user.ho_ten,
-      so_dien_thoai: u.so_dien_thoai || u.sdt || "0905444555",
-      hang_bang_lai: `Hạng ${drv.hangBangLai || "C"}`,
-      so_bang_lai: drv.bangLai || "C-430054321",
-      diem_uy_tin: drv.uyTin ?? 95,
+      ho_ten: u.ho_ten || u.hoTen || "Tài xế",
+      so_dien_thoai: u.so_dien_thoai || u.sdt || "",
+      hang_bang_lai: drv.hangBangLai ? `Hạng ${drv.hangBangLai}` : "Chưa cập nhật",
+      so_bang_lai: drv.bangLai || "Chưa cập nhật",
+      diem_uy_tin: drv.uyTin ?? 100,
       cap_canh_bao: drv.capCanhBao || "NORMAL",
       privacy_consent_at: new Date().toLocaleDateString("vi-VN"),
+      privacy_consent_version: "v1.2-ND13/2023",
     };
 
     if (authToken) {
@@ -234,31 +201,30 @@ export const driverDataService = {
         AsyncStorage.setItem(STORAGE_KEYS.TOKEN, authToken),
         AsyncStorage.setItem(
           STORAGE_KEYS.USER,
-          JSON.stringify(mockDriverState.user),
+          JSON.stringify(driverState.user),
         ),
       ]).catch(() => {});
     }
 
-    return { ...mockDriverState.user };
+    return { ...driverState.user };
   },
 
   // 2. LẤY TOÀN BỘ DỮ LIỆU DASHBOARD CHO APP TÀI XẾ
   async getDriverDashboard() {
-    if (USE_MOCK || !authToken) {
+    if (!authToken || !driverState.user) {
       return {
-        user: { ...mockDriverState.user },
-        biometricProfile: { ...mockDriverState.biometricProfile },
-        currentShift: mockDriverState.currentShift
-          ? { ...mockDriverState.currentShift }
+        user: driverState.user ? { ...driverState.user } : null,
+        biometricProfile: driverState.biometricProfile
+          ? { ...driverState.biometricProfile }
           : null,
-        scoreLogs: [...mockDriverState.scoreLogs],
-        violations: [...mockDriverState.violations],
+        currentShift: null,
+        scoreLogs: [],
+        violations: [],
       };
     }
 
     try {
-      const driverId =
-        mockDriverState.user.driver_id || mockDriverState.user.id;
+      const driverId = driverState.user.driver_id || driverState.user.id;
       const [me, bio, shifts, activeTrip, scoreLogs, violations, disputes] =
         await Promise.all([
           apiRequest("/auth/me").catch(() => null),
@@ -272,25 +238,29 @@ export const driverDataService = {
 
       if (me) {
         const drv = me.driver || {};
-        mockDriverState.user = {
-          ...mockDriverState.user,
+        driverState.user = {
+          ...driverState.user,
           id: me.id,
           driver_id: drv.userId || me.id,
           username: me.username,
-          ho_ten: me.ho_ten || me.hoTen,
-          so_dien_thoai: me.so_dien_thoai || me.sdt || "0905444555",
-          hang_bang_lai: `Hạng ${drv.hangBangLai || "C"}`,
-          so_bang_lai: drv.bangLai || mockDriverState.user.so_bang_lai,
-          diem_uy_tin: drv.uyTin ?? mockDriverState.user.diem_uy_tin,
-          cap_canh_bao: drv.capCanhBao || mockDriverState.user.cap_canh_bao,
+          ho_ten: me.ho_ten || me.hoTen || driverState.user.ho_ten,
+          so_dien_thoai: me.so_dien_thoai || me.sdt || "",
+          hang_bang_lai: drv.hangBangLai
+            ? `Hạng ${drv.hangBangLai}`
+            : driverState.user.hang_bang_lai || "Chưa cập nhật",
+          so_bang_lai:
+            drv.bangLai || driverState.user.so_bang_lai || "Chưa cập nhật",
+          diem_uy_tin: drv.uyTin ?? driverState.user.diem_uy_tin ?? 100,
+          cap_canh_bao:
+            drv.capCanhBao || driverState.user.cap_canh_bao || "NORMAL",
         };
       }
 
       if (bio) {
-        const currentScore = mockDriverState.user.diem_uy_tin ?? 100;
+        const currentScore = driverState.user.diem_uy_tin ?? 100;
         const maxDriveMin = bio.thoiGianLaiToiDaKhuyenNghi || 240;
         const avgDriveMin = bio.thoiGianLaiTrungBinhTruocMetMoi || 180;
-        mockDriverState.biometricProfile = {
+        driverState.biometricProfile = {
           khung_gio_yeu_sinh_hoc: bio.khungGioYeuSinhHoc || [
             "13:00 - 15:00",
             "01:00 - 04:00",
@@ -305,7 +275,6 @@ export const driverDataService = {
         };
       }
 
-      // Ưu tiên lấy ca mới được giao (SCHEDULED / ACCEPTED) hoặc ca đang chạy (IN_PROGRESS)
       const shiftList = Array.isArray(shifts) ? shifts : [];
       const latestShift =
         shiftList.find((s) =>
@@ -317,7 +286,6 @@ export const driverDataService = {
         shiftList[0] ||
         null;
 
-      // Chỉ dùng activeTrip nếu nó thuộc về chính latestShift này
       const matchedTrip =
         latestShift &&
         activeTrip &&
@@ -363,7 +331,7 @@ export const driverDataService = {
           }
         }
 
-        mockDriverState.currentShift = {
+        driverState.currentShift = {
           id:
             latestShift?.id ||
             matchedTrip?.shift_id ||
@@ -388,12 +356,12 @@ export const driverDataService = {
               matchedTrip?.thoi_gian_ket_thuc ||
               matchedTrip?.thoiGianKetThuc,
           ),
-          tai_xe_chinh: mockDriverState.user.ho_ten,
+          tai_xe_chinh: driverState.user.ho_ten,
           tai_xe_phu: latestShift?.tai_xe_phu || null,
           active_driver_name:
             matchedTrip?.driver?.user?.ho_ten ||
             matchedTrip?.driver?.user?.hoTen ||
-            mockDriverState.user.ho_ten,
+            driverState.user.ho_ten,
           shift_status:
             latestShift?.trang_thai || latestShift?.trangThai || "ACCEPTED",
           trip_status:
@@ -420,11 +388,11 @@ export const driverDataService = {
           },
         };
       } else {
-        mockDriverState.currentShift = null;
+        driverState.currentShift = null;
       }
 
       if (Array.isArray(scoreLogs)) {
-        mockDriverState.scoreLogs = scoreLogs.map((l) => ({
+        driverState.scoreLogs = scoreLogs.map((l) => ({
           id: l.id,
           loai_thay_doi: l.loai_thay_doi || l.loaiThayDoi,
           so_diem_thay_doi: l.so_diem_thay_doi ?? l.soDiemThayDoi,
@@ -437,7 +405,7 @@ export const driverDataService = {
 
       if (Array.isArray(violations)) {
         const disputeList = Array.isArray(disputes) ? disputes : [];
-        mockDriverState.violations = violations.map((v) => {
+        driverState.violations = violations.map((v) => {
           const matchedDispute = disputeList.find(
             (d) => (d.violation_id || d.violationId) === v.id,
           );
@@ -486,21 +454,23 @@ export const driverDataService = {
     }
 
     return {
-      user: { ...mockDriverState.user },
-      biometricProfile: { ...mockDriverState.biometricProfile },
-      currentShift: mockDriverState.currentShift
-        ? { ...mockDriverState.currentShift }
+      user: driverState.user ? { ...driverState.user } : null,
+      biometricProfile: driverState.biometricProfile
+        ? { ...driverState.biometricProfile }
         : null,
-      scoreLogs: [...mockDriverState.scoreLogs],
-      violations: [...mockDriverState.violations],
+      currentShift: driverState.currentShift
+        ? { ...driverState.currentShift }
+        : null,
+      scoreLogs: [...driverState.scoreLogs],
+      violations: [...driverState.violations],
     };
   },
 
   // 3. TÀI XẾ NHẬN CA / TỪ CHỐI CA
   async respondShift(decision, reason = "") {
-    if (!mockDriverState.currentShift) return null;
-    if (!USE_MOCK && authToken) {
-      const shiftId = mockDriverState.currentShift.id;
+    if (!driverState.currentShift) return null;
+    if (authToken) {
+      const shiftId = driverState.currentShift.id;
       await apiRequest(`/shifts/${shiftId}/respond`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -509,58 +479,58 @@ export const driverDataService = {
         }),
       });
     }
-    mockDriverState.currentShift.shift_status = decision;
-    return { ...mockDriverState.currentShift };
+    driverState.currentShift.shift_status = decision;
+    return { ...driverState.currentShift };
   },
 
   // 4. HIỆU CHUẨN KHUÔN MẶT ĐẦU CA & BẮT ĐẦU CHUYẾN (ONLINE / OFFLINE HANDOVER)
   async completeCalibration(isOfflineMode = false) {
-    if (!mockDriverState.currentShift) return null;
-    if (!USE_MOCK && authToken && !isOfflineMode) {
+    if (!driverState.currentShift) return null;
+    if (authToken && !isOfflineMode && driverState.user) {
       const trip = await apiRequest("/trips/start", {
         method: "POST",
         body: JSON.stringify({
-          driver_id: mockDriverState.user.driver_id,
-          shift_id: mockDriverState.currentShift.id,
-          trip_id: mockDriverState.currentShift.trip_id,
+          driver_id: driverState.user.driver_id,
+          shift_id: driverState.currentShift.id,
+          trip_id: driverState.currentShift.trip_id,
           isOfflineMode,
         }),
       });
       if (trip?.id) {
-        mockDriverState.currentShift.trip_id = trip.id;
+        driverState.currentShift.trip_id = trip.id;
       }
     }
-    mockDriverState.currentShift.trip_status = "IN_PROGRESS";
-    mockDriverState.currentShift.calibration_mode = isOfflineMode
+    driverState.currentShift.trip_status = "IN_PROGRESS";
+    driverState.currentShift.calibration_mode = isOfflineMode
       ? "PENDING_CALIBRATION"
       : "ONLINE_SUCCESS";
-    return { ...mockDriverState.currentShift };
+    return { ...driverState.currentShift };
   },
 
   // 5. TẠM DỪNG NGHỈ TẠI TRẠM (RESTING)
   async toggleResting() {
-    if (!mockDriverState.currentShift) return null;
-    const current = mockDriverState.currentShift.trip_status;
+    if (!driverState.currentShift) return null;
+    const current = driverState.currentShift.trip_status;
     const nextStatus = current === "RESTING" ? "IN_PROGRESS" : "RESTING";
 
-    if (!USE_MOCK && authToken) {
-      const tripId = mockDriverState.currentShift.trip_id;
+    if (authToken && driverState.currentShift.trip_id) {
+      const tripId = driverState.currentShift.trip_id;
       await apiRequest(`/trips/${tripId}/status`, {
         method: "PATCH",
         body: JSON.stringify({ trang_thai: nextStatus }),
       });
     }
 
-    mockDriverState.currentShift.trip_status = nextStatus;
-    return { ...mockDriverState.currentShift };
+    driverState.currentShift.trip_status = nextStatus;
+    return { ...driverState.currentShift };
   },
 
   // 6. ĐỔI TÀI (CO-DRIVING HANDOVER)
   async getCoDriverCandidates() {
-    if (USE_MOCK || !authToken) return [];
+    if (!authToken || !driverState.user) return [];
     const list = await apiRequest("/drivers");
     const ownId = Number(
-      mockDriverState.user.driver_id || mockDriverState.user.id,
+      driverState.user.driver_id || driverState.user.id,
     );
     return (Array.isArray(list) ? list : [])
       .filter(
@@ -577,9 +547,9 @@ export const driverDataService = {
   },
 
   async switchCoDriver(isOfflineMode = false, coDriver = null) {
-    const shift = mockDriverState.currentShift;
+    const shift = driverState.currentShift;
     if (!shift) return null;
-    if (!USE_MOCK && authToken && !isOfflineMode) {
+    if (authToken && !isOfflineMode && shift.trip_id) {
       const updatedTrip = await apiRequest(
         `/trips/${shift.trip_id}/switch-driver`,
         {
@@ -614,57 +584,65 @@ export const driverDataService = {
 
   // 7. HOÀN THÀNH CHUYẾN ĐI
   async completeTrip() {
-    if (!mockDriverState.currentShift) return null;
-    if (!USE_MOCK && authToken) {
-      const tripId = mockDriverState.currentShift.trip_id;
+    if (!driverState.currentShift) return null;
+    if (authToken && driverState.currentShift.trip_id) {
+      const tripId = driverState.currentShift.trip_id;
       await apiRequest(`/trips/${tripId}/status`, {
         method: "PATCH",
         body: JSON.stringify({ trang_thai: "COMPLETED" }),
       });
     }
-    mockDriverState.currentShift.trip_status = "COMPLETED";
-    return { ...mockDriverState.currentShift };
+    driverState.currentShift.trip_status = "COMPLETED";
+    return { ...driverState.currentShift };
   },
 
   // 8. GỬI ĐƠN KHIẾU NẠI VI PHẠM
   async submitDispute({ violationId, reasonCode, explanation }) {
-    if (!USE_MOCK && authToken) {
+    if (authToken && driverState.user) {
       await apiRequest("/disputes", {
         method: "POST",
         body: JSON.stringify({
           violation_id: violationId,
-          driver_id: mockDriverState.user.driver_id,
+          driver_id: driverState.user.driver_id,
           ma_ly_do: reasonCode,
           noi_dung_giai_trinh: explanation,
         }),
       });
     }
 
-    const target = mockDriverState.violations.find((v) => v.id === violationId);
+    const target = driverState.violations.find((v) => v.id === violationId);
     if (target) {
       target.dispute_status = "OPEN";
       target.dispute_reason = `[${reasonCode}] ${explanation}`;
     }
-    return [...mockDriverState.violations];
+    return [...driverState.violations];
   },
 
-  // 9. CẬP NHẬT THÔNG TIN CÁ NHÂN (CHỈ CHO SỬA SĐT / TÊN LIÊN HỆ, KHÔNG CHO SỬA BẰNG LÁI)
+  // 9. CẬP NHẬT THÔNG TIN CÁ NHÂN (CHỈ CHO SỬA TÊN / SĐT)
   async updateProfile(updatedFields) {
-    if (!USE_MOCK && authToken) {
+    const cleanPayload = {
+      ho_ten: updatedFields.ho_ten?.trim(),
+      so_dien_thoai: updatedFields.so_dien_thoai?.trim(),
+    };
+
+    if (authToken) {
       await apiRequest("/auth/me", {
         method: "PATCH",
-        body: JSON.stringify({
-          ho_ten: updatedFields.ho_ten,
-          so_dien_thoai: updatedFields.so_dien_thoai,
-        }),
+        body: JSON.stringify(cleanPayload),
       });
     }
 
-    mockDriverState.user = {
-      ...mockDriverState.user,
-      ...updatedFields,
+    driverState.user = {
+      ...(driverState.user || {}),
+      ...cleanPayload,
     };
-    return { ...mockDriverState.user };
+
+    await AsyncStorage.setItem(
+      STORAGE_KEYS.USER,
+      JSON.stringify(driverState.user),
+    ).catch(() => {});
+
+    return { ...driverState.user };
   },
 
   // 10. TÀI XẾ TỰ ĐỔI MẬT KHẨU BẢO MẬT
@@ -678,7 +656,7 @@ export const driverDataService = {
       throw new Error("Mật khẩu mới phải có tối thiểu 6 ký tự!");
     }
 
-    if (!USE_MOCK && authToken) {
+    if (authToken) {
       await apiRequest("/auth/change-password", {
         method: "POST",
         body: JSON.stringify({ currentPassword, newPassword }),

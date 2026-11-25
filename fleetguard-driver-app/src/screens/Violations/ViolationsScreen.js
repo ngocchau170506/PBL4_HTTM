@@ -33,75 +33,89 @@ export default function ViolationsScreen({ violations = [], onSubmitDispute }) {
           const isConfirmed =
             v.trang_thai_xac_thuc === "CONFIRMED" ||
             v.trang_thai_xac_thuc === "MANUALLY_CONFIRMED";
-        const isRefunded =
-          v.trang_thai_diem === "REFUNDED" || v.dispute_status === "APPROVED";
-        const isDisputeRejected = v.dispute_status === "REJECTED";
-        const isDisputeOpen = v.dispute_status === "OPEN";
-        const canDispute = isConfirmed && !v.dispute_status && !isRefunded;
+          const isRejected = v.trang_thai_xac_thuc === "REJECTED";
+          const isRefunded =
+            v.trang_thai_diem === "REFUNDED" || v.dispute_status === "APPROVED";
+          const isDisputeRejected = v.dispute_status === "REJECTED";
+          const isDisputeOpen = v.dispute_status === "OPEN";
+          const canDispute = isConfirmed && !v.dispute_status && !isRefunded;
 
-        return (
-          <AppCard key={v.id}>
-            <View style={styles.topRow}>
-              <Text style={styles.vTitle}>
-                #{v.id} • {v.ten_loai}
-              </Text>
-              <View style={{ alignItems: "flex-end" }}>
-                <Text
-                  style={[
-                    styles.penaltyText,
-                    isRefunded && {
-                      color: COLORS.alertSafe,
-                      textDecorationLine: "line-through",
-                      fontSize: 12,
-                    },
-                  ]}
-                >
-                  -{v.diem_bi_tru} điểm
+          return (
+            <AppCard key={v.id}>
+              <View style={styles.topRow}>
+                <Text style={styles.vTitle}>
+                  #{v.id} • {v.ten_loai}
                 </Text>
-                {isRefunded && (
+                <View style={{ alignItems: "flex-end" }}>
                   <Text
-                    style={{
-                      color: COLORS.alertSafe,
-                      fontWeight: "bold",
-                      fontSize: 11,
-                    }}
+                    style={[
+                      styles.penaltyText,
+                      (isRefunded || isRejected) && {
+                        color: COLORS.alertSafe,
+                        textDecorationLine: "line-through",
+                        fontSize: 12,
+                      },
+                    ]}
                   >
-                    +0đ (Đã hoàn lại)
+                    -{v.diem_bi_tru} điểm
                   </Text>
+                  {isRefunded && (
+                    <Text
+                      style={{
+                        color: COLORS.alertSafe,
+                        fontWeight: "bold",
+                        fontSize: 11,
+                      }}
+                    >
+                      +0đ (Đã hoàn lại)
+                    </Text>
+                  )}
+                  {isRejected && !isRefunded && (
+                    <Text
+                      style={{
+                        color: COLORS.alertSafe,
+                        fontWeight: "bold",
+                        fontSize: 11,
+                      }}
+                    >
+                      0đ (Báo động giả)
+                    </Text>
+                  )}
+                </View>
+              </View>
+
+              <Text style={styles.timeText}>{v.thoi_gian}</Text>
+              <Text style={styles.descText}>{v.mo_ta}</Text>
+
+              <View style={styles.badgeRow}>
+                {isRejected ? (
+                  <StatusBadge label="ĐÃ BÁC BỎ (BÁO ĐỘNG GIẢ)" type="safe" />
+                ) : isRefunded ? (
+                  <StatusBadge label="ĐÃ HOÀN ĐIỂM KHIẾU NẠI" type="safe" />
+                ) : isDisputeRejected ? (
+                  <>
+                    <StatusBadge label="ĐÃ XÁC NHẬN TRỪ ĐIỂM" type="danger" />
+                    <StatusBadge label="KHIẾU NẠI BỊ BÁC BỎ" type="danger" />
+                  </>
+                ) : isDisputeOpen ? (
+                  <>
+                    <StatusBadge label="ĐÃ XÁC NHẬN TRỪ ĐIỂM" type="danger" />
+                    <StatusBadge
+                      label="ĐANG CHỜ GIẢI QUYẾT KHIẾU NẠI"
+                      type="info"
+                    />
+                  </>
+                ) : (
+                  <StatusBadge
+                    label={
+                      isConfirmed
+                        ? "ĐÃ XÁC NHẬN TRỪ ĐIỂM"
+                        : "CHỜ ĐIỀU PHỐI VIÊN DUYỆT"
+                    }
+                    type={isConfirmed ? "danger" : "warning"}
+                  />
                 )}
               </View>
-            </View>
-
-            <Text style={styles.timeText}>{v.thoi_gian}</Text>
-            <Text style={styles.descText}>{v.mo_ta}</Text>
-
-            <View style={styles.badgeRow}>
-              {isRefunded ? (
-                <StatusBadge label="ĐÃ HOÀN ĐIỂM KHIẾU NẠI" type="safe" />
-              ) : isDisputeRejected ? (
-                <>
-                  <StatusBadge label="ĐÃ XÁC NHẬN TRỪ ĐIỂM" type="danger" />
-                  <StatusBadge label="KHIẾU NẠI BỊ BÁC BỎ" type="danger" />
-                </>
-              ) : isDisputeOpen ? (
-                <>
-                  <StatusBadge label="ĐÃ XÁC NHẬN TRỪ ĐIỂM" type="danger" />
-                  <StatusBadge
-                    label="ĐANG CHỜ GIẢI QUYẾT KHIẾU NẠI"
-                    type="info"
-                  />
-                </>
-              ) : (
-                <StatusBadge
-                  label={
-                    isConfirmed
-                      ? "ĐÃ XÁC NHẬN TRỪ ĐIỂM"
-                      : "CHỜ ĐIỀU PHỐI VIÊN DUYỆT"
-                  }
-                  type={isConfirmed ? "danger" : "warning"}
-                />
-              )}
-            </View>
 
             {v.dispute_reason && (
               <View style={styles.disputeBox}>

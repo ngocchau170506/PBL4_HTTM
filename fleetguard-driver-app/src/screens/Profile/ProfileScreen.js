@@ -6,7 +6,7 @@ import {
   ShieldCheck,
   UserCheck,
 } from "lucide-react-native";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Alert,
   ScrollView,
@@ -28,10 +28,14 @@ export default function ProfileScreen({
   const [formData, setFormData] = useState({
     ho_ten: user?.ho_ten || "",
     so_dien_thoai: user?.so_dien_thoai || "",
-    email: user?.email || "hoangnam.driver@fleetguard.vn",
-    so_bang_lai: user?.so_bang_lai || "C-430054321",
-    ngay_het_han_bang_lai: user?.ngay_het_han_bang_lai || "15/08/2029",
   });
+
+  useEffect(() => {
+    setFormData({
+      ho_ten: user?.ho_ten || "",
+      so_dien_thoai: user?.so_dien_thoai || "",
+    });
+  }, [user?.id, user?.ho_ten, user?.so_dien_thoai]);
 
   const [pwdData, setPwdData] = useState({
     currentPassword: "",
@@ -104,13 +108,13 @@ export default function ProfileScreen({
           </Text>
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.heroName}>{formData.ho_ten}</Text>
+          <Text style={styles.heroName}>{formData.ho_ten || user?.ho_ten || "Tài xế"}</Text>
           <Text style={styles.heroUsername}>
-            Tài khoản: @{user?.username} • Mã TX: #DRV-0{user?.driver_id || 2}
+            Tài khoản: @{user?.username} • Mã TX: #DRV-{user?.driver_id || user?.id || "--"}
           </Text>
           <View style={{ marginTop: 8 }}>
             <StatusBadge
-              label={`Bằng ${user?.hang_bang_lai || "Hạng C"} • Hạn: ${formData.ngay_het_han_bang_lai}`}
+              label={`${user?.hang_bang_lai || "Chưa cập nhật"} • Số: ${user?.so_bang_lai || "---"}`}
               type="info"
             />
           </View>
@@ -151,26 +155,18 @@ export default function ProfileScreen({
           </View>
 
           <View style={[styles.field, { flex: 1 }]}>
-            <Text style={styles.label}>Số GPLX ({user?.hang_bang_lai})</Text>
+            <Text style={styles.label}>
+              Số GPLX ({user?.hang_bang_lai || "Chưa cập nhật"})
+            </Text>
             <TextInput
-              value={formData.so_bang_lai}
-              onChangeText={(val) =>
-                setFormData({ ...formData, so_bang_lai: val })
-              }
-              style={styles.input}
+              value={user?.so_bang_lai || "Chưa cập nhật"}
+              editable={false}
+              style={[styles.input, styles.inputDisabled]}
             />
+            <Text style={styles.readOnlyNote}>
+              Chỉ Quản trị viên có quyền cập nhật số GPLX
+            </Text>
           </View>
-        </View>
-
-        <View style={styles.field}>
-          <Text style={styles.label}>Email nhận cảnh báo</Text>
-          <TextInput
-            value={formData.email}
-            onChangeText={(val) => setFormData({ ...formData, email: val })}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            style={styles.input}
-          />
         </View>
 
         <AppButton
@@ -256,8 +252,8 @@ export default function ProfileScreen({
           <Text style={{ fontWeight: "800", color: COLORS.textPrimary }}>
             AES-256-GCM
           </Text>
-          .{"\n"}• Phiên bản đồng ý: {user?.privacy_consent_version} (Ngày ký:{" "}
-          {user?.privacy_consent_at}).
+          .{"\n"}• Phiên bản đồng ý: {user?.privacy_consent_version || "v1.2-ND13/2023"} (Ngày ký:{" "}
+          {user?.privacy_consent_at || "Khi đăng nhập"}).
         </Text>
         <View style={styles.consentBadgeRow}>
           <CheckCircle2 size={15} color={COLORS.alertSafe} />
@@ -339,6 +335,16 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontSize: 13,
     fontWeight: "600",
+  },
+  inputDisabled: {
+    opacity: 0.7,
+    color: COLORS.textMuted,
+  },
+  readOnlyNote: {
+    color: COLORS.textSubtle,
+    fontSize: 10,
+    marginTop: 4,
+    fontStyle: "italic",
   },
   privacyText: {
     color: COLORS.textSecondary,
