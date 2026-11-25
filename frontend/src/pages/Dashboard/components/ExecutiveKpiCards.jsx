@@ -3,44 +3,45 @@ import {
   HeartPulse,
   Route,
   ShieldCheck,
-  TrendingUp,
 } from "lucide-react";
-import { useEffect, useState } from "react";
-import dataService from "../../../services/dataService";
 
-export default function ExecutiveKpiCards() {
-  const [drivers, setDrivers] = useState([]);
-  const [violations, setViolations] = useState([]);
-
-  useEffect(() => {
-    const fetchKpiData = async () => {
-      const [dList, vList] = await Promise.all([
-        dataService.getDrivers(),
-        dataService.getViolations(),
-      ]);
-      setDrivers(dList || []);
-      setViolations(vList || []);
-    };
-    fetchKpiData();
-  }, []);
-
-  // 1. Tính số lượng Tài xế bị Khóa đỏ (<= 20đ hoặc SUSPENDED_RED)
+export default function ExecutiveKpiCards({
+  drivers = [],
+  violations = [],
+  trips = [],
+}) {
   const suspendedCount = drivers.filter(
     (d) => (d.diem_uy_tin ?? 100) <= 20 || d.cap_canh_bao === "SUSPENDED_RED",
   ).length;
 
-  // 2. Tính Điểm an toàn trung bình của đội xe
+  const safeDriversCount = drivers.filter(
+    (d) => (d.diem_uy_tin ?? 100) > 65 && d.cap_canh_bao !== "SUSPENDED_RED",
+  ).length;
+
   const avgSafetyRate = drivers.length
     ? (
         drivers.reduce((sum, d) => sum + (d.diem_uy_tin ?? 100), 0) /
         drivers.length
       ).toFixed(1)
-    : "94.8";
+    : "0.0";
 
-  // 3. Số vụ việc phát hiện & can thiệp từ Edge AI
-  const totalInterventions = violations.length + 37;
+  const monitoredTrips = trips.filter((t) =>
+    ["IN_PROGRESS", "RESTING", "COMPLETED"].includes(
+      t.trang_thai || t.trangThai,
+    ),
+  );
+  const totalDistanceKm = Math.round(
+    monitoredTrips.reduce(
+      (sum, t) =>
+        sum + Number(t.route?.khoang_cach_km ?? t.route?.khoangCachKm ?? 0),
+      0,
+    ),
+  );
+
+  const totalInterventions = violations.length;
   const pendingReviewCount = violations.filter(
-    (v) => v.trang_thai_xac_thuc === "PENDING_MANUAL_REVIEW",
+    (v) =>
+      (v.trang_thai_xac_thuc || v.trang_thai) === "PENDING_MANUAL_REVIEW",
   ).length;
 
   return (
@@ -59,8 +60,8 @@ export default function ExecutiveKpiCards() {
             <p className="text-brand-text-primary text-3xl font-black">
               {avgSafetyRate}%
             </p>
-            <span className="flex items-center text-xs font-bold text-emerald-400">
-              <TrendingUp className="mr-0.5 h-3 w-3" /> +2.4%
+            <span className="text-xs font-bold text-emerald-400">
+              {safeDriversCount}/{drivers.length} an toàn
             </span>
           </div>
           <p className="text-brand-text-subtle mt-1 text-[11px]">
@@ -79,9 +80,11 @@ export default function ExecutiveKpiCards() {
           </div>
         </div>
         <div className="mt-4">
-          <p className="text-brand-text-primary text-3xl font-black">18,450</p>
+          <p className="text-brand-text-primary text-3xl font-black">
+            {totalDistanceKm.toLocaleString("vi-VN")}
+          </p>
           <p className="text-brand-text-subtle mt-1 text-[11px]">
-            Kilomet lưu hành qua IoT Telemetry (Đà Nẵng & Miền Trung)
+            Kilomet từ {monitoredTrips.length} chuyến đang chạy / đã hoàn thành
           </p>
         </div>
       </div>
@@ -105,7 +108,7 @@ export default function ExecutiveKpiCards() {
             </span>
           </div>
           <p className="mt-1 text-[11px] text-amber-200/70">
-            Kích hoạt gọi buồng lái & điều hướng trạm nghỉ kịp thời
+            Tổng sự kiện vi phạm &amp; cảnh báo từ hệ thống Edge AI
           </p>
         </div>
       </div>
@@ -129,7 +132,7 @@ export default function ExecutiveKpiCards() {
             </span>
           </div>
           <p className="mt-1 text-[11px] text-rose-200/70">
-            Đang đình chỉ nhận ca & chờ đào tạo lại
+            Đang đình chỉ nhận ca &amp; chờ đào tạo lại
           </p>
         </div>
       </div>

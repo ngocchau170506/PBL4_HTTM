@@ -1,36 +1,32 @@
-// src/pages/Dashboard/components/CircadianRiskChart.jsx
-import React from "react";
 import { AlertTriangle } from "lucide-react";
 
-export default function CircadianRiskChart() {
-  const hourlyData = [
-    { hour: "00h", count: 4, isDangerZone: true },
-    { hour: "01h", count: 8, isDangerZone: true },
-    { hour: "02h", count: 14, isDangerZone: true }, // Đỉnh điểm ca đêm
-    { hour: "03h", count: 11, isDangerZone: true },
-    { hour: "04h", count: 5, isDangerZone: true },
-    { hour: "05h", count: 2, isDangerZone: false },
-    { hour: "06h", count: 1, isDangerZone: false },
-    { hour: "07h", count: 0, isDangerZone: false },
-    { hour: "08h", count: 1, isDangerZone: false },
-    { hour: "09h", count: 2, isDangerZone: false },
-    { hour: "10h", count: 1, isDangerZone: false },
-    { hour: "11h", count: 3, isDangerZone: false },
-    { hour: "12h", count: 4, isDangerZone: false },
-    { hour: "13h", count: 12, isDangerZone: true }, // Đỉnh điểm đầu giờ chiều
-    { hour: "14h", count: 15, isDangerZone: true }, // Hạ đường huyết & buồn ngủ
-    { hour: "15h", count: 9, isDangerZone: true },
-    { hour: "16h", count: 3, isDangerZone: false },
-    { hour: "17h", count: 2, isDangerZone: false },
-    { hour: "18h", count: 2, isDangerZone: false },
-    { hour: "19h", count: 1, isDangerZone: false },
-    { hour: "20h", count: 3, isDangerZone: false },
-    { hour: "21h", count: 4, isDangerZone: false },
-    { hour: "22h", count: 6, isDangerZone: false },
-    { hour: "23h", count: 7, isDangerZone: true },
-  ];
+const BIOLOGICAL_DANGER_HOURS = new Set([1, 2, 3, 4, 13, 14, 15, 23]);
 
-  const maxCount = 15;
+export default function CircadianRiskChart({ violations = [] }) {
+  const hourlyCounts = Array.from({ length: 24 }, () => 0);
+
+  for (const v of violations) {
+    const rawTime =
+      v.thoi_gian_chot_vi_pham || v.thoi_gian_vi_pham || v.created_at;
+    if (!rawTime) continue;
+    const d = new Date(rawTime);
+    if (!Number.isNaN(d.getTime())) {
+      hourlyCounts[d.getHours()] += 1;
+    }
+  }
+
+  const hourlyData = hourlyCounts.map((count, hour) => ({
+    hour: `${String(hour).padStart(2, "0")}h`,
+    count,
+    isDangerZone: BIOLOGICAL_DANGER_HOURS.has(hour),
+  }));
+
+  const maxCount = Math.max(1, ...hourlyData.map((h) => h.count));
+  const totalCount = violations.length;
+  const peakEntry = hourlyData.reduce(
+    (best, cur) => (cur.count > best.count ? cur : best),
+    hourlyData[0],
+  );
   const trackHeightPx = 140;
 
   return (
@@ -42,18 +38,18 @@ export default function CircadianRiskChart() {
             Phân bổ Rủi ro theo Nhịp Sinh học 24 Giờ (Circadian Risk Curve)
           </h2>
           <p className="text-brand-text-muted text-xs">
-            Chứng minh thực nghiệm hai vùng trũng sinh học: Ca đêm (01h - 04h)
-            &amp; Đầu giờ chiều (13h - 15h)
+            Thống kê trực tiếp từ {totalCount} sự kiện vi phạm thực tế • Hai vùng
+            trũng sinh học: Ca đêm (01h - 04h) &amp; Đầu giờ chiều (13h - 15h)
           </p>
         </div>
         <div className="flex items-center gap-3 text-xs">
           <span className="flex items-center gap-1.5 font-medium text-rose-400">
             <span className="h-2 w-2 rounded-full bg-rose-500"></span> Khung giờ
-            rủi ro cao
+            yếu sinh học
           </span>
           <span className="text-brand-text-muted flex items-center gap-1.5 font-medium">
             <span className="h-2 w-2 rounded-full bg-blue-500"></span> Khung giờ
-            an toàn
+            bình thường
           </span>
         </div>
       </div>
@@ -62,10 +58,10 @@ export default function CircadianRiskChart() {
       <div className="mt-8">
         <div className="flex items-end gap-1.5 sm:gap-2.5">
           {hourlyData.map((item, idx) => {
-            const barHeight = Math.max(
-              8,
-              Math.round((item.count / maxCount) * trackHeightPx),
-            );
+            const barHeight =
+              item.count === 0
+                ? 4
+                : Math.max(14, Math.round((item.count / maxCount) * trackHeightPx));
 
             return (
               <div
@@ -80,7 +76,6 @@ export default function CircadianRiskChart() {
                   <span className="text-[10px] font-medium whitespace-nowrap text-slate-400">
                     Khung giờ {item.hour}
                   </span>
-                  {/* Mũi tên trỏ xuống đỉnh cột */}
                   <div className="absolute -bottom-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 border-r border-b border-slate-700/80 bg-slate-900/95"></div>
                 </div>
 
@@ -92,9 +87,11 @@ export default function CircadianRiskChart() {
                   <div
                     style={{ height: `${barHeight}px` }}
                     className={`w-full rounded-t-md transition-all duration-300 group-hover:brightness-125 ${
-                      item.isDangerZone
-                        ? "bg-linear-to-t from-rose-600 via-rose-500 to-amber-400 shadow-sm shadow-rose-500/40"
-                        : "bg-linear-to-t from-blue-600 to-cyan-400 shadow-sm shadow-blue-500/20"
+                      item.count === 0
+                        ? "bg-slate-700/40"
+                        : item.isDangerZone
+                          ? "bg-linear-to-t from-rose-600 via-rose-500 to-amber-400 shadow-sm shadow-rose-500/40"
+                          : "bg-linear-to-t from-blue-600 to-cyan-400 shadow-sm shadow-blue-500/20"
                     }`}
                   />
                 </div>
@@ -114,8 +111,10 @@ export default function CircadianRiskChart() {
         <div className="flex items-center gap-2 text-amber-300">
           <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
           <span>
-            <b>Khuyến nghị thuật toán Smart Scheduling:</b> Giảm 30% tần suất
-            xếp ca đêm liên tục cho tài xế có điểm cảnh cáo vàng.
+            <b>Khuyến nghị thuật toán Smart Scheduling:</b>{" "}
+            {totalCount > 0
+              ? `Khung giờ cao điểm ghi nhận là ${peakEntry.hour} (${peakEntry.count} vụ). Giảm 30% tần suất xếp ca đêm liên tục cho tài xế có điểm cảnh cáo vàng.`
+              : "Chưa có dữ liệu vi phạm trong khoảng thời gian đã chọn."}
           </span>
         </div>
       </div>

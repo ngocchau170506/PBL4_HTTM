@@ -21,7 +21,7 @@ const createTransporter = () => {
 export const sendViolationEmailAlert = async ({ driverName, driverEmail, bienSo, loaiViPham, diemTru, uyTinConLai, tocDo, videoUrl, tramDungChanGoiY }) => {
   const transporter = createTransporter();
   const emailFrom = process.env.EMAIL_FROM || '"Hệ Thống Giám Sát PBL4 Fleet" <no-reply@pbl4fleet.vn>';
-  const targetEmail = driverEmail || process.env.SMTP_USER;
+  const targetEmail = process.env.ADMIN_ALERT_EMAIL || driverEmail || process.env.SMTP_USER;
 
   let restStopInfo = null;
   if (tramDungChanGoiY) {
@@ -93,6 +93,59 @@ export const sendViolationEmailAlert = async ({ driverName, driverEmail, bienSo,
     return { success: true, messageId: info.messageId, mode: 'real' };
   } catch (err) {
     console.error('❌ Failed to send real email via Nodemailer:', err.message);
+    return { success: false, error: err.message };
+  }
+};
+
+export const sendCriticalAdminEmailAlert = async ({
+  alertType,
+  driverName,
+  bienSo,
+  uyTinConLai,
+  detail,
+}) => {
+  const transporter = createTransporter();
+  const emailFrom =
+    process.env.EMAIL_FROM || '"Hệ Thống Giám Sát PBL4 Fleet" <no-reply@pbl4fleet.vn>';
+  const targetEmail = process.env.ADMIN_ALERT_EMAIL || process.env.SMTP_USER;
+
+  const isSuspended = alertType === 'SUSPENDED_RED';
+  const subject = isSuspended
+    ? `🔴 [KHÓA ĐỎ TÀI XẾ] ${driverName} (Uy tín: ${uyTinConLai}/100) - Xe ${bienSo}`
+    : `📷 [CẢNH BÁO RÚT CÁP / LỖI CAMERA] Xe ${bienSo} - Tài xế ${driverName}`;
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #0b1727; color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #dc2626;">
+      <h2 style="color: #f87171; border-bottom: 2px solid #dc2626; padding-bottom: 10px;">
+        ${isSuspended ? '🔴 BÁO ĐỘNG ĐỎ: TÀI XẾ BỊ KHÓA NHẬN CA (<= 20 ĐIỂM)' : '📷 CẢNH BÁO CAN THIỆP THIẾT BỊ / MẤT TÍN HIỆU CAMERA'}
+      </h2>
+      <p style="color: #cbd5e1;"><strong>Tài xế:</strong> ${driverName}</p>
+      <p style="color: #cbd5e1;"><strong>Phương tiện:</strong> ${bienSo}</p>
+      ${uyTinConLai !== undefined && uyTinConLai !== null ? `<p style="color: #facc15;"><strong>Điểm uy tín hiện tại:</strong> ${uyTinConLai} / 100</p>` : ''}
+      <p style="color: #fca5a5;"><strong>Chi tiết:</strong> ${detail || 'Hệ thống tự động ghi nhận sự kiện nghiêm trọng.'}</p>
+    </div>
+  `;
+
+  if (!transporter || !targetEmail || targetEmail === 'your_email@gmail.com') {
+    console.log('\n================== 📧 MOCK ADMIN CRITICAL ALERT ==================');
+    console.log(`To: ${targetEmail || 'ADMIN_ALERT_EMAIL chưa cấu hình'}`);
+    console.log(`Subject: ${subject}`);
+    console.log(`Detail: ${detail}`);
+    console.log('==================================================================\n');
+    return { success: true, mode: 'mock' };
+  }
+
+  try {
+    const info = await transporter.sendMail({
+      from: emailFrom,
+      to: targetEmail,
+      subject,
+      html,
+    });
+    console.log('✉️ Admin Critical Email sent! MessageId:', info.messageId);
+    return { success: true, messageId: info.messageId, mode: 'real' };
+  } catch (err) {
+    console.error('❌ Failed to send Admin Critical Email:', err.message);
     return { success: false, error: err.message };
   }
 };

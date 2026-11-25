@@ -1,7 +1,6 @@
 import {
   Cpu,
   Globe,
-  RotateCcw,
   Save,
   ShieldCheck,
   Sliders,
@@ -12,16 +11,7 @@ import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import Button from "../../components/common/Button";
 import InputField from "../../components/common/InputField";
-import SelectField from "../../components/common/SelectField";
 import dataService from "../../services/dataService";
-
-const FLEET_SCOPE_OPTIONS = [
-  {
-    value: "GLOBAL",
-    label: "Toàn hệ thống (Global Default - fleet_id = NULL)",
-  },
-  { value: "FLEET_1", label: "Đội xe Miền Trung - Đà Nẵng (fleet_id = 1)" },
-];
 
 export default function AdminAiConfigPage() {
   const [config, setConfig] = useState({
@@ -41,13 +31,14 @@ export default function AdminAiConfigPage() {
     penalty_cap_per_day: 50,
     manual_review_sla_hours: 24,
     dispute_window_hours: 48,
+    min_rest_hours: 10.0,
     timezone: "Asia/Ho_Chi_Minh",
   });
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     dataService.getAiConfig().then((data) => {
-      if (data) setConfig((prev) => ({ ...prev, ...data }));
+      if (data) setConfig((prev) => ({ ...prev, ...data, fleet_scope: "GLOBAL" }));
     });
   }, []);
 
@@ -63,25 +54,15 @@ export default function AdminAiConfigPage() {
     e.preventDefault();
     setIsSaving(true);
     try {
-      await dataService.updateAiConfig(config);
+      await dataService.updateAiConfig({ ...config, fleet_scope: "GLOBAL" });
       toast.success(
-        "Đã lưu cấu hình vào system_configs & đồng bộ MQTT xuống Edge Pi 4!",
+        "Đã lưu cấu hình vào bảng system_configs & ghi Audit Log!",
         { icon: "⚙️", duration: 3500 },
       );
     } catch {
       toast.error("Không thể lưu cấu hình!");
     } finally {
       setIsSaving(false);
-    }
-  };
-
-  const handleResetDemo = () => {
-    if (
-      window.confirm(
-        "Bạn có muốn khôi phục toàn bộ dữ liệu giả lập (Tài xế, Đội xe, Vi phạm, Cấu hình) về trạng thái gốc ban đầu không?",
-      )
-    ) {
-      dataService.resetDemoData();
     }
   };
 
@@ -106,22 +87,18 @@ export default function AdminAiConfigPage() {
         </div>
 
         <div className="flex items-center gap-2.5">
-          <Button variant="secondary" onClick={handleResetDemo}>
-            <RotateCcw className="h-4 w-4 text-amber-400" />
-            <span>Reset Dữ liệu Demo</span>
-          </Button>
           <Button
             variant="primary"
             onClick={handleSaveConfig}
             isLoading={isSaving}
           >
             <Save className="h-4 w-4" />
-            <span>Lưu & Đồng bộ MQTT</span>
+            <span>Lưu Cấu hình Hệ thống</span>
           </Button>
         </div>
       </div>
 
-      {/* THANH CHỌN PHẠM VI ĐỘI XE (DECISION #13) */}
+      {/* PHẠM VI ÁP DỤNG CẤU HÌNH */}
       <div className="card-glass border-brand-border flex flex-col justify-between gap-4 rounded-3xl border p-5 shadow-xl sm:flex-row sm:items-center">
         <div className="flex items-center gap-3.5">
           <div className="border-brand-primary/40 bg-brand-blue-night text-brand-blue-sky flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border">
@@ -129,25 +106,19 @@ export default function AdminAiConfigPage() {
           </div>
           <div>
             <h3 className="text-brand-text-primary text-sm font-bold">
-              Phạm vi áp dụng cấu hình (Hierarchical Scope)
+              Phạm vi áp dụng cấu hình (System Scope)
             </h3>
             <p className="text-brand-text-muted text-xs">
-              Hỗ trợ cấu hình chung toàn cục hoặc ghi đè riêng cho từng đội xe •
-              Múi giờ:{" "}
+              Áp dụng thống nhất toàn đội xe • Múi giờ:{" "}
               <span className="text-brand-blue-sky font-bold">
                 {config.timezone}
               </span>
             </p>
           </div>
         </div>
-        <div className="w-full sm:w-80">
-          <SelectField
-            name="fleet_scope"
-            value={config.fleet_scope}
-            onChange={handleChange}
-            options={FLEET_SCOPE_OPTIONS}
-          />
-        </div>
+        <span className="border-brand-primary/40 bg-brand-blue-night/50 text-brand-blue-sky inline-flex items-center rounded-xl border px-3.5 py-2 text-xs font-bold">
+          GLOBAL — Toàn hệ thống
+        </span>
       </div>
 
       {/* 3 KHỐI CẤU HÌNH CHÍNH */}
@@ -167,7 +138,7 @@ export default function AdminAiConfigPage() {
                   1. Ngưỡng Phản xạ Edge (Pi 4 + ESP32)
                 </h2>
                 <p className="text-brand-text-muted text-[11px]">
-                  Kích hoạt DFPlayer Mini & Còi Relay tức thì (&lt; 1s)
+                  Kích hoạt Dual-ESP32 + Loa I2S MAX98357A tức thì (&lt; 1s)
                 </p>
               </div>
             </div>
@@ -247,7 +218,7 @@ export default function AdminAiConfigPage() {
           </div>
 
           <div className="border-brand-border-dark mt-6 border-t pt-3 text-[11px] text-emerald-400">
-            ✓ Tự động đóng gói JSON gửi qua topic MQTT `fleets/1/config`
+            ✓ Lưu trực tiếp vào `system_configs` (PostgreSQL) &amp; áp dụng ngay cho Backend
           </div>
         </div>
 
@@ -347,8 +318,7 @@ export default function AdminAiConfigPage() {
           </div>
 
           <div className="border-brand-border-dark text-brand-blue-sky mt-6 border-t pt-3 text-[11px]">
-            ✓ Phiên bản hiện hành: `yolo26n-v1.1` (Edge) &bull; `arcface-v2.0`
-            (Cloud)
+            ✓ Mô hình đang chạy: Pi 4 Edge YOLO + Server Tier-2 MediaPipe HD
           </div>
         </div>
 
@@ -410,6 +380,17 @@ export default function AdminAiConfigPage() {
                 onChange={handleChange}
               />
             </div>
+
+            <InputField
+              label="Nghỉ tối thiểu giữa 2 ca (Giờ)"
+              name="min_rest_hours"
+              type="number"
+              step="0.5"
+              min="6"
+              max="24"
+              value={config.min_rest_hours}
+              onChange={handleChange}
+            />
 
             <div className="border-brand-border-dark bg-brand-dark/60 space-y-2 rounded-2xl border p-4 text-xs">
               <div className="flex items-center gap-1.5 font-bold text-amber-300">

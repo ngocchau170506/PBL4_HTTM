@@ -5,7 +5,10 @@ import {
 	getViolationTypeByCode,
 	getViolationTypeById,
 } from '../../common/constants/violationTypes.js';
-import { sendViolationEmailAlert } from '../../common/email.service.js';
+import {
+	sendCriticalAdminEmailAlert,
+	sendViolationEmailAlert,
+} from '../../common/email.service.js';
 import prisma from '../../common/prisma.js';
 import { getAiConfig } from '../configs/configs.service.js';
 import { formatDriver } from '../drivers/drivers.service.js';
@@ -285,18 +288,29 @@ export const createViolationRecord = async ({
 	});
 
 	if (initialStatus === 'CONFIRMED') {
+		const alertTarget =
+			process.env.ADMIN_ALERT_EMAIL || process.env.SMTP_USER || null;
 		sendViolationEmailAlert({
 			driverName: result.violation.driver?.user?.hoTen || 'Tài xế',
-			driverEmail:
-				(result.violation.driver?.user?.username || 'driver') + '@gmail.com',
+			driverEmail: alertTarget,
 			bienSo: result.violation.trip?.vehicle?.bienSo || 'Xe IoT',
 			loaiViPham: result.violation.ten_loai || standardCode,
 			diemTru: result.violation.diemTru,
-			uyTinConLai: result.updatedDriver.uyTin,
+			uyTinConLai: result.updatedDriver?.uyTin ?? 100,
 			tocDo: 'N/A',
 			videoUrl: result.violation.videoUrl,
 			tramDungChanGoiY: restStopGuidance,
 		}).catch((e) => console.error('Error sending violation email:', e));
+
+		if (result.updatedDriver?.uyTin <= 20) {
+			sendCriticalAdminEmailAlert({
+				alertType: 'SUSPENDED_RED',
+				driverName: result.violation.driver?.user?.hoTen || 'Tài xế',
+				bienSo: result.violation.trip?.vehicle?.bienSo || 'Xe IoT',
+				uyTinConLai: result.updatedDriver.uyTin,
+				detail: `Tài xế chạm ngưỡng Khóa đỏ sau vi phạm #${result.violation.id} (${standardCode}).`,
+			}).catch(() => {});
+		}
 	}
 
 	return result;
@@ -508,6 +522,16 @@ export const reviewViolationManual = async (
 		giaTriSau: { trangThai: newStatus, ghiChuDuyet: noteText },
 		lyDo: noteText || `Thẩm định: ${newStatus}`,
 	});
+
+	if (isConfirm && updatedDriver?.uyTin <= 20) {
+		sendCriticalAdminEmailAlert({
+			alertType: 'SUSPENDED_RED',
+			driverName: updatedViolation.driver?.user?.hoTen || 'Tài xế',
+			bienSo: updatedViolation.trip?.vehicle?.bienSo || 'Xe IoT',
+			uyTinConLai: updatedDriver.uyTin,
+			detail: `Tài xế chạm ngưỡng Khóa đỏ sau khi Điều phối viên xác nhận vi phạm #${updatedViolation.id}.`,
+		}).catch(() => {});
+	}
 
 	return { violation: enrichViolationRecord(updatedViolation), updatedDriver, scoreChange };
 };

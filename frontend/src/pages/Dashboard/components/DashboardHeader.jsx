@@ -1,14 +1,10 @@
 import { Download } from "lucide-react";
-import toast from "react-hot-toast";
 
-export default function DashboardHeader({ timeRange, setTimeRange }) {
-  const handleExportReport = () => {
-    toast.success("Đang kết xuất Báo cáo An toàn Đội xe (PDF / Excel)...", {
-      icon: "📊",
-      duration: 3500,
-    });
-  };
-
+export default function DashboardHeader({
+  timeRange,
+  setTimeRange,
+  onExportReport,
+}) {
   return (
     <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
       <div>
@@ -31,6 +27,7 @@ export default function DashboardHeader({ timeRange, setTimeRange }) {
         {/* Bộ lọc khoảng thời gian */}
         <div className="card-glass border-brand-border flex items-center gap-1 rounded-2xl border p-1 shadow-md">
           {[
+            { key: "ALL", label: "Tất cả" },
             { key: "7D", label: "7 ngày qua" },
             { key: "30D", label: "30 ngày" },
             { key: "THIS_MONTH", label: "Tháng này" },
@@ -49,13 +46,13 @@ export default function DashboardHeader({ timeRange, setTimeRange }) {
           ))}
         </div>
 
-        {/* Nút Xuất báo cáo */}
+        {/* Nút Xuất báo cáo CSV */}
         <button
-          onClick={handleExportReport}
+          onClick={onExportReport}
           className="card-glass border-brand-border hover:border-brand-primary text-brand-text-primary flex cursor-pointer items-center gap-1.5 rounded-2xl border px-3.5 py-2 text-xs font-bold transition-all active:scale-95"
         >
           <Download className="text-brand-blue-sky h-3.5 w-3.5" />
-          <span>Xuất Báo cáo</span>
+          <span>Xuất CSV</span>
         </button>
       </div>
     </div>

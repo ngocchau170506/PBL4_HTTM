@@ -24,7 +24,19 @@ export default function RealTripsTable({ trips = [] }) {
               const plate = trip.vehicle?.bien_so_xe || "43C-123.45";
               const routeName = trip.route?.ten_tuyen || "Đà Nẵng - Huế";
               const tele = trip.latest_telemetry || {};
-              const isProgress = trip.trang_thai === "IN_PROGRESS";
+              const status = trip.trang_thai || trip.trangThai;
+              const isProgress = status === "IN_PROGRESS";
+              const isResting = status === "RESTING";
+              const isCompleted = status === "COMPLETED";
+              const hasActiveViolation = (trip.violations || []).some((v) =>
+                [
+                  "CONFIRMED",
+                  "MANUALLY_CONFIRMED",
+                  "PENDING_MANUAL_REVIEW",
+                ].includes(v.trang_thai_xac_thuc || v.trangThai || v.trang_thai),
+              );
+              const bonusPoints =
+                Number(trip.route?.khoang_cach_km ?? 0) >= 100 ? 10 : 5;
 
               return (
                 <tr
@@ -95,23 +107,39 @@ export default function RealTripsTable({ trips = [] }) {
                         <span className="h-2 w-2 animate-ping rounded-full bg-emerald-400"></span>
                         Đang lăn bánh
                       </span>
-                    ) : (
+                    ) : isResting ? (
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-950/50 px-3 py-1 text-xs font-bold text-amber-400">
+                        Đang tạm nghỉ
+                      </span>
+                    ) : isCompleted ? (
                       <span className="border-brand-border bg-brand-surface text-brand-text-muted rounded-full border px-3 py-1 text-xs font-semibold">
                         Hoàn thành
+                      </span>
+                    ) : (
+                      <span className="rounded-full border border-rose-500/30 bg-rose-950/40 px-3 py-1 text-xs font-semibold text-rose-300">
+                        Đã hủy
                       </span>
                     )}
                   </td>
 
                   {/* Xét thưởng điểm sau chuyến (SRS § 5.3) */}
                   <td className="px-4 py-4 text-center">
-                    {isProgress ? (
+                    {isProgress || isResting ? (
                       <span className="text-brand-text-subtle text-[11px] italic">
                         Đang giám sát sạch lỗi
                       </span>
-                    ) : (
+                    ) : isCompleted && !hasActiveViolation ? (
                       <span className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-950/40 px-2.5 py-1 text-xs font-bold text-emerald-400">
                         <Award className="h-3.5 w-3.5 text-emerald-400" />
-                        +5đ Thưởng An toàn
+                        +{bonusPoints}đ Thưởng An toàn
+                      </span>
+                    ) : isCompleted ? (
+                      <span className="text-[11px] font-semibold text-amber-400">
+                        Không đạt (Có vi phạm)
+                      </span>
+                    ) : (
+                      <span className="text-brand-text-subtle text-[11px] italic">
+                        Không áp dụng
                       </span>
                     )}
                   </td>

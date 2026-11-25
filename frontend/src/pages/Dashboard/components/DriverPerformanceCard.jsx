@@ -2,12 +2,15 @@ import { Award, CheckCircle2, ShieldAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import dataService from "../../../services/dataService";
 
-export default function DriverPerformanceCard() {
-  const [drivers, setDrivers] = useState([]);
+export default function DriverPerformanceCard({ drivers: propDrivers }) {
+  const [fetchedDrivers, setFetchedDrivers] = useState([]);
 
   useEffect(() => {
-    dataService.getDrivers().then((data) => setDrivers(data || []));
-  }, []);
+    if (Array.isArray(propDrivers)) return;
+    dataService.getDrivers().then((data) => setFetchedDrivers(data || []));
+  }, [propDrivers]);
+
+  const drivers = Array.isArray(propDrivers) ? propDrivers : fetchedDrivers;
 
   const topSafeDrivers = drivers.filter((d) => (d.diem_uy_tin ?? 100) >= 80);
   const riskDrivers = drivers.filter((d) => (d.diem_uy_tin ?? 100) <= 65);
@@ -35,7 +38,12 @@ export default function DriverPerformanceCard() {
           </span>
         </div>
         <div className="divide-brand-border-dark/60 mt-3 divide-y">
-          {topSafeDrivers.map((driver) => {
+          {topSafeDrivers.length === 0 ? (
+            <p className="text-brand-text-subtle py-6 text-center text-xs">
+              Chưa có tài xế nào đạt ngưỡng &ge; 80 điểm.
+            </p>
+          ) : (
+            topSafeDrivers.map((driver) => {
             const name = driver.user?.ho_ten || driver.ho_ten || "Tài xế";
             const phone =
               driver.user?.so_dien_thoai || driver.so_dien_thoai || "--";
@@ -68,7 +76,8 @@ export default function DriverPerformanceCard() {
                 </div>
               </div>
             );
-          })}
+          })
+          )}
         </div>
       </div>
 
@@ -93,7 +102,12 @@ export default function DriverPerformanceCard() {
           </span>
         </div>
         <div className="divide-brand-border-dark/60 mt-3 divide-y">
-          {riskDrivers.map((driver) => {
+          {riskDrivers.length === 0 ? (
+            <p className="text-brand-text-subtle py-6 text-center text-xs">
+              Không có tài xế nào trong ngưỡng Cảnh cáo / Đình chỉ.
+            </p>
+          ) : (
+            riskDrivers.map((driver) => {
             const name = driver.user?.ho_ten || driver.ho_ten || "Tài xế";
             const phone =
               driver.user?.so_dien_thoai || driver.so_dien_thoai || "--";
@@ -152,7 +166,8 @@ export default function DriverPerformanceCard() {
                 </div>
               </div>
             );
-          })}
+          })
+          )}
         </div>
       </div>
     </div>

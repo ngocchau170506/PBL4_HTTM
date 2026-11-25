@@ -2,6 +2,7 @@ import {
 	VIOLATION_TYPES,
 	resolveViolationFromFlag,
 } from '../../common/constants/violationTypes.js';
+import { sendCriticalAdminEmailAlert } from '../../common/email.service.js';
 import prisma from '../../common/prisma.js';
 import { getAiConfig } from '../configs/configs.service.js';
 import {
@@ -458,14 +459,15 @@ export const processDeviceHeartbeat = async ({
 				});
 
 				if (!recentTampering) {
-					const { violation: tamperViolation } = await createViolationRecord({
-						driverId: activeTrip.driverId,
-						tripId: activeTrip.id,
-						loaiViPham: 'DEVICE_TAMPERING',
-						diemTru: 15,
-						aiConfidenceScore: 0.99,
-						moTa: 'CẢNH BÁO: Mất tín hiệu Camera USB khi xe đang vận hành (Nghi vấn can thiệp thiết bị / rút cáp).',
-					});
+					const { violation: tamperViolation, scoreChange: tamperScoreChange } =
+						await createViolationRecord({
+							driverId: activeTrip.driverId,
+							tripId: activeTrip.id,
+							loaiViPham: 'DEVICE_TAMPERING',
+							diemTru: 15,
+							aiConfidenceScore: 0.99,
+							moTa: 'CẢNH BÁO: Mất tín hiệu Camera USB khi xe đang vận hành (Nghi vấn can thiệp thiết bị / rút cáp).',
+						});
 
 					if (ioInstance) {
 						ioInstance.emit('violation:new', {
@@ -475,7 +477,21 @@ export const processDeviceHeartbeat = async ({
 							driver_name: activeTrip.driver?.user?.hoTen || 'Tài xế',
 							muc_do_nghiem_trong: 'CRITICAL',
 						});
+						if (tamperScoreChange) {
+							ioInstance.emit('driver:score_changed', {
+								driver_id: activeTrip.driverId,
+								...tamperScoreChange,
+							});
+						}
 					}
+
+					sendCriticalAdminEmailAlert({
+						alertType: 'DEVICE_TAMPERING',
+						driverName: activeTrip.driver?.user?.hoTen || 'Tài xế',
+						bienSo: activeTrip.vehicle?.bienSo || updated.maThietBi,
+						uyTinConLai: tamperScoreChange?.diem_sau,
+						detail: tamperViolation.moTa,
+					}).catch(() => {});
 				}
 			}
 		} catch (err) {
