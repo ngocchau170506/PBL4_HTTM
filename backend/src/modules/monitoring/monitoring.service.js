@@ -115,12 +115,24 @@ export const getPriorityFleet = async () => {
 				: isOnTrip
 					? 'ĐANG LĂN BÁNH'
 					: 'CHỜ XUẤT BẾN',
-			alertType: isDanger ? 'MICROSLEEP' : 'NORMAL',
+			alertType: isDanger
+				? latestViolation?.maLoai || latestViolation?.loaiViPham || 'MICROSLEEP'
+				: 'NORMAL',
 			alertDesc: isDanger
-				? 'Phát hiện mắt nhắm hoặc nồng độ CO2 buồng lái vượt ngưỡng an toàn!'
+				? latestViolation?.moTa ||
+					'Phát hiện mắt nhắm hoặc nồng độ CO2 buồng lái vượt ngưỡng an toàn!'
 				: isOnTrip
 					? 'Phương tiện đang di chuyển ổn định, các chỉ số an toàn bình thường.'
 					: 'Phương tiện đang dừng đỗ tại bãi, sẵn sàng cho ca chạy tiếp theo.',
+			video_url: latestViolation?.videoUrl || null,
+			ai_confidence_score: latestViolation?.aiConfidenceScore ?? null,
+			latest_violation_id: latestViolation?.id || null,
+			evidenceClip: latestViolation?.videoUrl
+				? {
+						videoUrl: latestViolation.videoUrl,
+						aiConfidence: Math.round((latestViolation.aiConfidenceScore ?? 0.9) * 100),
+					}
+				: null,
 			countdownSeconds: isDanger ? 769 : 900,
 			nearestRestStop: {
 				name: restStopName,

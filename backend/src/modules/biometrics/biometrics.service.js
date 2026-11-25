@@ -82,12 +82,19 @@ export const getDriverBiometricProfile = async (driverId) => {
     }
   }
 
+  const weakSlots = JSON.parse(profile.khungGioYeuSinhHoc || '[]');
+  const freq30d = JSON.parse(profile.tanSuatViPham30Ngay || '{}');
+
   return {
     ...profile,
     danhGiaChung: dynamicDanhGia,
     danh_gia_chung: dynamicDanhGia,
-    khungGioYeuSinhHoc: JSON.parse(profile.khungGioYeuSinhHoc || '[]'),
-    tanSuatViPham30Ngay: JSON.parse(profile.tanSuatViPham30Ngay || '{}'),
+    khungGioYeuSinhHoc: weakSlots,
+    khung_gio_yeu_sinh_hoc: weakSlots,
+    thoi_gian_lai_toi_da_khuyen_nghi: profile.thoiGianLaiToiDaKhuyenNghi,
+    thoi_gian_lai_trung_binh_truoc_met_moi: profile.thoiGianLaiTrungBinhTruocMetMoi,
+    tanSuatViPham30Ngay: freq30d,
+    tan_suat_vi_pham_30_ngay: freq30d,
   };
 };
 

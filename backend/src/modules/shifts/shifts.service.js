@@ -161,7 +161,7 @@ const validateShiftConstraints = async ({
 	if (!skipTimeChecks) {
 		// 4. Lấy cấu hình hệ thống động
 		const config = await getAiConfig();
-		const minRestHours = config.min_rest_hours ?? 8.0;
+		const minRestHours = config.min_rest_hours ?? 10.0;
 
 		// 5. Kiểm tra trùng lặp ca trực của Tài xế
 		const overlappingDriverShift = await prisma.shift.findFirst({
@@ -479,10 +479,20 @@ export const deleteShift = async (shiftId, reason, actorUser) => {
 export const respondToShift = async (
 	shiftId,
 	{ trangThai, trang_thai, lyDoTuChoi, ly_do_tu_choi },
+	currentUser = null,
 ) => {
 	const id = parseInt(shiftId, 10);
 	const shift = await prisma.shift.findUnique({ where: { id } });
 	if (!shift) throw new Error('Ca làm việc không tồn tại.');
+
+	if (
+		currentUser?.role?.toUpperCase() === 'DRIVER' &&
+		Number(shift.driverId) !== Number(currentUser.driver?.userId || currentUser.id)
+	) {
+		const err = new Error('Bạn không có quyền phản hồi ca làm việc của tài xế khác.');
+		err.status = 403;
+		throw err;
+	}
 
 	if (shift.trangThai === 'IN_PROGRESS' || shift.trangThai === 'COMPLETED') {
 		throw new Error(
@@ -490,7 +500,10 @@ export const respondToShift = async (
 		);
 	}
 
-	const newStatus = trangThai || trang_thai;
+	const newStatus = String(trangThai || trang_thai || '').toUpperCase();
+	if (!['ACCEPTED', 'DECLINED'].includes(newStatus)) {
+		throw new Error('Trạng thái phản hồi ca chỉ hợp lệ với ACCEPTED hoặc DECLINED.');
+	}
 	const reason = lyDoTuChoi || ly_do_tu_choi;
 
 	const updatedShift = await prisma.shift.update({

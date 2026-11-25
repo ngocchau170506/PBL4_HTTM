@@ -337,7 +337,7 @@ export const reviewViolationManual = async (
 			include: { user: true },
 		});
 
-		let actualDeducted = 0;
+		let actualDeducted = violation.diemTru;
 		let pointStatus = violation.trangThaiDiem || 'APPLIED';
 		let txScoreChange = null;
 
@@ -430,8 +430,12 @@ export const reviewViolationManual = async (
 				}
 			}
 		} else {
-			// Nếu REJECT: Bác bỏ vi phạm (hoàn lại điểm nếu trước đó đã bị auto-confirm trừ điểm)
-			if (violation.trangThai === 'CONFIRMED' && violation.diemTru > 0) {
+			// Nếu REJECT: Bác bỏ vi phạm (hoàn lại điểm nếu trước đó đã bị auto-confirm trừ điểm và chưa hoàn)
+			if (
+				violation.trangThai === 'CONFIRMED' &&
+				violation.diemTru > 0 &&
+				violation.trangThaiDiem !== 'REFUNDED'
+			) {
 				const currentUyTin = currentDriver.uyTin;
 				const refundedUyTin = Math.min(100, currentUyTin + violation.diemTru);
 				let newWarning = 'NORMAL';
@@ -475,6 +479,7 @@ export const reviewViolationManual = async (
 			where: { id },
 			data: {
 				trangThai: newStatus,
+				diemTru: isConfirm ? actualDeducted : 0,
 				trangThaiDiem: pointStatus,
 				nguonQuyetDinh: 'DISPATCHER',
 				ghiChuDuyet: noteText,

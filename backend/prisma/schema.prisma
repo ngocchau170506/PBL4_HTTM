@@ -175,7 +175,7 @@ model IotDataLog {
 
 model Violation {
   id                     Int       @id @default(autoincrement())
-  clientEventId          String?   @map("client_event_id")
+  clientEventId          String?   @unique @map("client_event_id")
   driverId               Int       @map("driver_id")
   tripId                 Int       @map("trip_id")
   loaiViPham             String    @map("loai_vi_pham") // "MICROSLEEP", "PHONE_DISTRACTION", "YAWNING_FATIGUE", "HIGH_CO2", "DEVICE_TAMPERING", "BUON_NGU"
@@ -304,7 +304,7 @@ model SystemConfig {
   penaltyCapPerDay       Int      @default(50) @map("penalty_cap_per_day")
   manualReviewSlaHours   Int      @default(24) @map("manual_review_sla_hours")
   disputeWindowHours     Int      @default(48) @map("dispute_window_hours")
-  minRestHours           Float    @default(8.0) @map("min_rest_hours")
+  minRestHours           Float    @default(10.0) @map("min_rest_hours")
   timezone               String   @default("Asia/Ho_Chi_Minh") @map("timezone")
   updatedAt              DateTime @updatedAt @map("updated_at")
 

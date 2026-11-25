@@ -22,10 +22,16 @@ export const formatUser = (user) => ({
 	driver: user.driver,
 });
 
+const httpError = (status, message) => {
+	const err = new Error(message);
+	err.status = status;
+	return err;
+};
+
 export const registerUser = async ({ username, password, hoTen, sdt, bangLai }) => {
 	const existingUser = await prisma.user.findUnique({ where: { username } });
 	if (existingUser) {
-		throw new Error('Tên đăng nhập đã tồn tại trong hệ thống.');
+		throw httpError(400, 'Tên đăng nhập đã tồn tại trong hệ thống.');
 	}
 
 	const saltRounds = 10;
@@ -64,16 +70,16 @@ export const loginUser = async ({ username, password }) => {
 	});
 
 	if (!user) {
-		throw new Error('Tên đăng nhập hoặc mật khẩu không chính xác.');
+		throw httpError(401, 'Tên đăng nhập hoặc mật khẩu không chính xác.');
 	}
 
 	if (user.trangThai !== 'ACTIVE') {
-		throw new Error('Tài khoản của bạn đã bị khóa.');
+		throw httpError(403, 'Tài khoản của bạn đã bị khóa.');
 	}
 
 	const isValidPassword = await bcrypt.compare(password, user.passwordHash);
 	if (!isValidPassword) {
-		throw new Error('Tên đăng nhập hoặc mật khẩu không chính xác.');
+		throw httpError(401, 'Tên đăng nhập hoặc mật khẩu không chính xác.');
 	}
 
 	const payload = {
@@ -97,27 +103,28 @@ export const loginUser = async ({ username, password }) => {
 
 // Cấp device_token cho Raspberry Pi 4 / ESP32 (SRS 4.1 § 2.2)
 export const issueDeviceToken = async ({ deviceCode, serial }) => {
-	let device = null;
-	if (deviceCode || serial) {
-		device = await prisma.iotDevice.findFirst({
-			where: {
-				OR: [
-					deviceCode ? { maThietBi: deviceCode } : undefined,
-					serial ? { cpuSerial: serial } : undefined,
-				].filter(Boolean),
-			},
-			include: { vehicle: true },
-		});
+	if (!deviceCode && !serial) {
+		throw httpError(400, 'Vui lòng cung cấp ma_thiet_bi hoặc cpu_serial của thiết bị.');
 	}
 
+	const device = await prisma.iotDevice.findFirst({
+		where: {
+			AND: [
+				deviceCode ? { maThietBi: deviceCode } : {},
+				serial ? { cpuSerial: serial } : {},
+			],
+		},
+		include: { vehicle: true },
+	});
+
 	if (!device) {
-		device = await prisma.iotDevice.findFirst({ include: { vehicle: true } });
+		throw httpError(404, 'Thiết bị IoT chưa được đăng ký hoặc cpu_serial không khớp.');
 	}
 
 	const payload = {
-		device_id: device?.id || 1,
-		ma_thiet_bi: device?.maThietBi || 'IOT-DN-01',
-		vehicle_id: device?.vehicleId || 1,
+		device_id: device.id,
+		ma_thiet_bi: device.maThietBi,
+		vehicle_id: device.vehicleId || null,
 		role: 'DEVICE',
 	};
 
@@ -128,11 +135,11 @@ export const issueDeviceToken = async ({ deviceCode, serial }) => {
 		token,
 		expires_in: 30 * 24 * 3600,
 		device: {
-			id: device?.id,
-			ma_thiet_bi: device?.maThietBi,
-			vehicle_id: device?.vehicleId,
-			cpu_serial: device?.cpuSerial,
-			bien_so_xe: device?.vehicle?.bienSo,
+			id: device.id,
+			ma_thiet_bi: device.maThietBi,
+			vehicle_id: device.vehicleId,
+			cpu_serial: device.cpuSerial,
+			bien_so_xe: device.vehicle?.bienSo || null,
 		},
 	};
 };
@@ -174,12 +181,22 @@ export const updateUser = async (userId, data, adminId) => {
 	const pUserId = parseInt(userId, 10);
 	const oldUser = await prisma.user.findUnique({ where: { id: pUserId } });
 	if (!oldUser) {
-		throw new Error('Không tìm thấy người dùng để cập nhật.');
+		throw httpError(404, 'Không tìm thấy người dùng để cập nhật.');
 	}
+
+	const allowedData = {};
+	const nextHoTen = data.hoTen ?? data.ho_ten;
+	const nextSdt = data.sdt ?? data.so_dien_thoai;
+	const nextRole = data.role ?? data.vai_tro;
+	const nextTrangThai = data.trangThai ?? data.trang_thai;
+	if (nextHoTen !== undefined) allowedData.hoTen = nextHoTen;
+	if (nextSdt !== undefined) allowedData.sdt = nextSdt;
+	if (nextRole !== undefined) allowedData.role = nextRole;
+	if (nextTrangThai !== undefined) allowedData.trangThai = nextTrangThai;
 
 	const updatedUser = await prisma.user.update({
 		where: { id: pUserId },
-		data,
+		data: allowedData,
 		include: { driver: true },
 	});
 

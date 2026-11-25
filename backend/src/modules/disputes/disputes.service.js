@@ -1,6 +1,7 @@
 import prisma from '../../common/prisma.js';
 import { logAuditAction } from '../../common/audit.service.js';
 import { formatDriver } from '../drivers/drivers.service.js';
+import { getAiConfig } from '../configs/configs.service.js';
 
 export const formatDispute = (d) => {
   return {
@@ -30,9 +31,10 @@ export const formatDispute = (d) => {
   };
 };
 
-export const getAllDisputes = async ({ status } = {}) => {
+export const getAllDisputes = async ({ status, driverId } = {}) => {
   const where = {};
   if (status) where.trangThai = status;
+  if (driverId) where.driverId = parseInt(driverId, 10);
 
   const disputes = await prisma.dispute.findMany({
     where,
@@ -47,7 +49,10 @@ export const getAllDisputes = async ({ status } = {}) => {
   return disputes.map(formatDispute);
 };
 
-export const createDispute = async ({ violationId, driverId, maLyDo, tenLyDo, noiDungGiaiTrinh }) => {
+export const createDispute = async (
+  { violationId, driverId, maLyDo, tenLyDo, noiDungGiaiTrinh },
+  currentUser = null,
+) => {
   const pViolationId = parseInt(violationId, 10);
   const pDriverId = parseInt(driverId, 10);
 
@@ -57,6 +62,37 @@ export const createDispute = async ({ violationId, driverId, maLyDo, tenLyDo, no
 
   if (!violation) {
     throw new Error('Vi phạm không tồn tại để khiếu nại.');
+  }
+
+  if (
+    currentUser?.role?.toUpperCase() === 'DRIVER' &&
+    Number(violation.driverId) !== Number(pDriverId)
+  ) {
+    const err = new Error('Bạn chỉ được gửi khiếu nại cho vi phạm của chính mình.');
+    err.status = 403;
+    throw err;
+  }
+
+  if (!['CONFIRMED', 'MANUALLY_CONFIRMED'].includes(violation.trangThai)) {
+    throw new Error('Chỉ được khiếu nại các vi phạm đã xác nhận trừ điểm (CONFIRMED).');
+  }
+
+  if (violation.trangThaiDiem === 'REFUNDED') {
+    throw new Error('Vi phạm này đã được hoàn điểm trước đó.');
+  }
+
+  const config = await getAiConfig();
+  const disputeWindowHours = Number(config.dispute_window_hours ?? 48);
+  const finalizedAt = new Date(
+    violation.thoiGianChotViPham || violation.thoiGianViPham || violation.createdAt,
+  );
+  if (!Number.isNaN(finalizedAt.getTime())) {
+    const elapsedHours = (Date.now() - finalizedAt.getTime()) / 3600000;
+    if (elapsedHours > disputeWindowHours) {
+      throw new Error(
+        `Đã quá thời hạn khiếu nại (${disputeWindowHours} giờ) kể từ khi chốt vi phạm.`,
+      );
+    }
   }
 
   const existingDispute = await prisma.dispute.findFirst({
@@ -69,7 +105,7 @@ export const createDispute = async ({ violationId, driverId, maLyDo, tenLyDo, no
   const dispute = await prisma.dispute.create({
     data: {
       violationId: pViolationId,
-      driverId: pDriverId,
+      driverId: violation.driverId,
       maLyDo: maLyDo || 'FALSE_DETECTION',
       tenLyDo: tenLyDo || null,
       noiDungGiaiTrinh: noiDungGiaiTrinh || '',
@@ -120,8 +156,12 @@ export const resolveDispute = async (disputeId, { decision, trang_thai, phan_hoi
   }
 
   const isApproved = resolvedDecision === 'APPROVED';
+  if (isApproved && dispute.violation?.trangThaiDiem === 'REFUNDED') {
+    throw new Error('Vi phạm này đã được hoàn điểm trước đó.');
+  }
+
   const newStatus = isApproved ? 'APPROVED' : 'REJECTED';
-  const refundPoints = dispute.violation?.diemTru || 5;
+  const refundPoints = Number(dispute.violation?.diemTru ?? 0);
   const currentUyTin = dispute.driver.uyTin;
   const newUyTin = isApproved ? Math.min(100, currentUyTin + refundPoints) : currentUyTin;
 
@@ -153,29 +193,36 @@ export const resolveDispute = async (disputeId, { decision, trang_thai, phan_hoi
         data: { trangThaiDiem: 'REFUNDED' },
       });
 
-      // 3. Hoàn điểm cho tài xế
+      // 3. Hoàn điểm cho tài xế (giữ nguyên ON_TRIP nếu đang chạy xe)
       await tx.driver.update({
         where: { userId: dispute.driverId },
         data: {
           uyTin: newUyTin,
           capCanhBao: newWarning,
-          trangThaiTaiXe: newUyTin > 20 ? 'AVAILABLE' : dispute.driver.trangThaiTaiXe,
+          trangThaiTaiXe:
+            dispute.driver.trangThaiTaiXe === 'ON_TRIP'
+              ? 'ON_TRIP'
+              : newUyTin > 20
+                ? 'AVAILABLE'
+                : dispute.driver.trangThaiTaiXe,
         },
       });
 
-      // 4. Ghi Sổ cái biến động điểm
-      await tx.driverScoreLog.create({
-        data: {
-          driverId: dispute.driverId,
-          loaiThayDoi: 'HOAN_DIEM_KHIEU_NAI',
-          soDiemThayDoi: refundPoints,
-          diemTruoc: currentUyTin,
-          diemSau: newUyTin,
-          lyDo: `Hoàn điểm khiếu nại #${dispute.id} (Vi phạm #${dispute.violationId}): ${note}`,
-          violationId: dispute.violationId,
-          tripId: dispute.violation.tripId,
-        },
-      });
+      // 4. Ghi Sổ cái biến động điểm nếu có hoàn > 0 điểm
+      if (refundPoints > 0) {
+        await tx.driverScoreLog.create({
+          data: {
+            driverId: dispute.driverId,
+            loaiThayDoi: 'HOAN_DIEM_KHIEU_NAI',
+            soDiemThayDoi: refundPoints,
+            diemTruoc: currentUyTin,
+            diemSau: newUyTin,
+            lyDo: `Hoàn điểm khiếu nại #${dispute.id} (Vi phạm #${dispute.violationId}): ${note}`,
+            violationId: dispute.violationId,
+            tripId: dispute.violation.tripId,
+          },
+        });
+      }
     }
 
     return updatedDispute;

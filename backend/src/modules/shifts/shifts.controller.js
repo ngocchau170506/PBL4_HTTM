@@ -61,11 +61,11 @@ export const deleteShift = async (req, res) => {
 export const respondToShift = async (req, res) => {
 	try {
 		const { id } = req.params;
-		const shift = await shiftsService.respondToShift(id, req.body);
+		const shift = await shiftsService.respondToShift(id, req.body, req.user);
 		const io = getSocketIO();
 		if (io) io.emit('violation:updated', { type: 'SHIFT_RESPONDED', shift });
 		res.json({ success: true, data: shift });
 	} catch (error) {
-		res.status(400).json({ success: false, message: error.message });
+		res.status(error.status || 400).json({ success: false, message: error.message });
 	}
 };

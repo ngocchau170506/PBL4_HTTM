@@ -1,4 +1,5 @@
 import prisma from '../../common/prisma.js';
+import { logAuditAction } from '../../common/audit.service.js';
 import { formatDriver } from '../drivers/drivers.service.js';
 import { formatVehicle, formatRoute } from '../assets/assets.service.js';
 

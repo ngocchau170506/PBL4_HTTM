@@ -18,7 +18,7 @@ const DEFAULT_CONFIG = {
   penalty_cap_per_day: 50,
   manual_review_sla_hours: 24,
   dispute_window_hours: 48,
-  min_rest_hours: 8.0,
+  min_rest_hours: 10.0,
   timezone: 'Asia/Ho_Chi_Minh',
 };
 

@@ -35,8 +35,8 @@ export const handleDeviceToken = async (req, res, next) => {
 		const serial = cpu_serial || cpuSerial;
 
 		const expectedSecret = process.env.IOT_DEVICE_SECRET || 'your_iot_device_secret_token';
-		if (secret && secret !== expectedSecret) {
-			return res.status(401).json({ success: false, message: 'device_secret không chính xác.' });
+		if (!secret || secret !== expectedSecret) {
+			return res.status(401).json({ success: false, message: 'device_secret không hợp lệ hoặc bị thiếu.' });
 		}
 
 		const result = await authService.issueDeviceToken({ deviceCode, serial });
