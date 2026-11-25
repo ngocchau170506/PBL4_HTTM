@@ -3,6 +3,7 @@ import { useState } from "react";
 import BaseModal from "../../../components/common/BaseModal";
 import Button from "../../../components/common/Button";
 import { formatFullDateTime } from "../../../utils/formatDateTime";
+import resolveMediaUrl from "../../../utils/resolveMediaUrl";
 
 export default function ViolationReviewModal({
   isOpen,
@@ -20,7 +21,9 @@ export default function ViolationReviewModal({
     violation.vehicle_plate ||
     violation.trip?.vehicle?.bien_so_xe ||
     "43C-123.45";
-  const videoUrl = violation.video_url || violation.duong_dan_video;
+  const videoUrl = resolveMediaUrl(
+    violation.video_url || violation.duong_dan_video,
+  );
   const isVideoRequired = Boolean(videoUrl);
   const status = violation.trang_thai_xac_thuc || violation.trang_thai;
   const isPending = status === "PENDING_MANUAL_REVIEW";
@@ -83,11 +86,11 @@ export default function ViolationReviewModal({
           <div className="border-alert-warning/30 bg-alert-warning/15 rounded-2xl border p-5 text-center">
             <Wind className="text-alert-warning mx-auto h-9 w-9" />
             <p className="text-alert-warning mt-2 text-sm font-bold">
-              Ghi nhận Telemetry Môi trường Cabin (Không có video)
+              Ghi nhận Sự kiện Không Video ({violation.ten_loai || violation.ma_loai})
             </p>
             <p className="text-brand-text-muted mt-1 text-xs">
-              Chỉ số CO2 đạt 1,340 ppm (vượt ngưỡng 1,200 ppm) kéo dài quá 5
-              phút.
+              {violation.mo_ta ||
+                "Ghi nhận vi phạm từ cảm biến buồng lái hoặc quy tắc hệ thống."}
             </p>
           </div>
         )}

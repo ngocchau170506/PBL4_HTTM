@@ -13,6 +13,7 @@ import toast from "react-hot-toast";
 import Button from "../../../components/common/Button";
 import StatusBadge from "../../../components/common/StatusBadge";
 import { formatFullDateTime } from "../../../utils/formatDateTime";
+import resolveMediaUrl from "../../../utils/resolveMediaUrl";
 
 export default function DisputesSection({
   disputes = [],
@@ -37,7 +38,9 @@ export default function DisputesSection({
   };
 
   const violation = selectedDispute?.violation || {};
-  const videoUrl = violation.video_url || violation.duong_dan_video;
+  const videoUrl = resolveMediaUrl(
+    violation.video_url || violation.duong_dan_video,
+  );
   const penaltyPoints = violation.diem_bi_tru ?? 5;
   const isSameReviewer =
     violation.reviewed_by &&

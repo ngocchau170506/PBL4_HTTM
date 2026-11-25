@@ -40,6 +40,7 @@ export default function TripsPage() {
       toast.success("Đã tạo ca phân công mới thành công!", { icon: "📅" });
     } catch (err) {
       toast.error(err.message || "Không thể tạo ca phân công!");
+      throw err;
     }
   };
 

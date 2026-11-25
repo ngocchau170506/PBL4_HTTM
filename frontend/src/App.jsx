@@ -28,7 +28,13 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route element={<MainLayout />}>
+      <Route
+        element={
+          <ProtectedRoute>
+            <MainLayout />
+          </ProtectedRoute>
+        }
+      >
         <Route path="/" element={<DashboardPage />} />
         <Route path="/map" element={<MapPage />} />
         <Route path="/drivers" element={<DriversPage />} />

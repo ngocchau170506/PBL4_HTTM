@@ -34,28 +34,37 @@ export default function DriversPage() {
     const newStatus = isSuspended ? "NORMAL" : "SUSPENDED_RED";
     const driverName = driver.user?.ho_ten || driver.ho_ten;
 
-    await dataService.updateDriverStatus(
-      driver.id,
-      newStatus,
-      isSuspended ? "Mở khóa nhận ca" : "Đình chỉ công tác theo SRS 4.1",
-    );
-    await fetchDrivers();
-
-    if (isSuspended) {
-      toast.success(`Đã mở khóa nhận ca cho tài xế ${driverName}!`, {
-        icon: "🔓",
-      });
-    } else {
-      toast.error(
-        `Đã đình chỉ công tác tài xế ${driverName} (Không xếp ca theo SRS 4.1)!`,
-        { icon: "🔒" },
+    try {
+      await dataService.updateDriverStatus(
+        driver.id,
+        newStatus,
+        isSuspended ? "Mở khóa nhận ca" : "Đình chỉ công tác theo SRS 4.1",
       );
+      await fetchDrivers();
+
+      if (isSuspended) {
+        toast.success(`Đã mở khóa nhận ca cho tài xế ${driverName}!`, {
+          icon: "🔓",
+        });
+      } else {
+        toast.error(
+          `Đã đình chỉ công tác tài xế ${driverName} (Không xếp ca theo SRS 4.1)!`,
+          { icon: "🔒" },
+        );
+      }
+    } catch (err) {
+      toast.error(err.message || "Không thể cập nhật trạng thái tài xế!");
     }
   };
 
   const handleAddDriver = async (newDriver) => {
-    await dataService.createDriver(newDriver);
-    await fetchDrivers();
+    try {
+      await dataService.createDriver(newDriver);
+      await fetchDrivers();
+    } catch (err) {
+      toast.error(err.message || "Không thể tạo hồ sơ tài xế!");
+      throw err;
+    }
   };
 
   const filteredDrivers = drivers.filter((d) => {

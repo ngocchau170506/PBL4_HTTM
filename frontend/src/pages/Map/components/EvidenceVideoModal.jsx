@@ -1,4 +1,5 @@
-import { CheckCircle2, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, X } from "lucide-react";
+import resolveMediaUrl from "../../../utils/resolveMediaUrl";
 
 export default function EvidenceVideoModal({ isOpen, onClose, vehicle }) {
   if (!isOpen) return null;
@@ -15,23 +16,23 @@ export default function EvidenceVideoModal({ isOpen, onClose, vehicle }) {
   const hasViolation =
     vehicle?.priorityLevel === "DANGER" ||
     vehicle?.priorityLevel === "WARNING" ||
-    vehicle?.alertType === "MICROSLEEP" ||
-    vehicle?.alertType === "FATIGUE_WARNING";
+    ["MICROSLEEP", "PHONE_DISTRACTION", "YAWNING_FATIGUE", "HIGH_CO2", "DEVICE_TAMPERING", "FATIGUE_WARNING"].includes(
+      vehicle?.alertType,
+    );
 
-  // Video mẫu tương ứng: Nếu dùng điện thoại hoặc mệt mỏi sẽ đổi video khác
-  const videoUrl =
-    vehicle?.evidenceClip?.videoUrl ||
-    vehicle?.video_url ||
-    (vehicle?.alertType === "MICROSLEEP"
-      ? "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
-      : "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4");
+  const rawVideoUrl = vehicle?.evidenceClip?.videoUrl || vehicle?.video_url;
+  const videoUrl = resolveMediaUrl(rawVideoUrl);
 
   const alertDescription =
     vehicle?.alertDesc ||
     vehicle?.priorityDesc ||
     "Phát hiện hành vi mất an toàn buồng lái.";
 
-  const aiConfidence = vehicle?.evidenceClip?.aiConfidence || 92;
+  const aiConfidence =
+    vehicle?.evidenceClip?.aiConfidence ??
+    (vehicle?.ai_confidence_score
+      ? Math.round(Number(vehicle.ai_confidence_score) * 100)
+      : null);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md">
@@ -61,25 +62,37 @@ export default function EvidenceVideoModal({ isOpen, onClose, vehicle }) {
         <div className="bg-black p-4">
           {hasViolation ? (
             <>
-              <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-slate-950">
-                <video
-                  src={videoUrl}
-                  controls
-                  autoPlay
-                  className="h-full w-full object-cover"
-                />
-                <div className="absolute top-3 left-3 flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-black/70 px-2 py-1 text-[10px] font-bold text-red-400 backdrop-blur-md">
-                  <span className="h-2 w-2 animate-ping rounded-full bg-red-500"></span>
-                  CCTV Cabin Clip (10s)
+              {videoUrl ? (
+                <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-slate-950">
+                  <video
+                    src={videoUrl}
+                    controls
+                    autoPlay
+                    className="h-full w-full object-contain"
+                  />
+                  <div className="absolute top-3 left-3 flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-black/70 px-2 py-1 text-[10px] font-bold text-red-400 backdrop-blur-md">
+                    <span className="h-2 w-2 animate-ping rounded-full bg-red-500"></span>
+                    CCTV Cabin Clip (10s)
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-950/20 px-6 py-10 text-center">
+                  <AlertTriangle className="mx-auto h-10 w-10 text-amber-400" />
+                  <h4 className="mt-3 text-sm font-bold text-amber-300">
+                    Sự kiện cảnh báo không kèm video ({vehicle?.alertType || "TELEMETRY"})
+                  </h4>
+                  <p className="text-brand-text-muted mt-1 text-xs">
+                    Vi phạm cảm biến / quy tắc hệ thống hoặc clip đang được đồng bộ từ Server AI.
+                  </p>
+                </div>
+              )}
 
               <div className="mt-3 flex items-center justify-between text-xs">
                 <span className="text-alert-danger flex items-center gap-1 font-semibold">
                   ⚠️ {alertDescription}
                 </span>
                 <span className="text-alert-safe font-mono font-bold">
-                  Độ tin cậy AI: {aiConfidence}%
+                  {aiConfidence != null ? `Độ tin cậy AI: ${aiConfidence}%` : "Quy tắc Cảm biến"}
                 </span>
               </div>
             </>

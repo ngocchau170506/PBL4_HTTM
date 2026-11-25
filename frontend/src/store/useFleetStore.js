@@ -156,6 +156,10 @@ export const useFleetStore = create((set, get) => ({
   handleNewViolationSocket: (newViolation) => {
     const currentViolations = get().violations;
     const updatedViolations = [newViolation, ...currentViolations];
+    const videoUrl = newViolation.video_url || newViolation.duong_dan_video || null;
+    const confidencePct = newViolation.ai_confidence_score
+      ? Math.round(Number(newViolation.ai_confidence_score) * 100)
+      : null;
 
     const updatedFleet = get().liveFleet.map((v) => {
       const plate = v.plate || v.bien_so_xe;
@@ -166,20 +170,44 @@ export const useFleetStore = create((set, get) => ({
           priorityBadge: "CAN THIỆP GẤP",
           alertType: newViolation.ma_loai,
           alertDesc: newViolation.mo_ta,
+          video_url: videoUrl || v.video_url || null,
+          ai_confidence_score:
+            newViolation.ai_confidence_score ?? v.ai_confidence_score ?? null,
+          evidenceClip: videoUrl
+            ? {
+                videoUrl,
+                aiConfidence: confidencePct ?? 90,
+              }
+            : v.evidenceClip || null,
         };
       }
       return v;
     });
 
+    const sel = get().selectedVehicle;
+    const updatedSelected = sel
+      ? updatedFleet.find(
+          (x) => (x.plate || x.bien_so_xe) === (sel.plate || sel.bien_so_xe),
+        ) || sel
+      : null;
+
     const currentStats = get().monitoringStats;
+    const isMicrosleep =
+      (newViolation.ma_loai || "").toUpperCase() === "MICROSLEEP";
 
     set({
       violations: updatedViolations,
       liveFleet: updatedFleet,
+      selectedVehicle: updatedSelected,
       activeAlert: newViolation,
       monitoringStats: {
         ...currentStats,
-        microsleepAlerts: (currentStats.microsleepAlerts || 0) + 1,
+        microsleepAlerts: isMicrosleep
+          ? (currentStats.microsleepAlerts || 0) + 1
+          : currentStats.microsleepAlerts || 0,
+        fatigueWarnings: !isMicrosleep
+          ? (currentStats.fatigueWarnings || 0) + 1
+          : currentStats.fatigueWarnings || 0,
       },
     });
   },

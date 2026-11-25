@@ -20,46 +20,46 @@ export default function AddDriverModal({ isOpen, onClose, onAddDriver }) {
     hang_bang_lai: "FC",
     so_bang_lai: "",
   });
+  const [submitting, setSubmitting] = useState(false);
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     if (e) e.preventDefault();
     if (!formData.ho_ten.trim()) {
       toast.error("Vui lòng nhập họ tên tài xế!");
       return;
     }
 
-    const newDriver = {
-      id: Date.now(),
-      user_id: Date.now(),
-      diem_uy_tin: 100,
-      cap_canh_bao: "NORMAL",
+    const payload = {
+      ho_ten: formData.ho_ten.trim(),
+      so_dien_thoai: formData.so_dien_thoai.trim() || null,
       hang_bang_lai: formData.hang_bang_lai,
       so_bang_lai:
-        formData.so_bang_lai ||
-        `FC-${Math.floor(100000 + Math.random() * 900000)}`,
-      user: {
-        id: Date.now(),
-        ho_ten: formData.ho_ten.trim(),
-        so_dien_thoai: formData.so_dien_thoai || "0905000999",
-      },
+        formData.so_bang_lai.trim() ||
+        `${formData.hang_bang_lai}-${Math.floor(100000 + Math.random() * 900000)}`,
     };
 
-    onAddDriver(newDriver);
-    toast.success(
-      `Thêm thành công tài xế [${newDriver.user.ho_ten}] vào hệ thống!`,
-    );
-
-    setFormData({
-      ho_ten: "",
-      so_dien_thoai: "",
-      hang_bang_lai: "FC",
-      so_bang_lai: "",
-    });
-    onClose();
+    setSubmitting(true);
+    try {
+      await onAddDriver(payload);
+      toast.success(
+        `Thêm thành công tài xế [${payload.ho_ten}] vào hệ thống!`,
+      );
+      setFormData({
+        ho_ten: "",
+        so_dien_thoai: "",
+        hang_bang_lai: "FC",
+        so_bang_lai: "",
+      });
+      onClose();
+    } catch {
+      // Lỗi đã được toast ở DriversPage
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -75,9 +75,9 @@ export default function AddDriverModal({ isOpen, onClose, onAddDriver }) {
           <Button variant="secondary" onClick={onClose}>
             Hủy
           </Button>
-          <Button variant="primary" onClick={handleSubmit}>
+          <Button variant="primary" onClick={handleSubmit} disabled={submitting}>
             <Plus className="h-4 w-4" />
-            <span>Tạo hồ sơ</span>
+            <span>{submitting ? "Đang tạo..." : "Tạo hồ sơ"}</span>
           </Button>
         </>
       }

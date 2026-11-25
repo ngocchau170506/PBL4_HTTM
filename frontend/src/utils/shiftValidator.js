@@ -5,6 +5,7 @@ export function validateSmartSchedule({
   durationHours,
   existingShifts = [],
   excludeShiftId = null, // Bỏ qua ca hiện tại khi đang ở chế độ Sửa (Edit)
+  minRestHours = 10,
 }) {
   const driverScore = selectedDriver?.diem_uy_tin ?? 100;
   const isDriverSuspended =
@@ -39,17 +40,17 @@ export function validateSmartSchedule({
       break;
     }
 
-    // 2. Kiểm tra khoảng nghỉ tối thiểu 10 giờ
+    // 2. Kiểm tra khoảng nghỉ tối thiểu giữa 2 ca
     if (sameDriver) {
       const gapAfterHours = (newStart - exEnd) / 3600000;
       const gapBeforeHours = (exStart - newEnd) / 3600000;
 
-      if (gapAfterHours >= 0 && gapAfterHours < 10) {
-        restTimeConflictMsg = `Thời gian nghỉ sau Ca #${s.id} chỉ có ${gapAfterHours.toFixed(1)} giờ (Bắt buộc >= 10 giờ theo SRS 4.1)!`;
+      if (gapAfterHours >= 0 && gapAfterHours < minRestHours) {
+        restTimeConflictMsg = `Thời gian nghỉ sau Ca #${s.id} chỉ có ${gapAfterHours.toFixed(1)} giờ (Bắt buộc >= ${minRestHours} giờ theo SRS 4.1)!`;
         break;
       }
-      if (gapBeforeHours >= 0 && gapBeforeHours < 10) {
-        restTimeConflictMsg = `Thời gian nghỉ trước Ca #${s.id} chỉ có ${gapBeforeHours.toFixed(1)} giờ (Bắt buộc >= 10 giờ theo SRS 4.1)!`;
+      if (gapBeforeHours >= 0 && gapBeforeHours < minRestHours) {
+        restTimeConflictMsg = `Thời gian nghỉ trước Ca #${s.id} chỉ có ${gapBeforeHours.toFixed(1)} giờ (Bắt buộc >= ${minRestHours} giờ theo SRS 4.1)!`;
         break;
       }
     }

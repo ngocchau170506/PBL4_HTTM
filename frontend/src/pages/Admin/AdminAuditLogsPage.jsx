@@ -121,11 +121,10 @@ export default function AdminAuditLogsPage() {
             </p>
             <p className="text-brand-text-primary text-xl font-black">
               {
-                logs.filter(
-                  (l) =>
-                    l.doi_tuong_loai === "violation" ||
-                    l.doi_tuong_loai === "driver",
-                ).length
+                logs.filter((l) => {
+                  const target = (l.doi_tuong_loai || "").toUpperCase();
+                  return target === "VIOLATION" || target === "DRIVER" || target === "DISPUTE";
+                }).length
               }{" "}
               <span className="text-brand-text-subtle text-xs font-normal">
                 thao tác
@@ -143,7 +142,12 @@ export default function AdminAuditLogsPage() {
               Thay đổi cấu hình AI
             </p>
             <p className="text-brand-text-primary text-xl font-black">
-              {logs.filter((l) => l.doi_tuong_loai === "system_configs").length}{" "}
+              {
+                logs.filter(
+                  (l) =>
+                    (l.doi_tuong_loai || "").toUpperCase() === "SYSTEM_CONFIGS",
+                ).length
+              }{" "}
               <span className="text-brand-text-subtle text-xs font-normal">
                 lần chỉnh
               </span>

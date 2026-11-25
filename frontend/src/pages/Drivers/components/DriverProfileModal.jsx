@@ -46,6 +46,19 @@ export default function DriverProfileModal({ isOpen, onClose, driver }) {
 
   const driverName = driver.user?.ho_ten || driver.ho_ten || "Tài xế";
   const currentScore = driver.diem_uy_tin ?? driver.uy_tin ?? 100;
+  const weakTimeSlots =
+    bioProfile?.khung_gio_yeu_sinh_hoc || bioProfile?.khungGioYeuSinhHoc || [];
+  const maxDriveMinutes =
+    bioProfile?.thoi_gian_lai_toi_da_khuyen_nghi ??
+    bioProfile?.thoiGianLaiToiDaKhuyenNghi;
+  const avgDriveBeforeFatigue =
+    bioProfile?.thoi_gian_lai_trung_binh_truoc_met_moi ??
+    bioProfile?.thoiGianLaiTrungBinhTruocMetMoi ??
+    180;
+  const generalAssessment =
+    bioProfile?.danh_gia_chung ||
+    bioProfile?.danhGiaChung ||
+    "Thời gian nghỉ tối thiểu 10 giờ giữa hai ca làm việc liên tiếp.";
 
   return (
     <BaseModal
@@ -100,7 +113,7 @@ export default function DriverProfileModal({ isOpen, onClose, driver }) {
                   <span>Khung giờ yếu sinh học</span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  {bioProfile?.khung_gio_yeu_sinh_hoc?.map((slot, idx) => (
+                  {weakTimeSlots.map((slot, idx) => (
                     <span
                       key={idx}
                       className="border-alert-warning/30 bg-alert-warning/15 text-alert-warning rounded-lg border px-2.5 py-1 font-bold"
@@ -120,16 +133,13 @@ export default function DriverProfileModal({ isOpen, onClose, driver }) {
                   <span>Thời gian lái tối đa khuyến nghị</span>
                 </div>
                 <p className="text-brand-text-primary mt-2 text-2xl font-black">
-                  {bioProfile?.thoi_gian_lai_toi_da_khuyen_nghi
-                    ? `${(bioProfile.thoi_gian_lai_toi_da_khuyen_nghi / 60).toFixed(1)} Giờ`
+                  {maxDriveMinutes
+                    ? `${(maxDriveMinutes / 60).toFixed(1)} Giờ`
                     : "4.0 Giờ"}
                 </p>
                 <p className="text-brand-text-subtle mt-1 text-[10px]">
                   Thời gian lái trung bình trước khi ngáp:{" "}
-                  <b>
-                    {bioProfile?.thoi_gian_lai_trung_binh_truoc_met_moi || 180}{" "}
-                    phút
-                  </b>
+                  <b>{avgDriveBeforeFatigue} phút</b>
                 </p>
               </div>
             </div>
@@ -139,8 +149,7 @@ export default function DriverProfileModal({ isOpen, onClose, driver }) {
                 Đánh giá tổng quan AI &amp; Khuyến nghị phân ca
               </p>
               <p className="text-brand-text-secondary mt-1.5 text-xs leading-relaxed">
-                {bioProfile?.danh_gia_chung ||
-                  "Thời gian nghỉ tối thiểu 10 giờ giữa hai ca làm việc liên tiếp."}
+                {generalAssessment}
               </p>
             </div>
           </div>
