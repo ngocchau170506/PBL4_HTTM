@@ -270,8 +270,11 @@ class PBL4BridgeClient:
         if norm in config.NON_PENALTY_ALERT_TYPES and not config.PBL4_FORWARD_NON_PENALTY:
             return False
         vid_path = (config.EVIDENCE_DIR / video_rel_name) if video_rel_name else None
+        device_code = config.PBL4_DEVICE_ID or vehicle_id
         pbl4_payload: Dict[str, Any] = {
             "client_event_id": idempotency_key or event_id,
+            "device_id": device_code,
+            "ma_thiet_bi": device_code,
             "ma_loai": map_alert_to_pbl4_code(alert_type),
             "edge_confidence": round(float(confidence), 3),
             "ai_confidence_score": round(float(confidence), 3),

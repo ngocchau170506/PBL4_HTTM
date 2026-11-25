@@ -2,9 +2,37 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _load_local_dotenv(env_path: Path) -> None:
+    """Load key=value pairs from server_ai/.env without overriding explicit env vars or unit tests."""
+    if os.environ.get("SERVER_SKIP_DOTENV") == "1":
+        return
+    if "unittest" in sys.modules or "pytest" in sys.modules:
+        return
+    if not env_path.exists() or not env_path.is_file():
+        return
+    try:
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            key = key.strip()
+            val = val.strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+                val = val[1:-1]
+            if key:
+                os.environ.setdefault(key, val)
+    except Exception:
+        pass
+
+
+_load_local_dotenv(BASE_DIR / ".env")
 DATA_DIR = Path(os.environ.get("SERVER_DATA_DIR", BASE_DIR / "data"))
 EVIDENCE_DIR = Path(os.environ.get("SERVER_EVIDENCE_DIR", BASE_DIR / "evidence"))
 HARD_NEGATIVES_DIR = DATA_DIR / "hard_negatives"
