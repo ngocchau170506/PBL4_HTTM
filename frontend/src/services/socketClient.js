@@ -7,6 +7,7 @@ export const SOCKET_EVENTS = {
   VIOLATION_UPDATED: "violation:updated",
   SCORE_CHANGED: "driver:score_changed",
   DEVICE_HEALTH: "device:health",
+  DISPATCH_REST_STOP: "dispatch:rest_stop",
 };
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || undefined;
@@ -77,6 +78,10 @@ class SocketService {
 
       this.socket.on(SOCKET_EVENTS.DEVICE_HEALTH, (payload) => {
         this.storeActionsRef?.handleDeviceHealthSocket(payload);
+      });
+
+      this.socket.on(SOCKET_EVENTS.DISPATCH_REST_STOP, (payload) => {
+        this.storeActionsRef?.handleRestDispatchSocket(payload);
       });
     } else {
       this.isConnected = true;

@@ -11,10 +11,15 @@ export const handleGetMonitoringStats = asyncHandler(async (_req, res) => {
 	res.json({ success: true, data: stats });
 });
 
+export const handleGetNearbyRestStops = asyncHandler(async (req, res) => {
+	const result = await monitoringService.getNearbyRestStopsForLocation(req.query);
+	res.json({ success: true, data: result });
+});
+
 export const handleDispatchRestStop = asyncHandler(async (req, res) => {
 	const result = await monitoringService.dispatchVehicleToRestStop(
 		req.body,
 		req.user,
 	);
-	res.json({ success: true, data: result });
+	res.json({ success: true, data: result, ...result });
 });

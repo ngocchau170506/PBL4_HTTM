@@ -53,14 +53,15 @@ export const useFleetStore = create((set, get) => ({
           existing?.lng ??
           item.lng ??
           108.2022 + (index === 0 ? -0.012 : index * 0.015 - 0.02),
-        currentSpeed: parseInt(item.speed) || 60,
+        currentSpeed: parseInt(item.speed, 10) || 0,
         currentCo2:
           item.co2_ppm ||
-          parseInt(String(item.co2 || "850").replace(",", "")) ||
-          850,
-        remainingSeconds:
-          existing?.remainingSeconds ??
-          (item.countdownSeconds !== undefined ? item.countdownSeconds : 900),
+          parseInt(String(item.co2 || "450").replace(/,/g, ""), 10) ||
+          450,
+        countdownActive: Boolean(item.countdownActive),
+        restDeadlineAt: item.restDeadlineAt || null,
+        remainingSeconds: item.countdownSeconds ?? null,
+        activeDispatch: item.activeDispatch || existing?.activeDispatch || null,
       };
     });
 
@@ -136,7 +137,10 @@ export const useFleetStore = create((set, get) => ({
           40,
           Math.min(85, Math.round(v.currentSpeed + (Math.random() - 0.5) * 4)),
         ),
-        remainingSeconds: v.remainingSeconds > 0 ? v.remainingSeconds - 2 : 0,
+        remainingSeconds:
+          v.countdownActive && v.remainingSeconds > 0
+            ? v.remainingSeconds - 2
+            : v.remainingSeconds,
       };
     });
 
@@ -164,12 +168,16 @@ export const useFleetStore = create((set, get) => ({
     const updatedFleet = get().liveFleet.map((v) => {
       const plate = v.plate || v.bien_so_xe;
       if (plate === newViolation.bien_so_xe) {
+        const deadlineAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
         return {
           ...v,
           priorityLevel: "DANGER",
           priorityBadge: "CAN THIỆP GẤP",
           alertType: newViolation.ma_loai,
           alertDesc: newViolation.mo_ta,
+          countdownActive: true,
+          restDeadlineAt: v.restDeadlineAt || deadlineAt,
+          remainingSeconds: v.remainingSeconds ?? 900,
           video_url: videoUrl || v.video_url || null,
           ai_confidence_score:
             newViolation.ai_confidence_score ?? v.ai_confidence_score ?? null,
@@ -226,5 +234,40 @@ export const useFleetStore = create((set, get) => ({
           : v,
       ),
     }));
+  },
+
+  handleRestDispatchSocket: (dispatchPayload) => {
+    if (!dispatchPayload) return;
+    set((state) => {
+      const updatedFleet = state.liveFleet.map((v) => {
+        const plate = v.plate || v.bien_so_xe;
+        const matchId =
+          dispatchPayload.vehicle_id &&
+          Number(v.id) === Number(dispatchPayload.vehicle_id);
+        const matchPlate =
+          dispatchPayload.vehiclePlate && plate === dispatchPayload.vehiclePlate;
+        if (!matchId && !matchPlate) return v;
+
+        return {
+          ...v,
+          activeDispatch: dispatchPayload,
+          countdownActive: true,
+          restDeadlineAt: dispatchPayload.restDeadlineAt || v.restDeadlineAt,
+          remainingSeconds: 900,
+        };
+      });
+
+      const sel = state.selectedVehicle;
+      const updatedSelected = sel
+        ? updatedFleet.find(
+            (x) => (x.plate || x.bien_so_xe) === (sel.plate || sel.bien_so_xe),
+          ) || sel
+        : null;
+
+      return {
+        liveFleet: updatedFleet,
+        selectedVehicle: updatedSelected,
+      };
+    });
   },
 }));

@@ -43,6 +43,12 @@ class MobileSocketService {
     this.socket.on("violation:updated", () => {
       callbacks.onShiftUpdated?.();
     });
+
+    this.socket.on("dispatch:rest_stop", (data) => {
+      if (!data?.driver_id || Number(data.driver_id) === Number(driverId)) {
+        callbacks.onRestStopDispatch?.(data);
+      }
+    });
   }
 
   disconnect() {

@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Coffee,
+  ExternalLink,
   Flag,
   Gauge,
   Navigation,
@@ -17,6 +18,7 @@ import React, { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Modal,
   ScrollView,
   StyleSheet,
@@ -35,6 +37,8 @@ import CalibrationModal from "./CalibrationModal";
 export default function TripScreen({
   shift,
   isOfflineMode,
+  restDispatch,
+  onClearRestDispatch,
   onRespondShift,
   onCompleteCalibration,
   onToggleRest,
@@ -200,6 +204,51 @@ export default function TripScreen({
         </View>
         <Text style={styles.warnBody}>{shift.canh_bao_sinh_hoc}</Text>
       </AppCard>
+
+      {/* LỆNH ĐIỀU HƯỚNG TRẠM NGHỈ TỪ ĐIỀU PHỐI VIÊN */}
+      {restDispatch && (
+        <AppCard variant="active">
+          <View style={styles.warnHeader}>
+            <Navigation size={18} color={COLORS.brandBlueSky} />
+            <Text style={[styles.warnTitle, { color: COLORS.brandBlueSky }]}>
+              Lệnh Điều Hướng Trạm Nghỉ Khẩn Cấp
+            </Text>
+          </View>
+          <Text style={styles.routeTitle}>{restDispatch.restStopName}</Text>
+          <Text style={styles.subInfo}>
+            Khoảng cách: {restDispatch.distanceKm} km • Dự kiến ~
+            {restDispatch.etaMinutes} phút • Từ {restDispatch.dispatchedBy || "Điều phối viên"}
+          </Text>
+          <View style={[styles.btnRow, { marginTop: 12 }]}>
+            {restDispatch.googleMapsUrl && (
+              <AppButton
+                title="Mở Google Maps"
+                variant="primary"
+                icon={ExternalLink}
+                onPress={() =>
+                  Linking.openURL(restDispatch.googleMapsUrl).catch(() =>
+                    Alert.alert("Lỗi", "Không thể mở ứng dụng Google Maps."),
+                  )
+                }
+                style={{ flex: 1.3 }}
+              />
+            )}
+            <AppButton
+              title="Đã vào trạm nghỉ"
+              variant="safe"
+              icon={Coffee}
+              onPress={() => {
+                if (shift?.trip_status === "IN_PROGRESS" && onToggleRest) {
+                  onToggleRest();
+                } else {
+                  onClearRestDispatch?.();
+                }
+              }}
+              style={{ flex: 1 }}
+            />
+          </View>
+        </AppCard>
+      )}
 
       {/* CHỈ SỐ TELEMETRY BUỒNG LÁI THỜI GIAN THỰC */}
       {(shift.trip_status === "IN_PROGRESS" ||

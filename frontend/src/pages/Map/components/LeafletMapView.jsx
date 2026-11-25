@@ -25,15 +25,39 @@ const createVehicleIcon = (colorHex, isDanger = false, plateText = "") => {
   });
 };
 
+const createRestStopIcon = (isActive = false, label = "Trạm dừng") => {
+  const border = isActive ? "#38bdf8" : "#f59e0b";
+  const emoji = isActive ? "🧭" : "⛽";
+  return L.divIcon({
+    className: "!bg-transparent !border-0",
+    iconSize: [44, 52],
+    iconAnchor: [22, 26],
+    html: `
+      <div style="display: flex; flex-direction: column; align-items: center;">
+        <div style="width: 32px; height: 32px; border-radius: 10px; background-color: #0f172a; border: 2px solid ${border}; box-shadow: 0 4px 12px rgba(0,0,0,0.65); display: flex; align-items: center; justify-content: center; font-size: 15px;">
+          ${emoji}
+        </div>
+        <div style="margin-top: 3px; background-color: rgba(15, 23, 42, 0.95); border: 1px solid ${border}; border-radius: 4px; padding: 1px 6px; font-size: 9px; font-weight: 800; color: #e2e8f0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+          ${label}
+        </div>
+      </div>
+    `,
+  });
+};
+
 export default function LeafletMapView({
   vehicles = [],
   selectedVehicle,
   onSelectVehicle,
   mapInstanceRef,
+  selectedStop = null,
+  isPickingPin = false,
+  onPickMapPoint,
 }) {
   const mapContainerRef = useRef(null);
   const [map, setMap] = useState(null);
   const layerGroupRef = useRef(null);
+  const routeLayerGroupRef = useRef(null);
 
   // 1. Khởi tạo bản đồ Esri Dark nền tối
   useEffect(() => {
@@ -53,14 +77,14 @@ export default function LeafletMapView({
 
     L.control.zoom({ position: "bottomright" }).addTo(leafletMap);
 
-    // Tạo khay chứa LayerGroup gắn trực tiếp vào bản đồ
     const layerGroup = L.layerGroup().addTo(leafletMap);
+    const routeLayerGroup = L.layerGroup().addTo(leafletMap);
     layerGroupRef.current = layerGroup;
+    routeLayerGroupRef.current = routeLayerGroup;
 
     setMap(leafletMap);
     if (mapInstanceRef) mapInstanceRef.current = leafletMap;
 
-    // Ép bản đồ tính toán lại kích thước khung hình sau khi CSS vẽ xong
     const resizeTimer = setTimeout(() => {
       leafletMap.invalidateSize();
     }, 200);
@@ -70,16 +94,34 @@ export default function LeafletMapView({
       leafletMap.remove();
       setMap(null);
       layerGroupRef.current = null;
+      routeLayerGroupRef.current = null;
       if (mapInstanceRef) mapInstanceRef.current = null;
     };
   }, [mapInstanceRef]);
 
-  // 2. Vẽ và cập nhật chấm xe lên LayerGroup (Bảo đảm luôn vẽ đúng bản đồ hiện tại)
+  // 2. Xử lý chế độ chấm điểm thủ công trên bản đồ
+  useEffect(() => {
+    if (!map) return;
+    const container = map.getContainer();
+    container.style.cursor = isPickingPin ? "crosshair" : "";
+    if (!isPickingPin || !onPickMapPoint) return;
+
+    const handleMapClick = (e) => {
+      onPickMapPoint(e.latlng.lat, e.latlng.lng);
+    };
+    map.on("click", handleMapClick);
+    return () => {
+      container.style.cursor = "";
+      map.off("click", handleMapClick);
+    };
+  }, [map, isPickingPin, onPickMapPoint]);
+
+  // 3. Vẽ các marker phương tiện
   useEffect(() => {
     if (!map || !layerGroupRef.current) return;
 
     const layerGroup = layerGroupRef.current;
-    layerGroup.clearLayers(); // Dọn sạch các marker cũ, không sợ rò rỉ rác
+    layerGroup.clearLayers();
 
     vehicles.forEach((v) => {
       const lat =
@@ -108,6 +150,62 @@ export default function LeafletMapView({
     });
   }, [map, vehicles, onSelectVehicle]);
 
+  // 4. Vẽ tuyến đường OSRM & marker trạm dừng nghỉ được điều hướng / xem trước
+  useEffect(() => {
+    if (!map || !routeLayerGroupRef.current) return;
+    const routeGroup = routeLayerGroupRef.current;
+    routeGroup.clearLayers();
+
+    const activeDispatch = selectedVehicle?.activeDispatch;
+    if (
+      activeDispatch &&
+      Array.isArray(activeDispatch.geometry) &&
+      activeDispatch.geometry.length >= 2
+    ) {
+      L.polyline(activeDispatch.geometry, {
+        color: "#38bdf8",
+        weight: 5,
+        opacity: 0.92,
+        dashArray: "10, 6",
+      }).addTo(routeGroup);
+
+      if (
+        Number.isFinite(Number(activeDispatch.lat)) &&
+        Number.isFinite(Number(activeDispatch.lng))
+      ) {
+        const destMarker = L.marker(
+          [activeDispatch.lat, activeDispatch.lng],
+          {
+            icon: createRestStopIcon(true, activeDispatch.restStopName),
+          },
+        );
+        destMarker.bindTooltip(
+          `${activeDispatch.restStopName} • ${activeDispatch.distanceKm} km (~${activeDispatch.etaMinutes} phút)`,
+          { direction: "top" },
+        );
+        destMarker.addTo(routeGroup);
+      }
+    }
+
+    if (
+      selectedStop &&
+      Number.isFinite(Number(selectedStop.lat)) &&
+      Number.isFinite(Number(selectedStop.lng)) &&
+      (!activeDispatch ||
+        Math.abs(Number(activeDispatch.lat) - Number(selectedStop.lat)) > 0.0005 ||
+        Math.abs(Number(activeDispatch.lng) - Number(selectedStop.lng)) > 0.0005)
+    ) {
+      const previewMarker = L.marker([selectedStop.lat, selectedStop.lng], {
+        icon: createRestStopIcon(false, selectedStop.name),
+      });
+      previewMarker.bindTooltip(
+        `${selectedStop.name}${selectedStop.distanceKm != null ? ` (${selectedStop.distanceKm} km)` : ""}`,
+        { direction: "top" },
+      );
+      previewMarker.addTo(routeGroup);
+    }
+  }, [map, selectedVehicle?.activeDispatch, selectedStop]);
+
   return (
     <div className="card-glass border-brand-border relative flex h-162.5 flex-col overflow-hidden rounded-3xl border shadow-2xl lg:col-span-7">
       {/* Badge lộ trình */}
@@ -124,6 +222,12 @@ export default function LeafletMapView({
           Thông suốt
         </span>
       </div>
+
+      {isPickingPin && (
+        <div className="absolute top-4 right-4 z-20 rounded-xl border border-amber-400/50 bg-amber-950/90 px-3 py-1.5 text-[11px] font-bold text-amber-200 shadow-lg backdrop-blur-md">
+          📍 Chạm bất kỳ vị trí nào trên bản đồ để chọn điểm dừng
+        </div>
+      )}
 
       {/* Bản đồ Leaflet */}
       <div ref={mapContainerRef} className="z-10 h-full w-full" />

@@ -1,5 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { Alert, SafeAreaView, StatusBar, StyleSheet, View } from "react-native";
+import {
+  Alert,
+  Linking,
+  SafeAreaView,
+  StatusBar,
+  StyleSheet,
+  View,
+} from "react-native";
 import { COLORS } from "./mobileConfig";
 import BottomTabBar from "./src/components/layout/BottomTabBar";
 import DriverHeader from "./src/components/layout/DriverHeader";
@@ -20,6 +27,7 @@ export default function App() {
   const [biometricProfile, setBiometricProfile] = useState(null);
   const [scoreLogs, setScoreLogs] = useState([]);
   const [violations, setViolations] = useState([]);
+  const [restDispatch, setRestDispatch] = useState(null);
 
   const loadDashboard = async () => {
     try {
@@ -104,6 +112,23 @@ export default function App() {
       onShiftUpdated: () => {
         loadDashboard();
       },
+      onRestStopDispatch: (data) => {
+        setRestDispatch(data);
+        setActiveTab("TRIP");
+        Alert.alert(
+          "🧭 LỆNH ĐIỀU HƯỚNG TRẠM NGHỈ",
+          `Điều phối viên yêu cầu tấp vào: ${data.restStopName}\nKhoảng cách: ${data.distanceKm} km (~${data.etaMinutes} phút)`,
+          [
+            data.googleMapsUrl
+              ? {
+                  text: "Mở Google Maps",
+                  onPress: () => Linking.openURL(data.googleMapsUrl).catch(() => {}),
+                }
+              : null,
+            { text: "Xem trên App", style: "cancel" },
+          ].filter(Boolean),
+        );
+      },
     });
 
     return () => {
@@ -118,6 +143,7 @@ export default function App() {
     setShift(null);
     setViolations([]);
     setScoreLogs([]);
+    setRestDispatch(null);
   };
 
   const handleLogin = async (username, password, consent) => {
@@ -155,6 +181,9 @@ export default function App() {
     try {
       const updated = await driverDataService.toggleResting();
       setShift(updated);
+      if (updated?.trip_status === "RESTING") {
+        setRestDispatch(null);
+      }
     } catch (err) {
       Alert.alert("Lỗi cập nhật trạng thái", err.message || "Không thể đổi trạng thái nghỉ.");
     }
@@ -174,6 +203,7 @@ export default function App() {
     try {
       const updated = await driverDataService.completeTrip();
       setShift(updated);
+      setRestDispatch(null);
       await loadDashboard();
     } catch (err) {
       Alert.alert("Lỗi kết thúc chuyến", err.message || "Không thể hoàn thành chuyến đi.");
@@ -228,6 +258,8 @@ export default function App() {
               <TripScreen
                 shift={shift}
                 isOfflineMode={isOfflineMode}
+                restDispatch={restDispatch}
+                onClearRestDispatch={() => setRestDispatch(null)}
                 onRespondShift={handleRespondShift}
                 onCompleteCalibration={handleCompleteCalibration}
                 onToggleRest={handleToggleRest}

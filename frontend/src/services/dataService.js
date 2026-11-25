@@ -108,6 +108,10 @@ export const dataService = {
     return await axiosClient.get("/monitoring/stats");
   },
 
+  async getNearbyRestStops(params) {
+    return await axiosClient.get("/monitoring/nearby-rest-stops", { params });
+  },
+
   async dispatchVehicleToRestStop(payload) {
     return await axiosClient.post("/monitoring/dispatch-rest-stop", payload);
   },

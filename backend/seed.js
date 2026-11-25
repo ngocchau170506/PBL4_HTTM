@@ -240,7 +240,21 @@ async function main() {
       loaiXe: 'Đầu kéo Hyundai Xcient',
       taiTrongTan: 30.0,
       trangThai: 'MAINTENANCE', // Đang bảo dưỡng
+      iotDevice: {
+        create: {
+          macAddress: '00:1A:2B:3C:55:44',
+          maThietBi: 'IOT-DN-03',
+          cpuSerial: '10000000d4c3b2a1',
+          phienBan: 'fw-v1.2.0',
+          aiModelVersion: 'yolo26n-v1.1',
+          trangThaiKetNoi: 'OFFLINE',
+          cpuTempC: 42.0,
+          freeStorageMb: 27400,
+          lastHeartbeatAt: new Date(Date.now() - 3600 * 1000 * 18),
+        },
+      },
     },
+    include: { iotDevice: true },
   });
 
   // 5. Routes

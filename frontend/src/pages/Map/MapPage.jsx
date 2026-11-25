@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import dataService from "../../services/dataService";
 import { useFleetStore } from "../../store/useFleetStore";
@@ -16,18 +16,113 @@ export default function MapPage() {
     monitoringStats,
     isSimulating,
     setIsSimulating,
+    handleRestDispatchSocket,
   } = useFleetStore();
 
   const [showVideoModal, setShowVideoModal] = useState(false);
   const [showCallModal, setShowCallModal] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [nearbyStops, setNearbyStops] = useState([]);
+  const [selectedStop, setSelectedStop] = useState(null);
+  const [loadingStops, setLoadingStops] = useState(false);
+  const [isPickingPin, setIsPickingPin] = useState(false);
+  const [dispatching, setDispatching] = useState(false);
   const mapInstanceRef = useRef(null);
 
-  const formatCountdown = (totalSec = 0) => {
-    if (totalSec <= 0) return "00:00 (Hết hạn)";
-    const m = Math.floor(totalSec / 60);
-    const s = totalSec % 60;
-    return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
-  };
+  // Đồng hồ 1s tính đếm ngược thực tế theo restDeadlineAt
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Tự động tìm Top 3 trạm dừng/xăng dầu gần tọa độ xe hiện tại (Overpass + fallback DB)
+  useEffect(() => {
+    if (!selectedVehicle?.lat || !selectedVehicle?.lng) {
+      setNearbyStops([]);
+      setSelectedStop(null);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingStops(true);
+    setIsPickingPin(false);
+
+    dataService
+      .getNearbyRestStops({
+        lat: selectedVehicle.lat,
+        lng: selectedVehicle.lng,
+        vehicleId: selectedVehicle.id,
+        routeId: selectedVehicle.route_id || undefined,
+        limit: 3,
+      })
+      .then((res) => {
+        if (cancelled) return;
+        const stops = res?.stops || [];
+        setNearbyStops(stops);
+        setSelectedStop(stops[0] || null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        const fb = selectedVehicle?.nearestRestStop;
+        const fallbackList = fb?.lat
+          ? [
+              {
+                id: "route-fallback",
+                name: fb.name,
+                categoryLabel: "Trạm trên tuyến",
+                lat: fb.lat,
+                lng: fb.lng,
+                distanceKm: fb.distanceKm ?? "--",
+                source: "ROUTE_DB",
+                googleMapsUrl: fb.googleMapsUrl,
+              },
+            ]
+          : [];
+        setNearbyStops(fallbackList);
+        setSelectedStop(fallbackList[0] || null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingStops(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedVehicle?.id]);
+
+  const countdownInfo = useMemo(() => {
+    if (selectedVehicle?.trip_status === "RESTING") {
+      return {
+        mode: "RESTING",
+        label: "Đang dừng nghỉ",
+        sub: "An toàn tại trạm",
+      };
+    }
+
+    if (selectedVehicle?.countdownActive && selectedVehicle?.restDeadlineAt) {
+      const deadlineMs = new Date(selectedVehicle.restDeadlineAt).getTime();
+      const diffSec = Math.max(0, Math.round((deadlineMs - nowMs) / 1000));
+      if (diffSec <= 0) {
+        return { mode: "EXPIRED", label: "00:00 (QUÁ HẠN)", sub: "Cần can thiệp ngay" };
+      }
+      const m = Math.floor(diffSec / 60);
+      const s = diffSec % 60;
+      return {
+        mode: "ACTIVE",
+        label: `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`,
+        sub: "Giới hạn 15 phút tấp trạm",
+      };
+    }
+
+    return {
+      mode: "IDLE",
+      label: "Không áp dụng",
+      sub:
+        selectedVehicle?.trip_status === "IN_PROGRESS"
+          ? "Xe đang chạy an toàn"
+          : "Xe đang đỗ tại bãi",
+    };
+  }, [selectedVehicle, nowMs]);
 
   const handleSelectVehicle = (vehicle) => {
     setSelectedVehicle(vehicle);
@@ -39,22 +134,63 @@ export default function MapPage() {
     }
   };
 
+  const handlePickMapPoint = (lat, lng) => {
+    const manualStop = {
+      id: "manual-pin",
+      name: `Điểm dừng chỉ định (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
+      category: "MANUAL_PIN",
+      categoryLabel: "Chấm tay trên bản đồ",
+      lat: Number(lat.toFixed(6)),
+      lng: Number(lng.toFixed(6)),
+      distanceKm: null,
+      source: "MANUAL_PIN",
+    };
+    setNearbyStops((prev) => [
+      manualStop,
+      ...prev.filter((s) => s.id !== "manual-pin"),
+    ]);
+    setSelectedStop(manualStop);
+    setIsPickingPin(false);
+    toast.success("Đã chọn điểm dừng tùy chỉnh trên bản đồ!", { icon: "📍" });
+  };
+
   const handleDispatchNav = async () => {
-    const plate =
-      selectedVehicle?.plate || selectedVehicle?.bien_so || "Xe IoT";
-    const targetStop =
-      selectedVehicle?.nearestRestStop?.name || "Trạm Tiên Hiệp (Km 185)";
-    await dataService.dispatchVehicleToRestStop({
-      vehiclePlate: plate,
-      restStopName: targetStop,
-    });
-    toast.success(
-      `Đã điều hướng xe vào [${targetStop}] tới Cabin xe ${plate}!`,
-      {
-        duration: 4500,
-        icon: "🧭",
-      },
-    );
+    if (!selectedVehicle || dispatching) return;
+    setDispatching(true);
+    try {
+      const plate =
+        selectedVehicle.plate || selectedVehicle.bien_so || "Xe IoT";
+      const target = selectedStop || selectedVehicle.nearestRestStop;
+      const res = await dataService.dispatchVehicleToRestStop({
+        vehicleId: selectedVehicle.id,
+        vehiclePlate: plate,
+        restStopName: target?.name || "Trạm dừng nghỉ gần nhất",
+        lat: target?.lat,
+        lng: target?.lng,
+        fromLat: selectedVehicle.lat,
+        fromLng: selectedVehicle.lng,
+        category: target?.category,
+      });
+
+      const dispatch = res?.dispatch;
+      if (dispatch) {
+        handleRestDispatchSocket(dispatch);
+      }
+
+      toast.success(
+        dispatch
+          ? `Đã điều hướng ${plate} -> ${dispatch.restStopName} (${dispatch.distanceKm} km • ~${dispatch.etaMinutes} phút)!`
+          : `Đã phát lệnh điều hướng xe ${plate}!`,
+        {
+          duration: 5000,
+          icon: "🧭",
+        },
+      );
+    } catch (err) {
+      toast.error(err?.message || "Không thể phát lệnh điều hướng trạm nghỉ.");
+    } finally {
+      setDispatching(false);
+    }
   };
 
   return (
@@ -65,7 +201,7 @@ export default function MapPage() {
             Giám sát Thời gian thực & Điều phối xe
           </h1>
           <p className="text-brand-text-muted text-xs">
-            Đồng bộ trực tiếp qua Zustand Global Store & Socket.io Telemetry
+            Tự động tìm trạm dừng OpenStreetMap + Dẫn đường OSRM + Đồng bộ Google Maps Mobile
           </p>
         </div>
         <button
@@ -100,10 +236,20 @@ export default function MapPage() {
           selectedVehicle={selectedVehicle}
           onSelectVehicle={handleSelectVehicle}
           mapInstanceRef={mapInstanceRef}
+          selectedStop={selectedStop}
+          isPickingPin={isPickingPin}
+          onPickMapPoint={handlePickMapPoint}
         />
         <VehicleDispatchPanel
           vehicle={selectedVehicle}
-          countdownText={formatCountdown(selectedVehicle?.remainingSeconds)}
+          countdownInfo={countdownInfo}
+          nearbyStops={nearbyStops}
+          selectedStop={selectedStop}
+          onSelectStop={setSelectedStop}
+          loadingStops={loadingStops}
+          isPickingPin={isPickingPin}
+          onTogglePickPin={() => setIsPickingPin((v) => !v)}
+          dispatching={dispatching}
           onDispatchNav={handleDispatchNav}
           onOpenCallModal={() => setShowCallModal(true)}
           onOpenVideoModal={() => setShowVideoModal(true)}
