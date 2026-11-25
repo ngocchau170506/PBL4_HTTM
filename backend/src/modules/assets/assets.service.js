@@ -1,5 +1,18 @@
 import prisma from '../../common/prisma.js';
 import { logAuditAction } from '../../common/audit.service.js';
+import {
+	BadRequestException,
+	NotFoundException,
+} from '../../common/exceptions/index.js';
+import { sanitizeDriverRelation } from '../../common/utils/sanitize.js';
+
+const sanitizeEmbeddedRecords = (records) =>
+	Array.isArray(records)
+		? records.map((rec) => ({
+				...rec,
+				driver: rec.driver ? sanitizeDriverRelation(rec.driver) : null,
+			}))
+		: records;
 
 export const formatVehicle = (v) => {
 	// Tìm chuyến đang chạy (IN_PROGRESS) hoặc ca đang nhận (IN_PROGRESS / ACCEPTED / SCHEDULED)
@@ -24,6 +37,8 @@ export const formatVehicle = (v) => {
 
 	return {
 		...v,
+		trips: sanitizeEmbeddedRecords(v.trips),
+		shifts: sanitizeEmbeddedRecords(v.shifts),
 		bien_so_xe: v.bienSo,
 		bien_so: v.bienSo,
 		loai_xe: v.loaiXe,
@@ -97,6 +112,9 @@ export const createVehicle = async ({
 	actorUser,
 }) => {
 	const plate = bienSo || bien_so_xe;
+	if (!plate) {
+		throw new BadRequestException('Vui lòng nhập biển số xe.');
+	}
 	const model = loaiXe || loai_xe || 'Xe Tải';
 	const weight =
 		taiTrongTan || tai_trong_tan ? parseFloat(taiTrongTan || tai_trong_tan) : 15.0;
@@ -138,6 +156,9 @@ export const createVehicle = async ({
 export const updateVehicleStatus = async (id, status, actorUser) => {
 	const pId = parseInt(id, 10);
 	const oldV = await prisma.vehicle.findUnique({ where: { id: pId } });
+	if (!oldV) {
+		throw new NotFoundException('Không tìm thấy phương tiện.');
+	}
 
 	const updated = await prisma.vehicle.update({
 		where: { id: pId },

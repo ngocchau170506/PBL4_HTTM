@@ -1,5 +1,6 @@
 import { Toaster } from "react-hot-toast";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import ErrorBoundary from "./components/common/ErrorBoundary";
 import MainLayout from "./components/layout/MainLayout";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import AdminAiConfigPage from "./pages/Admin/AdminAiConfigPage";
@@ -65,11 +66,13 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <AppRoutes />
-        <Toaster />
-      </BrowserRouter>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <BrowserRouter>
+          <AppRoutes />
+          <Toaster />
+        </BrowserRouter>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }

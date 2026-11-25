@@ -1,5 +1,11 @@
 import prisma from '../../common/prisma.js';
 import { logAuditAction } from '../../common/audit.service.js';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '../../common/exceptions/index.js';
+import { sanitizeUser } from '../../common/utils/sanitize.js';
 import { formatDriver } from '../drivers/drivers.service.js';
 import { getAiConfig } from '../configs/configs.service.js';
 
@@ -17,6 +23,7 @@ export const formatDispute = (d) => {
     resolved_by_name: d.resolver?.hoTen || null,
     resolved_at: d.resolvedAt,
     phan_hoi: d.phanHoi,
+    resolver: d.resolver ? sanitizeUser(d.resolver) : d.resolver,
     driver: d.driver ? formatDriver(d.driver) : null,
     violation: d.violation
       ? {
@@ -61,24 +68,22 @@ export const createDispute = async (
   });
 
   if (!violation) {
-    throw new Error('Vi phạm không tồn tại để khiếu nại.');
+    throw new NotFoundException('Vi phạm không tồn tại để khiếu nại.');
   }
 
   if (
     currentUser?.role?.toUpperCase() === 'DRIVER' &&
     Number(violation.driverId) !== Number(pDriverId)
   ) {
-    const err = new Error('Bạn chỉ được gửi khiếu nại cho vi phạm của chính mình.');
-    err.status = 403;
-    throw err;
+    throw new ForbiddenException('Bạn chỉ được gửi khiếu nại cho vi phạm của chính mình.');
   }
 
   if (!['CONFIRMED', 'MANUALLY_CONFIRMED'].includes(violation.trangThai)) {
-    throw new Error('Chỉ được khiếu nại các vi phạm đã xác nhận trừ điểm (CONFIRMED).');
+    throw new BadRequestException('Chỉ được khiếu nại các vi phạm đã xác nhận trừ điểm (CONFIRMED).');
   }
 
   if (violation.trangThaiDiem === 'REFUNDED') {
-    throw new Error('Vi phạm này đã được hoàn điểm trước đó.');
+    throw new BadRequestException('Vi phạm này đã được hoàn điểm trước đó.');
   }
 
   const config = await getAiConfig();
@@ -89,7 +94,7 @@ export const createDispute = async (
   if (!Number.isNaN(finalizedAt.getTime())) {
     const elapsedHours = (Date.now() - finalizedAt.getTime()) / 3600000;
     if (elapsedHours > disputeWindowHours) {
-      throw new Error(
+      throw new BadRequestException(
         `Đã quá thời hạn khiếu nại (${disputeWindowHours} giờ) kể từ khi chốt vi phạm.`,
       );
     }
@@ -99,7 +104,7 @@ export const createDispute = async (
     where: { violationId: pViolationId },
   });
   if (existingDispute) {
-    throw new Error('Vi phạm này đã được gửi khiếu nại trước đó (Mỗi vi phạm chỉ được khiếu nại 1 lần).');
+    throw new BadRequestException('Vi phạm này đã được gửi khiếu nại trước đó (Mỗi vi phạm chỉ được khiếu nại 1 lần).');
   }
 
   const dispute = await prisma.dispute.create({
@@ -135,11 +140,11 @@ export const resolveDispute = async (disputeId, { decision, trang_thai, phan_hoi
   });
 
   if (!dispute) {
-    throw new Error('Không tìm thấy đơn khiếu nại!');
+    throw new NotFoundException('Không tìm thấy đơn khiếu nại!');
   }
 
   if (dispute.trangThai !== 'OPEN') {
-    throw new Error(`Đơn khiếu nại #${id} đã được xử lý trước đó (Trạng thái: ${dispute.trangThai})!`);
+    throw new BadRequestException(`Đơn khiếu nại #${id} đã được xử lý trước đó (Trạng thái: ${dispute.trangThai})!`);
   }
 
   // Four-Eyes Principle (SRS 4.1):
@@ -150,14 +155,14 @@ export const resolveDispute = async (disputeId, { decision, trang_thai, phan_hoi
     parseInt(originalReviewerId, 10) === parseInt(currentUser.id, 10) &&
     currentUser.role?.toUpperCase() !== 'ADMIN'
   ) {
-    throw new Error(
+    throw new ForbiddenException(
       'Vi phạm nguyên tắc Four-Eyes (SRS 4.1): Người đã duyệt phạt ban đầu không được tự giải quyết khiếu nại của chính vi phạm đó!'
     );
   }
 
   const isApproved = resolvedDecision === 'APPROVED';
   if (isApproved && dispute.violation?.trangThaiDiem === 'REFUNDED') {
-    throw new Error('Vi phạm này đã được hoàn điểm trước đó.');
+    throw new BadRequestException('Vi phạm này đã được hoàn điểm trước đó.');
   }
 
   const newStatus = isApproved ? 'APPROVED' : 'REJECTED';

@@ -1,19 +1,12 @@
 import * as configService from './configs.service.js';
+import { asyncHandler } from '../../common/middleware/index.js';
 
-export const handleGetAiConfig = async (req, res, next) => {
-  try {
-    const config = await configService.getAiConfig();
-    res.json({ success: true, data: config });
-  } catch (error) {
-    next(error);
-  }
-};
+export const handleGetAiConfig = asyncHandler(async (_req, res) => {
+	const config = await configService.getAiConfig();
+	res.json({ success: true, data: config });
+});
 
-export const handleUpdateAiConfig = async (req, res, next) => {
-  try {
-    const updated = await configService.updateAiConfig(req.body, req.user);
-    res.json({ success: true, data: updated });
-  } catch (error) {
-    next(error);
-  }
-};
+export const handleUpdateAiConfig = asyncHandler(async (req, res) => {
+	const updated = await configService.updateAiConfig(req.body, req.user);
+	res.json({ success: true, data: updated });
+});

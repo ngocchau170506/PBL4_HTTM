@@ -1,4 +1,6 @@
 import { logAuditAction } from '../../common/audit.service.js';
+import { NotFoundException } from '../../common/exceptions/index.js';
+import { sanitizeUser } from '../../common/utils/sanitize.js';
 import {
 	VIOLATION_TYPES,
 	getAllViolationTypes,
@@ -49,6 +51,7 @@ export const enrichViolationRecord = (v) => {
 		dispute_status: latestDispute ? latestDispute.trangThai : null,
 		dispute_reason: latestDispute ? latestDispute.noiDungGiaiTrinh : null,
 		dispute: latestDispute,
+		reviewer: v.reviewer ? sanitizeUser(v.reviewer) : v.reviewer,
 		driver: v.driver ? formatDriver(v.driver) : null,
 		vehicle: v.trip?.vehicle
 			? {
@@ -336,7 +339,7 @@ export const reviewViolationManual = async (
 		},
 	});
 
-	if (!violation) throw new Error('Bản ghi vi phạm không tồn tại.');
+	if (!violation) throw new NotFoundException('Bản ghi vi phạm không tồn tại.');
 
 	const oldStatus = violation.trangThai;
 	const newStatus = isConfirm ? 'CONFIRMED' : 'REJECTED';
@@ -537,7 +540,7 @@ export const reviewViolationManual = async (
 };
 
 export const getDriverRankings = async () => {
-	return prisma.driver.findMany({
+	const drivers = await prisma.driver.findMany({
 		include: {
 			user: true,
 			violations: {
@@ -551,4 +554,5 @@ export const getDriverRankings = async () => {
 		},
 		orderBy: { uyTin: 'desc' },
 	});
+	return drivers.map(formatDriver);
 };

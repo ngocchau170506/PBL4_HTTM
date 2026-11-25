@@ -1,5 +1,9 @@
 import prisma from '../../common/prisma.js';
 import { logAuditAction } from '../../common/audit.service.js';
+import {
+	BadRequestException,
+	NotFoundException,
+} from '../../common/exceptions/index.js';
 import { formatDriver } from '../drivers/drivers.service.js';
 import { formatVehicle, formatRoute } from '../assets/assets.service.js';
 
@@ -121,14 +125,16 @@ export const createTrip = async ({ driverId, vehicleId, routeId, shiftId }) => {
 		where: { driverId: parsedDriverId, trangThai: 'IN_PROGRESS' },
 	});
 	if (existingDriverTrip) {
-		throw new Error('Tài xế này hiện đang trong một chuyến xe khác chưa hoàn thành.');
+		throw new BadRequestException(
+			'Tài xế này hiện đang trong một chuyến xe khác chưa hoàn thành.',
+		);
 	}
 
 	const existingVehicleTrip = await prisma.trip.findFirst({
 		where: { vehicleId: parsedVehicleId, trangThai: 'IN_PROGRESS' },
 	});
 	if (existingVehicleTrip) {
-		throw new Error(
+		throw new BadRequestException(
 			'Phương tiện này hiện đang trong một chuyến xe khác chưa hoàn thành.',
 		);
 	}
@@ -154,7 +160,7 @@ export const createTrip = async ({ driverId, vehicleId, routeId, shiftId }) => {
 export const updateTripStatus = async (id, trangThai) => {
 	const tripId = parseInt(id, 10);
 	const trip = await prisma.trip.findUnique({ where: { id: tripId } });
-	if (!trip) throw new Error('Chuyến xe không tồn tại.');
+	if (!trip) throw new NotFoundException('Chuyến xe không tồn tại.');
 
 	const data = { trangThai };
 
@@ -334,7 +340,7 @@ export const getTripPlaybackData = async (tripId) => {
 	});
 
 	if (!trip) {
-		throw new Error('Không tìm thấy chuyến xe.');
+		throw new NotFoundException('Không tìm thấy chuyến xe.');
 	}
 
 	const logs = await prisma.iotDataLog.findMany({
@@ -422,7 +428,7 @@ export const switchActiveDriver = async (
 			route: true,
 		},
 	});
-	if (!trip) throw new Error('Không tìm thấy chuyến đi để đổi tài.');
+	if (!trip) throw new NotFoundException('Không tìm thấy chuyến đi để đổi tài.');
 
 	let targetDriverId = trip.driverId;
 	const requestedNewId = newDriverId ? parseInt(newDriverId, 10) : null;
@@ -432,13 +438,15 @@ export const switchActiveDriver = async (
 			where: { userId: requestedNewId },
 		});
 		if (!candidateDriver) {
-			throw new Error('Tài xế phụ được chọn không tồn tại trong hệ thống.');
+			throw new NotFoundException(
+				'Tài xế phụ được chọn không tồn tại trong hệ thống.',
+			);
 		}
 		if (
 			candidateDriver.uyTin <= 20 ||
 			candidateDriver.capCanhBao === 'SUSPENDED_RED'
 		) {
-			throw new Error(
+			throw new BadRequestException(
 				'Tài xế phụ đang bị đình chỉ, không thể nhận bàn giao tay lái.',
 			);
 		}

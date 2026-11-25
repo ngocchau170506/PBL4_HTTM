@@ -7,6 +7,12 @@ import jwt from 'jsonwebtoken';
 import path from 'path';
 
 import { setupSwagger } from './config/swagger.js';
+import {
+	errorHandlerMiddleware,
+	notFoundMiddleware,
+	requestLoggerMiddleware,
+} from './common/middleware/index.js';
+import logger from './common/utils/logger.js';
 import assetsRouter from './modules/assets/assets.router.js';
 import auditRouter from './modules/audit/audit.router.js';
 import authRouter from './modules/auth/auth.router.js';
@@ -97,7 +103,7 @@ app.use(
 			if (isAllowedOrigin(origin)) {
 				callback(null, true);
 			} else {
-				console.warn(`⚠️ CORS blocked origin: ${origin}`);
+				logger.warn(`CORS blocked origin: ${origin}`);
 				callback(new Error('CORS: Origin không được phép.'));
 			}
 		},
@@ -116,9 +122,10 @@ const globalLimiter = rateLimit({
 
 app.use(globalLimiter);
 
-// Body Parsing
+// Body Parsing & HTTP Request Logging
 app.use(express.json());
 app.use(cookieParser());
+app.use(requestLoggerMiddleware);
 
 // Static File Serving (Uploaded Videos)
 app.use(
@@ -190,14 +197,8 @@ v1Router.use('/upload', uploadRouter);
 v1Router.use('/edge', iotRouter);
 app.use('/api/v1', v1Router);
 
-// Global Error Handler
-app.use((err, req, res, next) => {
-	console.error('❌ Global Server Error:', err);
-	res.status(err.status || 500).json({
-		success: false,
-		message: err.message || 'Lỗi hệ thống nội bộ.',
-		error: { message: err.message || 'Lỗi hệ thống nội bộ.' },
-	});
-});
+// 404 Not Found & Centralized Error Handler Middleware
+app.use(notFoundMiddleware);
+app.use(errorHandlerMiddleware);
 
 export default app;

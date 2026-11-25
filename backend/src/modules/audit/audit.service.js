@@ -1,4 +1,5 @@
 import prisma from '../../common/prisma.js';
+import { sanitizeUser } from '../../common/utils/sanitize.js';
 export { logAuditAction } from '../../common/audit.service.js';
 
 export const formatAuditLog = (a) => {
@@ -17,6 +18,7 @@ export const formatAuditLog = (a) => {
 
   return {
     ...a,
+    user: a.user ? sanitizeUser(a.user) : a.user,
     actor_type: a.actorType || 'USER',
     user_id: a.userId,
     user_name: a.user?.hoTen || a.userName || 'Quản trị viên',

@@ -1,5 +1,11 @@
 import prisma from '../../common/prisma.js';
 import { logAuditAction } from '../../common/audit.service.js';
+import {
+	BadRequestException,
+	ForbiddenException,
+	NotFoundException,
+} from '../../common/exceptions/index.js';
+import { sanitizeUser } from '../../common/utils/sanitize.js';
 import { getAiConfig } from '../configs/configs.service.js';
 import { formatDriver } from '../drivers/drivers.service.js';
 import { formatVehicle, formatRoute } from '../assets/assets.service.js';
@@ -22,6 +28,7 @@ export const formatShift = (s) => {
 		trang_thai: s.trangThai,
 		ly_do_override: s.lyDoOverride,
 		canh_bao_khi_tao: parsedWarnings,
+		creator: s.creator ? sanitizeUser(s.creator) : s.creator,
 		driver: s.driver ? formatDriver(s.driver) : null,
 		vehicle: s.vehicle ? formatVehicle(s.vehicle) : null,
 		route: s.route ? formatRoute(s.route) : null,
@@ -116,11 +123,13 @@ const validateShiftConstraints = async ({
 	skipTimeChecks = false,
 }) => {
 	if (isNaN(startTime.getTime()) || !endTime || isNaN(endTime.getTime())) {
-		throw new Error('Thời gian ca làm việc không hợp lệ.');
+		throw new BadRequestException('Thời gian ca làm việc không hợp lệ.');
 	}
 
 	if (startTime >= endTime) {
-		throw new Error('Thời gian bắt đầu ca phải diễn ra trước thời gian kết thúc.');
+		throw new BadRequestException(
+			'Thời gian bắt đầu ca phải diễn ra trước thời gian kết thúc.',
+		);
 	}
 
 	const idExcludeFilter = excludeShiftId ? { id: { not: excludeShiftId } } : {};
@@ -128,7 +137,7 @@ const validateShiftConstraints = async ({
 	// 1. Kiểm tra Tài xế đình chỉ
 	const driver = await prisma.driver.findUnique({ where: { userId: driverId } });
 	if (driver && (driver.uyTin <= 20 || driver.capCanhBao === 'SUSPENDED_RED')) {
-		throw new Error(
+		throw new BadRequestException(
 			'CHẶN: Tài xế này đang bị đình chỉ công tác (Điểm uy tín <= 20 hoặc Báo động đỏ). Không thể xếp ca.',
 		);
 	}
@@ -136,7 +145,7 @@ const validateShiftConstraints = async ({
 	// 2. Kiểm tra Xe bảo dưỡng
 	const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
 	if (vehicle && vehicle.trangThai === 'MAINTENANCE') {
-		throw new Error(
+		throw new BadRequestException(
 			'CHẶN: Phương tiện này đang trong xưởng bảo dưỡng. Không thể xếp ca.',
 		);
 	}
@@ -152,7 +161,7 @@ const validateShiftConstraints = async ({
 		},
 	});
 	if (overlappingVehicleShift) {
-		throw new Error(
+		throw new BadRequestException(
 			'CHẶN: Phương tiện này đã được xếp vào một ca làm việc khác trong khoảng thời gian đã chọn.',
 		);
 	}
@@ -174,7 +183,7 @@ const validateShiftConstraints = async ({
 			},
 		});
 		if (overlappingDriverShift) {
-			throw new Error(
+			throw new BadRequestException(
 				'CHẶN: Tài xế này đã có một ca làm việc khác trùng với khoảng thời gian đã chọn.',
 			);
 		}
@@ -196,7 +205,7 @@ const validateShiftConstraints = async ({
 					new Date(prevShift.thoiGianKetThucDuKien).getTime()) /
 				(1000 * 3600);
 			if (restHoursBefore < minRestHours) {
-				throw new Error(
+				throw new BadRequestException(
 					`CHẶN: Khoảng thời gian nghỉ giữa ca trước và ca này chỉ có ${restHoursBefore.toFixed(1)}h (< ${minRestHours}h tối thiểu theo quy định). Không thể xếp ca.`,
 				);
 			}
@@ -218,7 +227,7 @@ const validateShiftConstraints = async ({
 					endTime.getTime()) /
 				(1000 * 3600);
 			if (restHoursAfter < minRestHours) {
-				throw new Error(
+				throw new BadRequestException(
 					`CHẶN: Khoảng thời gian nghỉ giữa ca này và ca sau chỉ có ${restHoursAfter.toFixed(1)}h (< ${minRestHours}h tối thiểu theo quy định). Không thể xếp ca.`,
 				);
 			}
@@ -256,7 +265,7 @@ const validateShiftConstraints = async ({
 		}
 
 		if (warnings.length > 0 && !String(lyDoOverride || '').trim()) {
-			throw new Error(
+			throw new BadRequestException(
 				`CẢNH BÁO SINH HỌC (Yêu cầu nhập lý do ghi đè): ${warnings.join(' ')}`,
 			);
 		}
@@ -345,11 +354,13 @@ export const updateShift = async (shiftId, updatedData, actorUser) => {
 	const id = parseInt(shiftId, 10);
 	const oldShift = await prisma.shift.findUnique({ where: { id } });
 	if (!oldShift) {
-		throw new Error('Không tìm thấy ca phân công!');
+		throw new NotFoundException('Không tìm thấy ca phân công!');
 	}
 
 	if (oldShift.trangThai === 'IN_PROGRESS') {
-		throw new Error('Không thể chỉnh sửa ca đang trong hành trình lăn bánh!');
+		throw new BadRequestException(
+			'Không thể chỉnh sửa ca đang trong hành trình lăn bánh!',
+		);
 	}
 
 	const data = {};
@@ -451,10 +462,10 @@ export const deleteShift = async (shiftId, reason, actorUser) => {
 	});
 
 	if (!target) {
-		throw new Error('Không tìm thấy ca phân công!');
+		throw new NotFoundException('Không tìm thấy ca phân công!');
 	}
 	if (target.trangThai === 'IN_PROGRESS') {
-		throw new Error('Không thể xóa ca đang thực hiện!');
+		throw new BadRequestException('Không thể xóa ca đang thực hiện!');
 	}
 
 	await prisma.shift.delete({ where: { id } });
@@ -483,26 +494,28 @@ export const respondToShift = async (
 ) => {
 	const id = parseInt(shiftId, 10);
 	const shift = await prisma.shift.findUnique({ where: { id } });
-	if (!shift) throw new Error('Ca làm việc không tồn tại.');
+	if (!shift) throw new NotFoundException('Ca làm việc không tồn tại.');
 
 	if (
 		currentUser?.role?.toUpperCase() === 'DRIVER' &&
 		Number(shift.driverId) !== Number(currentUser.driver?.userId || currentUser.id)
 	) {
-		const err = new Error('Bạn không có quyền phản hồi ca làm việc của tài xế khác.');
-		err.status = 403;
-		throw err;
+		throw new ForbiddenException(
+			'Bạn không có quyền phản hồi ca làm việc của tài xế khác.',
+		);
 	}
 
 	if (shift.trangThai === 'IN_PROGRESS' || shift.trangThai === 'COMPLETED') {
-		throw new Error(
+		throw new BadRequestException(
 			'Không thể chỉnh sửa ca làm việc khi đã bắt đầu hoặc hoàn thành.',
 		);
 	}
 
 	const newStatus = String(trangThai || trang_thai || '').toUpperCase();
 	if (!['ACCEPTED', 'DECLINED'].includes(newStatus)) {
-		throw new Error('Trạng thái phản hồi ca chỉ hợp lệ với ACCEPTED hoặc DECLINED.');
+		throw new BadRequestException(
+			'Trạng thái phản hồi ca chỉ hợp lệ với ACCEPTED hoặc DECLINED.',
+		);
 	}
 	const reason = lyDoTuChoi || ly_do_tu_choi;
 

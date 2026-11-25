@@ -3,7 +3,9 @@ import {
 	resolveViolationFromFlag,
 } from '../../common/constants/violationTypes.js';
 import { sendCriticalAdminEmailAlert } from '../../common/email.service.js';
+import { NotFoundException } from '../../common/exceptions/index.js';
 import prisma from '../../common/prisma.js';
+import { sanitizeDriverRelation } from '../../common/utils/sanitize.js';
 import { getAiConfig } from '../configs/configs.service.js';
 import {
 	createViolationRecord,
@@ -160,7 +162,7 @@ export const processIotDataPacket = async ({
 			timestamp: logEntry.thoiGianGhiNhan,
 			thoi_gian_ghi_nhan: logEntry.thoiGianGhiNhan,
 			vehicle: tripInfo?.vehicle || null,
-			driver: tripInfo?.driver || null,
+			driver: sanitizeDriverRelation(tripInfo?.driver),
 			route: tripInfo?.route || null,
 		};
 
@@ -339,7 +341,7 @@ export const processEdgeViolation = async ({
 	}
 
 	if (!tripInfo) {
-		throw new Error(
+		throw new NotFoundException(
 			'Không tìm thấy chuyến đi đang hoạt động cho thiết bị gửi vi phạm.',
 		);
 	}
@@ -410,7 +412,7 @@ export const processDeviceHeartbeat = async ({
 	}
 
 	if (!targetDevice) {
-		throw new Error('Không tìm thấy thiết bị IoT để cập nhật heartbeat.');
+		throw new NotFoundException('Không tìm thấy thiết bị IoT để cập nhật heartbeat.');
 	}
 
 	const updated = await prisma.iotDevice.update({

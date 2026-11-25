@@ -1,11 +1,6 @@
 import prisma from '../../common/prisma.js';
 import { logAuditAction } from '../../common/audit.service.js';
 
-let ioInstance = null;
-export const setMonitoringSocketIO = (io) => {
-	ioInstance = io;
-};
-
 export const getPriorityFleet = async () => {
 	// Chỉ lấy các phương tiện đang hoạt động (Không đưa xe đang bảo dưỡng MAINTENANCE lên bản đồ cao tốc)
 	const vehicles = await prisma.vehicle.findMany({

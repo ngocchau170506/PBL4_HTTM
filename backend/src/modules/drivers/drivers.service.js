@@ -1,5 +1,7 @@
 import prisma from '../../common/prisma.js';
 import { logAuditAction } from '../../common/audit.service.js';
+import { NotFoundException } from '../../common/exceptions/index.js';
+import { sanitizeUser } from '../../common/utils/sanitize.js';
 import bcrypt from 'bcrypt';
 
 // Helper serialize driver for frontend compatibility (both snake_case and camelCase)
@@ -8,6 +10,8 @@ export const formatDriver = (d) => {
   let computedWarning = d.capCanhBao || 'NORMAL';
   if (score <= 20) computedWarning = 'SUSPENDED_RED';
   else if (score <= 65 && computedWarning === 'NORMAL') computedWarning = 'WARNING_YELLOW';
+
+  const safeUser = sanitizeUser(d.user);
 
   return {
     ...d,
@@ -18,13 +22,13 @@ export const formatDriver = (d) => {
     diem_uy_tin: score,
     cap_canh_bao: computedWarning,
     trang_thai_lai_xe: d.trangThaiTaiXe,
-    user: d.user
+    user: safeUser
       ? {
-          ...d.user,
-          ho_ten: d.user.hoTen,
-          so_dien_thoai: d.user.sdt,
-          vai_tro: d.user.role,
-          trang_thai: d.user.trangThai,
+          ...safeUser,
+          ho_ten: safeUser.hoTen,
+          so_dien_thoai: safeUser.sdt,
+          vai_tro: safeUser.role,
+          trang_thai: safeUser.trangThai,
         }
       : null,
   };
@@ -66,7 +70,7 @@ export const updateDriverStatus = async (driverId, { cap_canh_bao, ly_do }, acto
   });
 
   if (!driver) {
-    throw new Error('Tài xế không tồn tại trong hệ thống.');
+    throw new NotFoundException('Tài xế không tồn tại trong hệ thống.');
   }
 
   const oldWarning = driver.capCanhBao;

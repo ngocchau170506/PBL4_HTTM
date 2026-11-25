@@ -1,155 +1,135 @@
 import * as tripsService from './trips.service.js';
 import { getSocketIO } from '../iot/iot.service.js';
+import { asyncHandler } from '../../common/middleware/index.js';
+import {
+	BadRequestException,
+	ForbiddenException,
+	NotFoundException,
+} from '../../common/exceptions/index.js';
 
-export const getTrips = async (req, res) => {
-	try {
-		const { driverId, status } = req.query;
-		let targetDriverId = driverId;
-		if (req.user.role === 'DRIVER') {
-			targetDriverId = req.user.driver?.userId || req.user.id;
-		}
-
-		const trips = await tripsService.getAllTrips({
-			driverId: targetDriverId,
-			status,
-		});
-		res.json({ success: true, data: trips, trips });
-	} catch (error) {
-		res.status(500).json({ success: false, message: error.message });
-	}
-};
-
-export const getMyActiveTrip = async (req, res) => {
-	try {
-		const driverId = req.user.driver?.userId || req.user.id;
-		const activeTrip = await tripsService.getDriverActiveTrip(driverId);
-		res.json({ success: true, data: activeTrip, trip: activeTrip });
-	} catch (error) {
-		res.status(500).json({ success: false, message: error.message });
-	}
-};
-
-const ensureDriverOwnsTrip = async (req, tripId) => {
-	if (req.user?.role?.toUpperCase() !== 'DRIVER') return { allowed: true, trip: null };
+const assertDriverOwnsTrip = async (req, tripId, forbiddenMessage) => {
+	if (req.user?.role?.toUpperCase() !== 'DRIVER') return null;
 	const trip = await tripsService.getTripById(tripId);
-	if (!trip) return { allowed: true, trip: null };
+	if (!trip) return null;
 	const ownDriverId = req.user.driver?.userId || req.user.id;
-	const allowed = Number(trip.driverId) === Number(ownDriverId);
-	return { allowed, trip };
-};
-
-export const getTripById = async (req, res) => {
-	try {
-		const { allowed, trip } = await ensureDriverOwnsTrip(req, req.params.id);
-		if (!allowed) {
-			return res.status(403).json({ success: false, message: 'Không có quyền xem chuyến xe của tài xế khác.' });
-		}
-		const target = trip || (await tripsService.getTripById(req.params.id));
-		if (!target) {
-			return res
-				.status(404)
-				.json({ success: false, message: 'Chuyến xe không tồn tại.' });
-		}
-		res.json({ success: true, data: target, trip: target });
-	} catch (error) {
-		res.status(500).json({ success: false, message: error.message });
+	if (Number(trip.driverId) !== Number(ownDriverId)) {
+		throw new ForbiddenException(forbiddenMessage);
 	}
+	return trip;
 };
 
-export const createTrip = async (req, res) => {
-	try {
-		const trip = await tripsService.createTrip(req.body);
-		const io = getSocketIO();
-		if (io) io.emit('violation:updated', { type: 'TRIP_CREATED', trip });
-		res.status(201).json({ success: true, data: trip, trip });
-	} catch (error) {
-		res.status(400).json({ success: false, message: error.message });
+export const getTrips = asyncHandler(async (req, res) => {
+	const { driverId, status } = req.query;
+	let targetDriverId = driverId;
+	if (req.user.role === 'DRIVER') {
+		targetDriverId = req.user.driver?.userId || req.user.id;
 	}
-};
 
-export const updateTripStatus = async (req, res) => {
-	try {
-		const { id } = req.params;
-		const { allowed } = await ensureDriverOwnsTrip(req, id);
-		if (!allowed) {
-			return res.status(403).json({ success: false, message: 'Không có quyền thao tác chuyến xe của tài xế khác.' });
-		}
-		const { trangThai, trang_thai } = req.body;
-		const status = trangThai || trang_thai;
-		if (!status) {
-			return res.status(400).json({
-				success: false,
-				message: 'Vui lòng cung cấp trạng thái mới cho chuyến xe.',
-			});
-		}
-		const trip = await tripsService.updateTripStatus(id, status);
+	const trips = await tripsService.getAllTrips({
+		driverId: targetDriverId,
+		status,
+	});
+	res.json({ success: true, data: trips, trips });
+});
 
-		// Bắn Socket.io để Web Dashboard đồng bộ lại danh sách Xe, Tài xế và Bản đồ ngay lập tức
-		const io = getSocketIO();
-		if (io) {
-			io.emit('violation:updated', { type: 'TRIP_STATUS_CHANGED', trip });
-			if (trip.rewardScoreChange) {
-				io.emit('driver:score_changed', trip.rewardScoreChange);
-			}
-		}
+export const getMyActiveTrip = asyncHandler(async (req, res) => {
+	const driverId = req.user.driver?.userId || req.user.id;
+	const activeTrip = await tripsService.getDriverActiveTrip(driverId);
+	res.json({ success: true, data: activeTrip, trip: activeTrip });
+});
 
-		res.json({ success: true, data: trip, trip });
-	} catch (error) {
-		res.status(400).json({ success: false, message: error.message });
+export const getTripById = asyncHandler(async (req, res) => {
+	const ownedTrip = await assertDriverOwnsTrip(
+		req,
+		req.params.id,
+		'Không có quyền xem chuyến xe của tài xế khác.',
+	);
+	const target = ownedTrip || (await tripsService.getTripById(req.params.id));
+	if (!target) {
+		throw new NotFoundException('Chuyến xe không tồn tại.');
 	}
-};
+	res.json({ success: true, data: target, trip: target });
+});
 
-export const getPlayback = async (req, res) => {
-	try {
-		const { allowed } = await ensureDriverOwnsTrip(req, req.params.id);
-		if (!allowed) {
-			return res.status(403).json({ success: false, message: 'Không có quyền xem lịch sử chuyến xe của tài xế khác.' });
-		}
-		const playbackData = await tripsService.getTripPlaybackData(req.params.id);
-		res.json({ success: true, data: playbackData });
-	} catch (error) {
-		res.status(404).json({ success: false, message: error.message });
+export const createTrip = asyncHandler(async (req, res) => {
+	const trip = await tripsService.createTrip(req.body);
+	const io = getSocketIO();
+	if (io) io.emit('violation:updated', { type: 'TRIP_CREATED', trip });
+	res.status(201).json({ success: true, data: trip, trip });
+});
+
+export const updateTripStatus = asyncHandler(async (req, res) => {
+	const { id } = req.params;
+	await assertDriverOwnsTrip(
+		req,
+		id,
+		'Không có quyền thao tác chuyến xe của tài xế khác.',
+	);
+	const { trangThai, trang_thai } = req.body;
+	const status = trangThai || trang_thai;
+	if (!status) {
+		throw new BadRequestException(
+			'Vui lòng cung cấp trạng thái mới cho chuyến xe.',
+		);
 	}
-};
+	const trip = await tripsService.updateTripStatus(id, status);
 
-export const handleCalibrateAndStart = async (req, res) => {
-	try {
-		const isDriver = req.user?.role?.toUpperCase() === 'DRIVER';
-		const driverId = isDriver
-			? req.user.driver?.userId || req.user.id
-			: req.body.driverId || req.body.driver_id || req.user.driver?.userId || req.user.id;
-		const trip = await tripsService.calibrateAndStartTrip({
-			driverId,
-			shiftId: req.body.shiftId || req.body.shift_id,
-			tripId: req.params.id || req.body.tripId || req.body.trip_id,
-			isOfflineMode: Boolean(req.body.isOfflineMode),
-		});
-
-		// Bắn Socket.io để Web Dashboard thấy ngay xe đã chuyển sang "Đang vận hành"
-		const io = getSocketIO();
-		if (io) {
-			io.emit('violation:updated', { type: 'TRIP_STARTED', trip });
+	// Bắn Socket.io để Web Dashboard đồng bộ lại danh sách Xe, Tài xế và Bản đồ ngay lập tức
+	const io = getSocketIO();
+	if (io) {
+		io.emit('violation:updated', { type: 'TRIP_STATUS_CHANGED', trip });
+		if (trip.rewardScoreChange) {
+			io.emit('driver:score_changed', trip.rewardScoreChange);
 		}
-
-		res.json({ success: true, data: trip, trip });
-	} catch (error) {
-		res.status(400).json({ success: false, message: error.message });
 	}
-};
 
-export const handleSwitchDriver = async (req, res) => {
-	try {
-		const { allowed } = await ensureDriverOwnsTrip(req, req.params.id);
-		if (!allowed) {
-			return res.status(403).json({ success: false, message: 'Không có quyền đổi tài trên chuyến xe của tài xế khác.' });
-		}
-		const trip = await tripsService.switchActiveDriver(req.params.id, req.body);
-		const io = getSocketIO();
-		if (io) {
-			io.emit('violation:updated', { type: 'DRIVER_SWITCHED', trip });
-		}
-		res.json({ success: true, data: trip, trip });
-	} catch (error) {
-		res.status(400).json({ success: false, message: error.message });
+	res.json({ success: true, data: trip, trip });
+});
+
+export const getPlayback = asyncHandler(async (req, res) => {
+	await assertDriverOwnsTrip(
+		req,
+		req.params.id,
+		'Không có quyền xem lịch sử chuyến xe của tài xế khác.',
+	);
+	const playbackData = await tripsService.getTripPlaybackData(req.params.id);
+	res.json({ success: true, data: playbackData });
+});
+
+export const handleCalibrateAndStart = asyncHandler(async (req, res) => {
+	const isDriver = req.user?.role?.toUpperCase() === 'DRIVER';
+	const driverId = isDriver
+		? req.user.driver?.userId || req.user.id
+		: req.body.driverId ||
+			req.body.driver_id ||
+			req.user.driver?.userId ||
+			req.user.id;
+	const trip = await tripsService.calibrateAndStartTrip({
+		driverId,
+		shiftId: req.body.shiftId || req.body.shift_id,
+		tripId: req.params.id || req.body.tripId || req.body.trip_id,
+		isOfflineMode: Boolean(req.body.isOfflineMode),
+	});
+
+	// Bắn Socket.io để Web Dashboard thấy ngay xe đã chuyển sang "Đang vận hành"
+	const io = getSocketIO();
+	if (io) {
+		io.emit('violation:updated', { type: 'TRIP_STARTED', trip });
 	}
-};
+
+	res.json({ success: true, data: trip, trip });
+});
+
+export const handleSwitchDriver = asyncHandler(async (req, res) => {
+	await assertDriverOwnsTrip(
+		req,
+		req.params.id,
+		'Không có quyền đổi tài trên chuyến xe của tài xế khác.',
+	);
+	const trip = await tripsService.switchActiveDriver(req.params.id, req.body);
+	const io = getSocketIO();
+	if (io) {
+		io.emit('violation:updated', { type: 'DRIVER_SWITCHED', trip });
+	}
+	res.json({ success: true, data: trip, trip });
+});

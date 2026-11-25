@@ -1,26 +1,26 @@
-// Simple logger utility for now
-// In a real application, you would use a more robust logger like Winston or Pino
+const isTest = () => process.env.NODE_ENV === 'test';
+const stamp = () => new Date().toISOString();
 
 export const info = (...params) => {
-    if (process.env.NODE_ENV !== 'test') {
-        console.log('[INFO]', ...params);
-    }
-};
-
-export const error = (...params) => {
-    if (process.env.NODE_ENV !== 'test') {
-        console.error('[ERROR]', ...params);
-    }
+	if (!isTest()) {
+		console.log(`[${stamp()}] [INFO]`, ...params);
+	}
 };
 
 export const warn = (...params) => {
-    if (process.env.NODE_ENV !== 'test') {
-        console.warn('[WARN]', ...params);
-    }
+	if (!isTest()) {
+		console.warn(`[${stamp()}] [WARN]`, ...params);
+	}
+};
+
+export const error = (...params) => {
+	if (!isTest()) {
+		console.error(`[${stamp()}] [ERROR]`, ...params);
+	}
 };
 
 export default {
-    info,
-    error,
-    warn,
+	info,
+	warn,
+	error,
 };

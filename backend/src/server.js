@@ -2,6 +2,7 @@ import http from 'http';
 import jwt from 'jsonwebtoken';
 import { Server as SocketIOServer } from 'socket.io';
 import app, { isAllowedOrigin } from './app.js';
+import logger from './common/utils/logger.js';
 import { setSocketIO } from './modules/iot/iot.service.js';
 
 const PORT = process.env.PORT || 3000;
@@ -56,18 +57,18 @@ io.on('connection', (socket) => {
 		socket.join(driverRoom);
 	}
 
-	console.log(`🔌 Client Socket Connected: ${socket.id} | Joined: ${fleetRoom}`);
+	logger.info(`Client Socket Connected: ${socket.id} | Joined: ${fleetRoom}`);
 
 	socket.on('disconnect', () => {
-		console.log(`❌ Client Socket Disconnected: ${socket.id}`);
+		logger.info(`Client Socket Disconnected: ${socket.id}`);
 	});
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-	console.log('==================================================');
-	console.log(`🚀 PBL4 FLEET BACKEND SERVER RUNNING ON PORT ${PORT}`);
-	console.log(`📡 WebSocket / Socket.io Live Tracking Ready`);
-	console.log(`🔗 API Base URL: http://172.20.10.2:${PORT}/api/v1`);
-	console.log(`📖 Swagger UI:   http://172.20.10.2:${PORT}/api/docs`);
-	console.log('==================================================');
+	logger.info('==================================================');
+	logger.info(`PBL4 FLEET BACKEND SERVER RUNNING ON PORT ${PORT}`);
+	logger.info('WebSocket / Socket.io Live Tracking Ready');
+	logger.info(`API Base URL: http://localhost:${PORT}/api/v1`);
+	logger.info(`Swagger UI:   http://localhost:${PORT}/api/docs`);
+	logger.info('==================================================');
 });

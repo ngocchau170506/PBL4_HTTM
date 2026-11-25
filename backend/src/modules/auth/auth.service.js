@@ -1,5 +1,12 @@
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import { logAuditAction } from '../../common/audit.service.js';
+import {
+	BadRequestException,
+	ForbiddenException,
+	NotFoundException,
+	UnauthorizedException,
+} from '../../common/exceptions/index.js';
 import prisma from '../../common/prisma.js';
 import { getAiConfig, updateAiConfig } from '../configs/configs.service.js';
 
@@ -22,16 +29,10 @@ export const formatUser = (user) => ({
 	driver: user.driver,
 });
 
-const httpError = (status, message) => {
-	const err = new Error(message);
-	err.status = status;
-	return err;
-};
-
 export const registerUser = async ({ username, password, hoTen, sdt, bangLai }) => {
 	const existingUser = await prisma.user.findUnique({ where: { username } });
 	if (existingUser) {
-		throw httpError(400, 'Tên đăng nhập đã tồn tại trong hệ thống.');
+		throw new BadRequestException('Tên đăng nhập đã tồn tại trong hệ thống.');
 	}
 
 	const saltRounds = 10;
@@ -70,16 +71,16 @@ export const loginUser = async ({ username, password }) => {
 	});
 
 	if (!user) {
-		throw httpError(401, 'Tên đăng nhập hoặc mật khẩu không chính xác.');
+		throw new UnauthorizedException('Tên đăng nhập hoặc mật khẩu không chính xác.');
 	}
 
 	if (user.trangThai !== 'ACTIVE') {
-		throw httpError(403, 'Tài khoản của bạn đã bị khóa.');
+		throw new ForbiddenException('Tài khoản của bạn đã bị khóa.');
 	}
 
 	const isValidPassword = await bcrypt.compare(password, user.passwordHash);
 	if (!isValidPassword) {
-		throw httpError(401, 'Tên đăng nhập hoặc mật khẩu không chính xác.');
+		throw new UnauthorizedException('Tên đăng nhập hoặc mật khẩu không chính xác.');
 	}
 
 	const payload = {
@@ -104,7 +105,9 @@ export const loginUser = async ({ username, password }) => {
 // Cấp device_token cho Raspberry Pi 4 / ESP32 (SRS 4.1 § 2.2)
 export const issueDeviceToken = async ({ deviceCode, serial }) => {
 	if (!deviceCode && !serial) {
-		throw httpError(400, 'Vui lòng cung cấp ma_thiet_bi hoặc cpu_serial của thiết bị.');
+		throw new BadRequestException(
+			'Vui lòng cung cấp ma_thiet_bi hoặc cpu_serial của thiết bị.',
+		);
 	}
 
 	const device = await prisma.iotDevice.findFirst({
@@ -118,7 +121,9 @@ export const issueDeviceToken = async ({ deviceCode, serial }) => {
 	});
 
 	if (!device) {
-		throw httpError(404, 'Thiết bị IoT chưa được đăng ký hoặc cpu_serial không khớp.');
+		throw new NotFoundException(
+			'Thiết bị IoT chưa được đăng ký hoặc cpu_serial không khớp.',
+		);
 	}
 
 	const payload = {
@@ -160,7 +165,7 @@ export const getUserProfile = async (userId) => {
 	});
 
 	if (!user) {
-		throw new Error('Không tìm thấy người dùng.');
+		throw new NotFoundException('Không tìm thấy người dùng.');
 	}
 
 	return formatUser(user);
@@ -181,7 +186,7 @@ export const updateUser = async (userId, data, adminId) => {
 	const pUserId = parseInt(userId, 10);
 	const oldUser = await prisma.user.findUnique({ where: { id: pUserId } });
 	if (!oldUser) {
-		throw httpError(404, 'Không tìm thấy người dùng để cập nhật.');
+		throw new NotFoundException('Không tìm thấy người dùng để cập nhật.');
 	}
 
 	const allowedData = {};
@@ -201,7 +206,6 @@ export const updateUser = async (userId, data, adminId) => {
 	});
 
 	if (adminId) {
-		const { logAuditAction } = await import('../../common/audit.service.js');
 		logAuditAction({
 			userId: adminId,
 			hanhDong: 'UPDATE_USER_ACCOUNT',
@@ -230,18 +234,20 @@ export const changeOwnPassword = async (
 ) => {
 	const oldPass = currentPassword || oldPassword;
 	if (!oldPass || !newPassword) {
-		throw new Error('Vui lòng nhập đầy đủ mật khẩu hiện tại và mật khẩu mới.');
+		throw new BadRequestException(
+			'Vui lòng nhập đầy đủ mật khẩu hiện tại và mật khẩu mới.',
+		);
 	}
 	if (newPassword.length < 6) {
-		throw new Error('Mật khẩu mới phải có tối thiểu 6 ký tự.');
+		throw new BadRequestException('Mật khẩu mới phải có tối thiểu 6 ký tự.');
 	}
 
 	const user = await prisma.user.findUnique({ where: { id: parseInt(userId, 10) } });
-	if (!user) throw new Error('Không tìm thấy tài khoản.');
+	if (!user) throw new NotFoundException('Không tìm thấy tài khoản.');
 
 	const isMatch = await bcrypt.compare(oldPass, user.passwordHash);
 	if (!isMatch) {
-		throw new Error('Mật khẩu hiện tại không chính xác.');
+		throw new BadRequestException('Mật khẩu hiện tại không chính xác.');
 	}
 
 	const passwordHash = await bcrypt.hash(newPassword, 10);
@@ -250,7 +256,6 @@ export const changeOwnPassword = async (
 		data: { passwordHash },
 	});
 
-	const { logAuditAction } = await import('../../common/audit.service.js');
 	await logAuditAction({
 		userId: user.id,
 		userName: user.hoTen,
@@ -276,7 +281,6 @@ export const resetUserPasswordByAdmin = async (
 		data: { passwordHash },
 	});
 
-	const { logAuditAction } = await import('../../common/audit.service.js');
 	await logAuditAction({
 		userId: adminUser.id,
 		userName: adminUser.hoTen,
