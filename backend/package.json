@@ -4,6 +4,7 @@
 	"main": "index.js",
 	"scripts": {
 		"test": "jest",
+		"test:e2e": "node tests/business-logic.e2e.mjs",
 		"dev": "nodemon src/server.js",
 		"start": "node src/server.js"
 	},

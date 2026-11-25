@@ -332,13 +332,14 @@ export const createShift = async ({
 		},
 	});
 
+	const formattedShift = formatShift(shift);
 	const hasOverride = Boolean(ly_do_override?.trim());
 	logAuditAction({
 		userId: pCreatedBy,
 		hanhDong: hasOverride ? 'CREATE_SHIFT_OVERRIDE' : 'CREATE_SHIFT',
 		doiTuongLoai: 'SHIFT',
 		doiTuongId: String(shift.id),
-		giaTriSau: shift,
+		giaTriSau: formattedShift,
 		lyDo: hasOverride
 			? `Ghi đè cảnh báo Smart Scheduling: "${ly_do_override}"`
 			: warnings.length > 0
@@ -346,7 +347,7 @@ export const createShift = async ({
 				: 'Tạo ca làm việc mới.',
 	});
 
-	return formatShift(shift);
+	return formattedShift;
 };
 
 // --- BỔ SUNG HÀM CẬP NHẬT CA (PATCH /shifts/:id)  ---

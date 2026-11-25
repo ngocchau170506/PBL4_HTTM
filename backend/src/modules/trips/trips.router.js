@@ -26,7 +26,7 @@ router.post('/:id/calibrate', handleCalibrateAndStart);
 router.post('/:id/switch-driver', handleSwitchDriver);
 router.patch('/:id/status', updateTripStatus);
 router.post('/:id/complete', (req, res, next) => {
-	req.body.trangThai = 'COMPLETED';
+	req.body = { ...(req.body || {}), trangThai: 'COMPLETED' };
 	return updateTripStatus(req, res, next);
 });
 

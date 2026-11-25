@@ -2,6 +2,17 @@ import prisma from '../../common/prisma.js';
 import { sanitizeUser } from '../../common/utils/sanitize.js';
 export { logAuditAction } from '../../common/audit.service.js';
 
+const stripSensitiveKeys = (value) => {
+  if (!value || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(stripSensitiveKeys);
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (k === 'passwordHash') continue;
+    out[k] = stripSensitiveKeys(v);
+  }
+  return out;
+};
+
 export const formatAuditLog = (a) => {
   let gTruoc = null;
   let gSau = null;
@@ -16,8 +27,13 @@ export const formatAuditLog = (a) => {
     gSau = a.giaTriSau;
   }
 
+  gTruoc = stripSensitiveKeys(gTruoc);
+  gSau = stripSensitiveKeys(gSau);
+
   return {
     ...a,
+    giaTriTruoc: typeof a.giaTriTruoc === 'string' && gTruoc && typeof gTruoc === 'object' ? JSON.stringify(gTruoc) : a.giaTriTruoc,
+    giaTriSau: typeof a.giaTriSau === 'string' && gSau && typeof gSau === 'object' ? JSON.stringify(gSau) : a.giaTriSau,
     user: a.user ? sanitizeUser(a.user) : a.user,
     actor_type: a.actorType || 'USER',
     user_id: a.userId,

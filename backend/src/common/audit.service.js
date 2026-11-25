@@ -1,4 +1,13 @@
 import prisma from './prisma.js';
+import logger from './utils/logger.js';
+
+const serializeAuditValue = (value) => {
+	if (!value) return null;
+	if (typeof value === 'string') return value;
+	return JSON.stringify(value, (key, val) =>
+		key === 'passwordHash' ? undefined : val,
+	);
+};
 
 export const logAuditAction = async ({
 	userId,
@@ -20,22 +29,14 @@ export const logAuditAction = async ({
 				hanhDong,
 				doiTuongLoai: String(doiTuongLoai || 'SYSTEM'),
 				doiTuongId: String(doiTuongId ?? 'UNKNOWN'),
-				giaTriTruoc: giaTriTruoc
-					? typeof giaTriTruoc === 'string'
-						? giaTriTruoc
-						: JSON.stringify(giaTriTruoc)
-					: null,
-				giaTriSau: giaTriSau
-					? typeof giaTriSau === 'string'
-						? giaTriSau
-						: JSON.stringify(giaTriSau)
-					: null,
+				giaTriTruoc: serializeAuditValue(giaTriTruoc),
+				giaTriSau: serializeAuditValue(giaTriSau),
 				lyDo: lyDo || null,
 			},
 		});
 		return log;
 	} catch (error) {
-		console.error('❌ Failed to record Audit Log:', error.message);
+		logger.error('Failed to record Audit Log:', error.message);
 		return null;
 	}
 };

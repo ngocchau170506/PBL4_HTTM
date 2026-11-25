@@ -1,5 +1,6 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
+import { UnauthorizedException } from '../../common/exceptions/index.js';
 import {
 	handleIngestTelemetry,
 	handleIngestBatchTelemetry,
@@ -42,11 +43,11 @@ const requireDeviceAuth = (req, res, next) => {
 		return next();
 	}
 
-	return res.status(401).json({
-		success: false,
-		message:
+	return next(
+		new UnauthorizedException(
 			'Thiết bị IoT không được xác thực. Vui lòng cung cấp x-device-token hoặc Bearer device_token hợp lệ.',
-	});
+		),
+	);
 };
 
 // 1. POST /api/v1/edge/telemetry (và /api/v1/iot/telemetry)
