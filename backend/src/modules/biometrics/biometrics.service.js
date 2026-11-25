@@ -2,11 +2,16 @@ import prisma from '../../common/prisma.js';
 
 export const getDriverBiometricProfile = async (driverId) => {
   const pDriverId = parseInt(driverId, 10);
-  
-  let profile = await prisma.driverBiometricProfile.findFirst({
-    where: { driverId: pDriverId },
-    orderBy: { createdAt: 'desc' },
-  });
+
+  const [driver, existingProfile] = await Promise.all([
+    prisma.driver.findUnique({ where: { userId: pDriverId } }),
+    prisma.driverBiometricProfile.findFirst({
+      where: { driverId: pDriverId },
+      orderBy: { createdAt: 'desc' },
+    }),
+  ]);
+
+  let profile = existingProfile;
 
   if (!profile) {
     // Generate default profile if none exists
@@ -41,8 +46,46 @@ export const getDriverBiometricProfile = async (driverId) => {
     });
   }
 
+  const currentScore = driver?.uyTin ?? 100;
+  const currentWarn =
+    driver?.capCanhBao ||
+    (currentScore <= 20
+      ? 'SUSPENDED_RED'
+      : currentScore <= 65
+        ? 'WARNING_YELLOW'
+        : 'NORMAL');
+  const warnLabel =
+    currentWarn === 'SUSPENDED_RED'
+      ? 'Đình chỉ đỏ'
+      : currentWarn === 'WARNING_YELLOW'
+        ? 'Cảnh cáo vàng'
+        : 'An toàn';
+
+  let dynamicDanhGia = profile.danhGiaChung;
+  if (!dynamicDanhGia) {
+    dynamicDanhGia =
+      currentWarn === 'WARNING_YELLOW'
+        ? `Điểm uy tín ${currentScore} (${warnLabel}). Nhịp sinh học giảm rõ rệt đầu giờ chiều. Đang bị giảm 30% tần suất ca đêm.`
+        : currentWarn === 'SUSPENDED_RED'
+          ? `Điểm uy tín ${currentScore} (${warnLabel}). Tạm khóa phân công ca mới do điểm uy tín dưới ngưỡng an toàn.`
+          : `Điểm uy tín ${currentScore} (${warnLabel}). Nhịp sinh học ổn định, khuyến nghị nghỉ giải lao 15 phút sau mỗi ${Math.round((profile.thoiGianLaiTrungBinhTruocMetMoi || 180) / 60)} giờ lái liên tục.`;
+  } else {
+    dynamicDanhGia = dynamicDanhGia.replace(
+      /Điểm uy tín\s+\d+\s*\([^)]+\)/i,
+      `Điểm uy tín ${currentScore} (${warnLabel})`,
+    );
+    if (currentWarn === 'NORMAL') {
+      dynamicDanhGia = dynamicDanhGia.replace(
+        /Đang bị giảm 30% tần suất (?:gợi ý )?ca đêm\.?/i,
+        'Đủ điều kiện nhận mọi ca chạy.',
+      );
+    }
+  }
+
   return {
     ...profile,
+    danhGiaChung: dynamicDanhGia,
+    danh_gia_chung: dynamicDanhGia,
     khungGioYeuSinhHoc: JSON.parse(profile.khungGioYeuSinhHoc || '[]'),
     tanSuatViPham30Ngay: JSON.parse(profile.tanSuatViPham30Ngay || '{}'),
   };

@@ -51,6 +51,27 @@ export default function TripScreen({
     );
   };
 
+  if (!shift) {
+    return (
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={{ padding: 16 }}
+      >
+        <AppCard>
+          <View style={styles.vehicleRow}>
+            <Truck size={20} color={COLORS.brandBlueSky} />
+            <Text style={styles.plateText}>Chưa có ca phân công</Text>
+          </View>
+          <View style={styles.divider} />
+          <Text style={styles.subInfo}>
+            Hiện tại bạn chưa có ca trực nào được giao hoặc đang chờ xuất bến.
+            Hệ thống sẽ tự động thông báo ngay khi Điều phối viên xếp lịch mới.
+          </Text>
+        </AppCard>
+      </ScrollView>
+    );
+  }
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 16 }}>
       {/* THÔNG TIN CA TRỰC ĐƯỢC GIAO */}

@@ -59,6 +59,13 @@ export const createDispute = async ({ violationId, driverId, maLyDo, tenLyDo, no
     throw new Error('Vi phạm không tồn tại để khiếu nại.');
   }
 
+  const existingDispute = await prisma.dispute.findFirst({
+    where: { violationId: pViolationId },
+  });
+  if (existingDispute) {
+    throw new Error('Vi phạm này đã được gửi khiếu nại trước đó (Mỗi vi phạm chỉ được khiếu nại 1 lần).');
+  }
+
   const dispute = await prisma.dispute.create({
     data: {
       violationId: pViolationId,
@@ -93,6 +100,10 @@ export const resolveDispute = async (disputeId, { decision, trang_thai, phan_hoi
 
   if (!dispute) {
     throw new Error('Không tìm thấy đơn khiếu nại!');
+  }
+
+  if (dispute.trangThai !== 'OPEN') {
+    throw new Error(`Đơn khiếu nại #${id} đã được xử lý trước đó (Trạng thái: ${dispute.trangThai})!`);
   }
 
   // Four-Eyes Principle (SRS 4.1):

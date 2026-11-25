@@ -236,6 +236,7 @@ export const createViolationRecord = async ({
 		});
 
 		let updatedDriver = violation.driver;
+		let scoreChange = null;
 		if (initialStatus === 'CONFIRMED' && actualDeducted > 0) {
 			const currentUyTin = violation.driver.uyTin;
 			const newUyTin = Math.max(0, currentUyTin - actualDeducted);
@@ -270,9 +271,17 @@ export const createViolationRecord = async ({
 					tripId: parsedTripId,
 				},
 			});
+
+			scoreChange = {
+				diem_truoc: currentUyTin,
+				diem_sau: newUyTin,
+				so_diem_thay_doi: -actualDeducted,
+				cap_canh_bao: newWarning,
+				ly_do: `Tự động trừ điểm vi phạm #${violation.id}: ${standardName}`,
+			};
 		}
 
-		return { violation: enrichViolationRecord(violation), updatedDriver };
+		return { violation: enrichViolationRecord(violation), updatedDriver, scoreChange };
 	});
 
 	if (initialStatus === 'CONFIRMED') {
@@ -322,7 +331,7 @@ export const reviewViolationManual = async (
 	const capPerTrip = Number(config.penalty_cap_per_trip ?? 30);
 	const capPerDay = Number(config.penalty_cap_per_day ?? 50);
 
-	const { updatedViolation, updatedDriver } = await prisma.$transaction(async (tx) => {
+	const { updatedViolation, updatedDriver, scoreChange } = await prisma.$transaction(async (tx) => {
 		let currentDriver = await tx.driver.findUnique({
 			where: { userId: violation.driverId },
 			include: { user: true },
@@ -330,6 +339,7 @@ export const reviewViolationManual = async (
 
 		let actualDeducted = 0;
 		let pointStatus = violation.trangThaiDiem || 'APPLIED';
+		let txScoreChange = null;
 
 		if (isConfirm) {
 			if (violation.trangThai !== 'CONFIRMED') {
@@ -408,6 +418,16 @@ export const reviewViolationManual = async (
 						tripId: violation.tripId,
 					},
 				});
+
+				if (actualDeducted > 0) {
+					txScoreChange = {
+						diem_truoc: currentUyTin,
+						diem_sau: newUyTin,
+						so_diem_thay_doi: -actualDeducted,
+						cap_canh_bao: newWarning,
+						ly_do: `Thẩm định xác nhận vi phạm #${violation.id}: ${violation.tenLoai || violation.loaiViPham}`,
+					};
+				}
 			}
 		} else {
 			// Nếu REJECT: Bác bỏ vi phạm (hoàn lại điểm nếu trước đó đã bị auto-confirm trừ điểm)
@@ -439,6 +459,14 @@ export const reviewViolationManual = async (
 						tripId: violation.tripId,
 					},
 				});
+
+				txScoreChange = {
+					diem_truoc: currentUyTin,
+					diem_sau: refundedUyTin,
+					so_diem_thay_doi: violation.diemTru,
+					cap_canh_bao: newWarning,
+					ly_do: `Hoàn điểm do bác bỏ vi phạm #${violation.id} (Báo động giả)`,
+				};
 			}
 			pointStatus = 'NOT_APPLIED';
 		}
@@ -463,7 +491,7 @@ export const reviewViolationManual = async (
 			},
 		});
 
-		return { updatedViolation: updatedV, updatedDriver: currentDriver };
+		return { updatedViolation: updatedV, updatedDriver: currentDriver, scoreChange: txScoreChange };
 	});
 
 	logAuditAction({
@@ -476,7 +504,7 @@ export const reviewViolationManual = async (
 		lyDo: noteText || `Thẩm định: ${newStatus}`,
 	});
 
-	return { violation: enrichViolationRecord(updatedViolation), updatedDriver };
+	return { violation: enrichViolationRecord(updatedViolation), updatedDriver, scoreChange };
 };
 
 export const getDriverRankings = async () => {

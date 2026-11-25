@@ -9,7 +9,8 @@ export const SOCKET_EVENTS = {
   DEVICE_HEALTH: "device:health",
 };
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:3000";
+const SOCKET_URL =
+  import.meta.env.VITE_SOCKET_URL || "http://172.20.10.2:3000";
 const USE_MOCK_SOCKET = false;
 
 class SocketService {

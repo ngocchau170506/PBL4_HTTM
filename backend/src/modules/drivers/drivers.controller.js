@@ -1,5 +1,6 @@
 import * as driverService from './drivers.service.js';
 import { getDriverBiometricProfile } from '../biometrics/biometrics.service.js';
+import { getSocketIO } from '../iot/iot.service.js';
 
 export const handleGetDrivers = async (req, res, next) => {
   try {
@@ -25,6 +26,13 @@ export const handleGetDriverById = async (req, res, next) => {
 export const handleUpdateDriverStatus = async (req, res, next) => {
   try {
     const updated = await driverService.updateDriverStatus(req.params.id, req.body, req.user);
+    const io = getSocketIO();
+    if (io) {
+      io.emit('violation:updated', { type: 'DRIVER_STATUS_UPDATED', driver_id: updated.id });
+      if (updated.scoreChange) {
+        io.emit('driver:score_changed', updated.scoreChange);
+      }
+    }
     res.json({ success: true, data: updated });
   } catch (error) {
     next(error);

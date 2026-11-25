@@ -71,7 +71,9 @@ export const updateTripStatus = async (req, res) => {
 		const io = getSocketIO();
 		if (io) {
 			io.emit('violation:updated', { type: 'TRIP_STATUS_CHANGED', trip });
-			io.emit('driver:score_changed', { driver_id: trip.driver_id });
+			if (trip.rewardScoreChange) {
+				io.emit('driver:score_changed', trip.rewardScoreChange);
+			}
 		}
 
 		res.json({ success: true, data: trip, trip });

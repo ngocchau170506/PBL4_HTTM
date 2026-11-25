@@ -67,15 +67,38 @@ export function validateSmartSchedule({
   }
 
   const isHardBlocked = Boolean(hardBlockReason);
-  const startHour = newStart.getHours();
-  const isWeakHour = startHour >= 12 && startHour <= 15;
-  const isLongDuration = Number(durationHours) >= 5;
+
+  const checkRangeOverlap = (startHour, endHour) => {
+    const cursor = new Date(newStart);
+    cursor.setHours(0, 0, 0, 0);
+    cursor.setDate(cursor.getDate() - 1);
+    const endDay = new Date(newEnd);
+    endDay.setHours(23, 59, 59, 999);
+
+    while (cursor <= endDay) {
+      const winStart = new Date(cursor);
+      winStart.setHours(startHour, 0, 0, 0);
+      const winEnd = new Date(cursor);
+      winEnd.setHours(endHour, 0, 0, 0);
+      if (newStart < winEnd && newEnd > winStart) return true;
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return false;
+  };
+
+  const isWeakHour =
+    !isNaN(newStart.getTime()) &&
+    !isNaN(newEnd.getTime()) &&
+    (checkRangeOverlap(13, 15) || checkRangeOverlap(1, 4));
+  const isLongDuration = Number(durationHours) > 4;
+  const isYellowWarning = selectedDriver?.cap_canh_bao === "WARNING_YELLOW";
 
   return {
     isHardBlocked,
     hardBlockReason,
     isWeakHour,
     isLongDuration,
+    isYellowWarning,
     newStart,
     newEnd,
   };

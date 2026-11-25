@@ -22,6 +22,9 @@ const ALLOWED_ORIGINS = [
 		'http://localhost:5174',
 		'http://127.0.0.1:5173',
 		'http://127.0.0.1:5174',
+		'http://172.20.10.2:5173',
+		'http://172.20.10.2:5174',
+		'http://172.20.10.2:3000',
 		`http://localhost:${PORT}`,
 		`http://127.0.0.1:${PORT}`,
 		'http://localhost:5000',
@@ -76,11 +79,11 @@ io.on('connection', (socket) => {
 	});
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
 	console.log('==================================================');
 	console.log(`🚀 PBL4 FLEET BACKEND SERVER RUNNING ON PORT ${PORT}`);
 	console.log(`📡 WebSocket / Socket.io Live Tracking Ready`);
-	console.log(`🔗 API Base URL: http://localhost:${PORT}/api/v1`);
-	console.log(`📖 Swagger UI:   http://localhost:${PORT}/api/docs`);
+	console.log(`🔗 API Base URL: http://172.20.10.2:${PORT}/api/v1`);
+	console.log(`📖 Swagger UI:   http://172.20.10.2:${PORT}/api/docs`);
 	console.log('==================================================');
 });

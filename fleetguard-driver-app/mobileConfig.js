@@ -1,4 +1,4 @@
-const SERVER_IP = "172.16.62.179";
+const SERVER_IP = "172.20.10.2";
 
 export const API_CONFIG = {
   USE_MOCK: false,

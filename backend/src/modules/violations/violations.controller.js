@@ -66,10 +66,12 @@ export const createViolation = async (req, res) => {
 				bien_so_xe: result.violation.vehicle?.bien_so_xe || '43C-123.45',
 				driver_name: result.violation.driver?.user?.ho_ten || 'Tài xế',
 			});
-			io.emit('driver:score_changed', {
-				driver_id: result.updatedDriver.userId,
-				diem_sau: result.updatedDriver.uyTin,
-			});
+			if (result.scoreChange) {
+				io.emit('driver:score_changed', {
+					driver_id: result.updatedDriver.userId,
+					...result.scoreChange,
+				});
+			}
 		}
 
 		res.status(201).json({ success: true, data: result.violation, ...result });
@@ -101,11 +103,12 @@ export const reviewViolation = async (req, res) => {
 		const io = getSocketIO();
 		if (io) {
 			io.emit('violation:updated', result.violation);
-			io.emit('driver:score_changed', {
-				driver_id: result.updatedDriver.userId,
-				diem_sau: result.updatedDriver.uyTin,
-				cap_canh_bao: result.updatedDriver.capCanhBao,
-			});
+			if (result.scoreChange) {
+				io.emit('driver:score_changed', {
+					driver_id: result.updatedDriver.userId,
+					...result.scoreChange,
+				});
+			}
 		}
 
 		res.json({ success: true, data: result.violation, ...result });

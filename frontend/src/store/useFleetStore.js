@@ -8,15 +8,15 @@ export const useFleetStore = create((set, get) => ({
   disputes: [],
   liveFleet: [],
   monitoringStats: {
-    activeVehicles: 4,
-    microsleepAlerts: 1,
-    fatigueWarnings: 1,
-    normalVehicles: 2,
+    activeVehicles: 0,
+    microsleepAlerts: 0,
+    fatigueWarnings: 0,
+    normalVehicles: 0,
   },
   selectedVehicle: null,
   activeAlert: null,
   socketStatus: "DISCONNECTED", // CONNECTED | MOCK_LIVE | DISCONNECTED
-  isSimulating: true,
+  isSimulating: false,
   globalSearchQuery: "",
 
   setGlobalSearchQuery: (query) => set({ globalSearchQuery: query }),

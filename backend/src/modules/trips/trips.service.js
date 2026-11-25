@@ -220,15 +220,20 @@ export const updateTripStatus = async (id, trangThai) => {
 		});
 	});
 
+	let rewardScoreChange = null;
 	if (trangThai === 'COMPLETED') {
 		try {
-			await grantSafeTripReward(tripId);
+			const rewardResult = await grantSafeTripReward(tripId);
+			rewardScoreChange = rewardResult?.scoreChange || null;
 		} catch (e) {
 			console.error('Error awarding safe trip reward:', e);
 		}
 	}
 
-	return formatTrip(updatedTrip);
+	return {
+		...formatTrip(updatedTrip),
+		rewardScoreChange,
+	};
 };
 
 export const grantSafeTripReward = async (tripId) => {
@@ -273,11 +278,19 @@ export const grantSafeTripReward = async (tripId) => {
 
 	const currentUyTin = trip.driver.uyTin;
 	const newUyTin = Math.min(100, currentUyTin + rewardPts);
+	let newWarning = 'NORMAL';
+	if (newUyTin <= 20) newWarning = 'SUSPENDED_RED';
+	else if (newUyTin <= 65) newWarning = 'WARNING_YELLOW';
+
+	const reasonText = `Thưởng chuyến xe an toàn (${trip.route?.tenTuyen || 'Tuyến đường'}, ${distance}km).`;
 
 	return prisma.$transaction(async (tx) => {
 		const updatedDriver = await tx.driver.update({
 			where: { userId: trip.driverId },
-			data: { uyTin: newUyTin },
+			data: {
+				uyTin: newUyTin,
+				capCanhBao: newWarning,
+			},
 		});
 
 		const scoreLog = await tx.driverScoreLog.create({
@@ -287,12 +300,23 @@ export const grantSafeTripReward = async (tripId) => {
 				soDiemThayDoi: rewardPts,
 				diemTruoc: currentUyTin,
 				diemSau: newUyTin,
-				lyDo: `Thưởng chuyến xe an toàn (${trip.route?.tenTuyen || 'Tuyến đường'}, ${distance}km).`,
+				lyDo: reasonText,
 				tripId: pTripId,
 			},
 		});
 
-		return { updatedDriver, scoreLog };
+		return {
+			updatedDriver,
+			scoreLog,
+			scoreChange: {
+				driver_id: trip.driverId,
+				diem_truoc: currentUyTin,
+				diem_sau: newUyTin,
+				so_diem_thay_doi: rewardPts,
+				cap_canh_bao: newWarning,
+				ly_do: reasonText,
+			},
+		};
 	});
 };
 
@@ -389,42 +413,88 @@ export const switchActiveDriver = async (
 	{ newDriverId, isOfflineMode = false },
 ) => {
 	const id = parseInt(tripId, 10);
-	const trip = await prisma.trip.findUnique({ where: { id } });
-	if (!trip) throw new Error('Không tìm thấy chuyến đi để đổi tài.');
-
-	// Nếu Mobile không truyền newDriverId, tự tìm một tài xế AVAILABLE khác trong đội
-	let targetDriverId = newDriverId ? parseInt(newDriverId, 10) : null;
-	if (!targetDriverId) {
-		const anotherDriver = await prisma.driver.findFirst({
-			where: {
-				userId: { not: trip.driverId },
-				capCanhBao: { not: 'SUSPENDED_RED' },
-			},
-		});
-		targetDriverId = anotherDriver ? anotherDriver.userId : trip.driverId;
-	}
-
-	const updated = await prisma.trip.update({
+	const trip = await prisma.trip.findUnique({
 		where: { id },
-		data: { driverId: targetDriverId },
 		include: {
 			driver: { include: { user: true } },
 			vehicle: { include: { iotDevice: true } },
 			route: true,
 		},
 	});
+	if (!trip) throw new Error('Không tìm thấy chuyến đi để đổi tài.');
 
-	await prisma.driverCalibrationData.create({
-		data: {
-			driverId: targetDriverId,
-			tripId: id,
-			shiftId: trip.shiftId,
-			vectorDacTrung: JSON.stringify({
-				action: 'SWITCH_CO_DRIVER',
-				mode: isOfflineMode ? 'PENDING_CALIBRATION' : 'ONLINE_SUCCESS',
-			}),
-			ketQua: 'SUCCESS',
-		},
+	let targetDriverId = trip.driverId;
+	const requestedNewId = newDriverId ? parseInt(newDriverId, 10) : null;
+
+	if (requestedNewId && requestedNewId !== trip.driverId) {
+		const candidateDriver = await prisma.driver.findUnique({
+			where: { userId: requestedNewId },
+		});
+		if (!candidateDriver) {
+			throw new Error('Tài xế phụ được chọn không tồn tại trong hệ thống.');
+		}
+		if (
+			candidateDriver.uyTin <= 20 ||
+			candidateDriver.capCanhBao === 'SUSPENDED_RED'
+		) {
+			throw new Error(
+				'Tài xế phụ đang bị đình chỉ, không thể nhận bàn giao tay lái.',
+			);
+		}
+		targetDriverId = candidateDriver.userId;
+	}
+
+	const updated = await prisma.$transaction(async (tx) => {
+		if (targetDriverId !== trip.driverId) {
+			await tx.driver.update({
+				where: { userId: trip.driverId },
+				data: { trangThaiTaiXe: 'AVAILABLE' },
+			});
+			await tx.driver.update({
+				where: { userId: targetDriverId },
+				data: { trangThaiTaiXe: 'ON_TRIP' },
+			});
+		}
+
+		const updatedTrip = await tx.trip.update({
+			where: { id },
+			data: { driverId: targetDriverId },
+			include: {
+				driver: { include: { user: true } },
+				vehicle: { include: { iotDevice: true } },
+				route: true,
+			},
+		});
+
+		await tx.driverCalibrationData.create({
+			data: {
+				driverId: targetDriverId,
+				tripId: id,
+				shiftId: trip.shiftId,
+				vectorDacTrung: JSON.stringify({
+					action: 'SWITCH_CO_DRIVER',
+					previousDriverId: trip.driverId,
+					activeDriverId: targetDriverId,
+					mode: isOfflineMode ? 'PENDING_CALIBRATION' : 'ONLINE_SUCCESS',
+				}),
+				ketQua: 'SUCCESS',
+			},
+		});
+
+		return updatedTrip;
+	});
+
+	logAuditAction({
+		userId: targetDriverId,
+		hanhDong: 'SWITCH_CO_DRIVER',
+		doiTuongLoai: 'TRIP',
+		doiTuongId: String(id),
+		giaTriTruoc: { driver_id: trip.driverId },
+		giaTriSau: { driver_id: targetDriverId },
+		lyDo:
+			targetDriverId !== trip.driverId
+				? `Bàn giao tay lái cho tài xế #${targetDriverId}`
+				: 'Ghi nhận bàn giao Co-driver trên thiết bị cabin',
 	});
 
 	return formatTrip(updated);

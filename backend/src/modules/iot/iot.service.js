@@ -146,8 +146,6 @@ export const processIotDataPacket = async ({
 	// 4. Tự động tạo vi phạm & bắn Socket.io violation:new nếu có cờ AI đi kèm gói Telemetry
 	if (tripInfo && tripInfo.driver) {
 		const driverId = tripInfo.driverId;
-		const videoUrl =
-			'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
 
 		const config = await getAiConfig();
 		const co2Threshold = config.co2_warning_threshold_ppm || 1200;
@@ -172,14 +170,14 @@ export const processIotDataPacket = async ({
 			});
 
 			if (!recentViolation) {
-				const { violation: newViolation, updatedDriver } =
+				const { violation: newViolation, scoreChange } =
 					await createViolationRecord({
 						driverId,
 						tripId: parsedTripId,
 						violationTypeId: detectedType.id,
 						loaiViPham: detectedType.code,
 						diemTru: detectedType.defaultPoints,
-						videoUrl: detectedType.need_video ? videoUrl : null,
+						videoUrl: null,
 						videoDuration: 10,
 						aiConfidenceScore: 0.92,
 						moTa: `${detectedType.icon} ${detectedType.description}`,
@@ -197,13 +195,12 @@ export const processIotDataPacket = async ({
 
 					ioInstance.emit('violation:new', socketViolationPayload);
 					ioInstance.emit('new_violation', socketViolationPayload);
-					ioInstance.emit('driver:score_changed', {
-						driver_id: driverId,
-						diem_sau: updatedDriver.uyTin,
-						so_diem_thay_doi: -newViolation.diem_bi_tru,
-						cap_canh_bao: updatedDriver.capCanhBao,
-						ly_do: `Vi phạm ${detectedType.code} #${newViolation.id}`,
-					});
+					if (scoreChange) {
+						ioInstance.emit('driver:score_changed', {
+							driver_id: driverId,
+							...scoreChange,
+						});
+					}
 				}
 			}
 		}
@@ -266,9 +263,7 @@ export const processEdgeViolation = async ({
 		driverId: parsedDriverId,
 		tripId: parsedTripId,
 		loaiViPham: ma_loai || loaiViPham || 'MICROSLEEP',
-		videoUrl:
-			videoUrl ||
-			'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+		videoUrl: videoUrl || null,
 		videoDuration: 10,
 		aiConfidenceScore: confidence,
 		moTa: mo_ta || moTa,
@@ -283,11 +278,12 @@ export const processEdgeViolation = async ({
 			driver_name: tripInfo?.driver?.user?.hoTen || 'Tài xế',
 		};
 		ioInstance.emit('violation:new', socketPayload);
-		ioInstance.emit('driver:score_changed', {
-			driver_id: parsedDriverId,
-			diem_sau: result.updatedDriver.uyTin,
-			cap_canh_bao: result.updatedDriver.capCanhBao,
-		});
+		if (result.scoreChange) {
+			ioInstance.emit('driver:score_changed', {
+				driver_id: parsedDriverId,
+				...result.scoreChange,
+			});
+		}
 	}
 
 	return {

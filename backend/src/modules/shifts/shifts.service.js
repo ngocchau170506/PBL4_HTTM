@@ -48,6 +48,223 @@ export const getAllShifts = async ({ driverId, status } = {}) => {
 	return shifts.map(formatShift);
 };
 
+const parseTimeToMinutes = (timeStr) => {
+	const [h, m] = String(timeStr || '')
+		.trim()
+		.split(':')
+		.map((n) => parseInt(n, 10));
+	if (Number.isNaN(h)) return null;
+	return h * 60 + (Number.isNaN(m) ? 0 : m);
+};
+
+const checkWeakWindowOverlap = (startTime, endTime, rawWindows) => {
+	let windows = ['13:00-15:00', '01:00-04:00'];
+	if (rawWindows) {
+		try {
+			const parsed =
+				typeof rawWindows === 'string' ? JSON.parse(rawWindows) : rawWindows;
+			if (Array.isArray(parsed) && parsed.length > 0) {
+				windows = parsed;
+			}
+		} catch {
+			// fallback to default windows
+		}
+	}
+
+	const overlapped = new Set();
+	const cursor = new Date(startTime);
+	cursor.setHours(0, 0, 0, 0);
+	cursor.setDate(cursor.getDate() - 1);
+
+	const endDay = new Date(endTime);
+	endDay.setHours(23, 59, 59, 999);
+
+	while (cursor <= endDay) {
+		for (const w of windows) {
+			const parts = String(w).replace(/\s+/g, '').split('-');
+			if (parts.length !== 2) continue;
+			const startMin = parseTimeToMinutes(parts[0]);
+			const endMin = parseTimeToMinutes(parts[1]);
+			if (startMin === null || endMin === null) continue;
+
+			const winStart = new Date(cursor);
+			winStart.setHours(Math.floor(startMin / 60), startMin % 60, 0, 0);
+
+			const winEnd = new Date(cursor);
+			winEnd.setHours(Math.floor(endMin / 60), endMin % 60, 0, 0);
+			if (endMin <= startMin) {
+				winEnd.setDate(winEnd.getDate() + 1);
+			}
+
+			if (startTime < winEnd && endTime > winStart) {
+				overlapped.add(String(w).trim());
+			}
+		}
+		cursor.setDate(cursor.getDate() + 1);
+	}
+
+	return Array.from(overlapped);
+};
+
+const validateShiftConstraints = async ({
+	driverId,
+	vehicleId,
+	startTime,
+	endTime,
+	lyDoOverride,
+	excludeShiftId = null,
+	skipTimeChecks = false,
+}) => {
+	if (isNaN(startTime.getTime()) || !endTime || isNaN(endTime.getTime())) {
+		throw new Error('Thời gian ca làm việc không hợp lệ.');
+	}
+
+	if (startTime >= endTime) {
+		throw new Error('Thời gian bắt đầu ca phải diễn ra trước thời gian kết thúc.');
+	}
+
+	const idExcludeFilter = excludeShiftId ? { id: { not: excludeShiftId } } : {};
+
+	// 1. Kiểm tra Tài xế đình chỉ
+	const driver = await prisma.driver.findUnique({ where: { userId: driverId } });
+	if (driver && (driver.uyTin <= 20 || driver.capCanhBao === 'SUSPENDED_RED')) {
+		throw new Error(
+			'CHẶN: Tài xế này đang bị đình chỉ công tác (Điểm uy tín <= 20 hoặc Báo động đỏ). Không thể xếp ca.',
+		);
+	}
+
+	// 2. Kiểm tra Xe bảo dưỡng
+	const vehicle = await prisma.vehicle.findUnique({ where: { id: vehicleId } });
+	if (vehicle && vehicle.trangThai === 'MAINTENANCE') {
+		throw new Error(
+			'CHẶN: Phương tiện này đang trong xưởng bảo dưỡng. Không thể xếp ca.',
+		);
+	}
+
+	// 3. Kiểm tra trùng lặp lịch phương tiện
+	const overlappingVehicleShift = await prisma.shift.findFirst({
+		where: {
+			...idExcludeFilter,
+			vehicleId,
+			trangThai: { notIn: ['CANCELLED', 'DECLINED'] },
+			thoiGianBatDauDuKien: { lt: endTime },
+			thoiGianKetThucDuKien: { gt: startTime },
+		},
+	});
+	if (overlappingVehicleShift) {
+		throw new Error(
+			'CHẶN: Phương tiện này đã được xếp vào một ca làm việc khác trong khoảng thời gian đã chọn.',
+		);
+	}
+
+	const warnings = [];
+	if (!skipTimeChecks) {
+		// 4. Lấy cấu hình hệ thống động
+		const config = await getAiConfig();
+		const minRestHours = config.min_rest_hours ?? 8.0;
+
+		// 5. Kiểm tra trùng lặp ca trực của Tài xế
+		const overlappingDriverShift = await prisma.shift.findFirst({
+			where: {
+				...idExcludeFilter,
+				driverId,
+				trangThai: { notIn: ['CANCELLED', 'DECLINED'] },
+				thoiGianBatDauDuKien: { lt: endTime },
+				thoiGianKetThucDuKien: { gt: startTime },
+			},
+		});
+		if (overlappingDriverShift) {
+			throw new Error(
+				'CHẶN: Tài xế này đã có một ca làm việc khác trùng với khoảng thời gian đã chọn.',
+			);
+		}
+
+		// 6. Kiểm tra khoảng thời gian nghỉ tối thiểu trước & sau ca
+		const prevShift = await prisma.shift.findFirst({
+			where: {
+				...idExcludeFilter,
+				driverId,
+				trangThai: { notIn: ['CANCELLED', 'DECLINED'] },
+				thoiGianKetThucDuKien: { lte: startTime },
+			},
+			orderBy: { thoiGianKetThucDuKien: 'desc' },
+		});
+
+		if (prevShift) {
+			const restHoursBefore =
+				(startTime.getTime() -
+					new Date(prevShift.thoiGianKetThucDuKien).getTime()) /
+				(1000 * 3600);
+			if (restHoursBefore < minRestHours) {
+				throw new Error(
+					`CHẶN: Khoảng thời gian nghỉ giữa ca trước và ca này chỉ có ${restHoursBefore.toFixed(1)}h (< ${minRestHours}h tối thiểu theo quy định). Không thể xếp ca.`,
+				);
+			}
+		}
+
+		const nextShift = await prisma.shift.findFirst({
+			where: {
+				...idExcludeFilter,
+				driverId,
+				trangThai: { notIn: ['CANCELLED', 'DECLINED'] },
+				thoiGianBatDauDuKien: { gte: endTime },
+			},
+			orderBy: { thoiGianBatDauDuKien: 'asc' },
+		});
+
+		if (nextShift) {
+			const restHoursAfter =
+				(new Date(nextShift.thoiGianBatDauDuKien).getTime() -
+					endTime.getTime()) /
+				(1000 * 3600);
+			if (restHoursAfter < minRestHours) {
+				throw new Error(
+					`CHẶN: Khoảng thời gian nghỉ giữa ca này và ca sau chỉ có ${restHoursAfter.toFixed(1)}h (< ${minRestHours}h tối thiểu theo quy định). Không thể xếp ca.`,
+				);
+			}
+		}
+
+		// 7. Kiểm tra Hồ sơ Sinh học động & cấp cảnh báo tài xế
+		const profile = await prisma.driverBiometricProfile.findFirst({
+			where: { driverId },
+			orderBy: { createdAt: 'desc' },
+		});
+
+		const shiftMinutes = (endTime.getTime() - startTime.getTime()) / (1000 * 60);
+		const maxDriveMinutes = profile?.thoiGianLaiToiDaKhuyenNghi || 240;
+		if (shiftMinutes > maxDriveMinutes) {
+			warnings.push(
+				`CẢNH BÁO: Tổng thời gian lái ca dự kiến (${(shiftMinutes / 60).toFixed(1)}h) vượt mức khuyến nghị sinh học (${(maxDriveMinutes / 60).toFixed(1)}h).`,
+			);
+		}
+
+		const overlappedWeakWindows = checkWeakWindowOverlap(
+			startTime,
+			endTime,
+			profile?.khungGioYeuSinhHoc,
+		);
+		if (overlappedWeakWindows.length > 0) {
+			warnings.push(
+				`LƯU Ý: Ca làm việc giao thoa với khung giờ yếu sinh học của tài xế (${overlappedWeakWindows.join(', ')}).`,
+			);
+		}
+
+		if (driver?.capCanhBao === 'WARNING_YELLOW') {
+			warnings.push(
+				`CẢNH BÁO: Tài xế đang ở mức Cảnh cáo vàng (Uy tín: ${driver.uyTin}/100).`,
+			);
+		}
+
+		if (warnings.length > 0 && !String(lyDoOverride || '').trim()) {
+			throw new Error(
+				`CẢNH BÁO SINH HỌC (Yêu cầu nhập lý do ghi đè): ${warnings.join(' ')}`,
+			);
+		}
+	}
+
+	return { warnings };
+};
+
 export const createShift = async ({
 	driverId,
 	driver_id,
@@ -79,127 +296,13 @@ export const createShift = async ({
 		endTime = new Date(startTime.getTime() + Number(durationHours) * 3600000);
 	}
 
-	if (isNaN(startTime.getTime()) || !endTime || isNaN(endTime.getTime())) {
-		throw new Error('Thời gian ca làm việc không hợp lệ.');
-	}
-
-	if (startTime >= endTime) {
-		throw new Error('Thời gian bắt đầu ca phải diễn ra trước thời gian kết thúc.');
-	}
-
-	// 1. Kiểm tra Tài xế đình chỉ
-	const driver = await prisma.driver.findUnique({ where: { userId: pDriverId } });
-	if (driver && (driver.uyTin <= 20 || driver.capCanhBao === 'SUSPENDED_RED')) {
-		throw new Error(
-			'CHẶN: Tài xế này đang bị đình chỉ công tác (Điểm uy tín <= 20 hoặc Báo động đỏ). Không thể xếp ca.',
-		);
-	}
-
-	// 2. Kiểm tra Xe bảo dưỡng
-	const vehicle = await prisma.vehicle.findUnique({ where: { id: pVehicleId } });
-	if (vehicle && vehicle.trangThai === 'MAINTENANCE') {
-		throw new Error(
-			'CHẶN: Phương tiện này đang trong xưởng bảo dưỡng. Không thể xếp ca.',
-		);
-	}
-
-	// 3. Lấy cấu hình hệ thống động
-	const config = await getAiConfig();
-	const minRestHours = config.min_rest_hours ?? 8.0;
-
-	// 4. Kiểm tra trùng lặp ca trực của Tài xế
-	const overlappingDriverShift = await prisma.shift.findFirst({
-		where: {
-			driverId: pDriverId,
-			trangThai: { notIn: ['CANCELLED', 'DECLINED'] },
-			thoiGianBatDauDuKien: { lt: endTime },
-			thoiGianKetThucDuKien: { gt: startTime },
-		},
+	const { warnings } = await validateShiftConstraints({
+		driverId: pDriverId,
+		vehicleId: pVehicleId,
+		startTime,
+		endTime,
+		lyDoOverride: ly_do_override,
 	});
-	if (overlappingDriverShift) {
-		throw new Error(
-			'CHẶN: Tài xế này đã có một ca làm việc khác trùng với khoảng thời gian đã chọn.',
-		);
-	}
-
-	// 5. Kiểm tra trùng lặp lịch phương tiện
-	const overlappingVehicleShift = await prisma.shift.findFirst({
-		where: {
-			vehicleId: pVehicleId,
-			trangThai: { notIn: ['CANCELLED', 'DECLINED'] },
-			thoiGianBatDauDuKien: { lt: endTime },
-			thoiGianKetThucDuKien: { gt: startTime },
-		},
-	});
-	if (overlappingVehicleShift) {
-		throw new Error(
-			'CHẶN: Phương tiện này đã được xếp vào một ca làm việc khác trong khoảng thời gian đã chọn.',
-		);
-	}
-
-	// 6. Kiểm tra khoảng thời gian nghỉ tối thiểu
-	const prevShift = await prisma.shift.findFirst({
-		where: {
-			driverId: pDriverId,
-			trangThai: { notIn: ['CANCELLED', 'DECLINED'] },
-			thoiGianKetThucDuKien: { lte: startTime },
-		},
-		orderBy: { thoiGianKetThucDuKien: 'desc' },
-	});
-
-	if (prevShift) {
-		const restHoursBefore =
-			(startTime.getTime() - new Date(prevShift.thoiGianKetThucDuKien).getTime()) /
-			(1000 * 3600);
-		if (restHoursBefore < minRestHours) {
-			throw new Error(
-				`CHẶN: Khoảng thời gian nghỉ giữa ca trước và ca này chỉ có ${restHoursBefore.toFixed(1)}h (< ${minRestHours}h tối thiểu theo quy định). Không thể tạo ca.`,
-			);
-		}
-	}
-
-	const nextShift = await prisma.shift.findFirst({
-		where: {
-			driverId: pDriverId,
-			trangThai: { notIn: ['CANCELLED', 'DECLINED'] },
-			thoiGianBatDauDuKien: { gte: endTime },
-		},
-		orderBy: { thoiGianBatDauDuKien: 'asc' },
-	});
-
-	if (nextShift) {
-		const restHoursAfter =
-			(new Date(nextShift.thoiGianBatDauDuKien).getTime() - endTime.getTime()) /
-			(1000 * 3600);
-		if (restHoursAfter < minRestHours) {
-			throw new Error(
-				`CHẶN: Khoảng thời gian nghỉ giữa ca này và ca sau chỉ có ${restHoursAfter.toFixed(1)}h (< ${minRestHours}h tối thiểu theo quy định). Không thể tạo ca.`,
-			);
-		}
-	}
-
-	// 7. Kiểm tra Hồ sơ Sinh học
-	const warnings = [];
-	const profile = await prisma.driverBiometricProfile.findFirst({
-		where: { driverId: pDriverId },
-		orderBy: { createdAt: 'desc' },
-	});
-
-	if (profile) {
-		const shiftMinutes = (endTime.getTime() - startTime.getTime()) / (1000 * 60);
-		if (shiftMinutes > profile.thoiGianLaiToiDaKhuyenNghi) {
-			warnings.push(
-				`CẢNH BÁO: Tổng thời gian lái ca dự kiến (${(shiftMinutes / 60).toFixed(1)}h) vượt mức khuyến nghị sinh học (${(profile.thoiGianLaiToiDaKhuyenNghi / 60).toFixed(1)}h).`,
-			);
-		}
-
-		const startHour = startTime.getHours();
-		if ((startHour >= 13 && startHour <= 15) || (startHour >= 1 && startHour <= 4)) {
-			warnings.push(
-				`LƯU Ý: Ca rơi vào khung giờ yếu sinh học của tài xế (${startHour}:00h). Nhắc nhở tài xế nghỉ ngơi đầy đủ.`,
-			);
-		}
-	}
 
 	const shift = await prisma.shift.create({
 		data: {
@@ -277,6 +380,30 @@ export const updateShift = async (shiftId, updatedData, actorUser) => {
 		updatedData.ly_do_override !== undefined
 	) {
 		data.lyDoOverride = updatedData.lyDoOverride ?? updatedData.ly_do_override;
+	}
+
+	const targetDriverId = data.driverId ?? oldShift.driverId;
+	const targetVehicleId = data.vehicleId ?? oldShift.vehicleId;
+	const targetStart = data.thoiGianBatDauDuKien ?? oldShift.thoiGianBatDauDuKien;
+	const targetEnd = data.thoiGianKetThucDuKien ?? oldShift.thoiGianKetThucDuKien;
+	const targetStatus = data.trangThai ?? oldShift.trangThai;
+	const targetOverride =
+		data.lyDoOverride !== undefined ? data.lyDoOverride : oldShift.lyDoOverride;
+
+	if (!['CANCELLED', 'DECLINED', 'COMPLETED'].includes(targetStatus)) {
+		const skipTimeChecks = oldShift.trangThai === 'ACCEPTED';
+		const { warnings } = await validateShiftConstraints({
+			driverId: targetDriverId,
+			vehicleId: targetVehicleId,
+			startTime: new Date(targetStart),
+			endTime: new Date(targetEnd),
+			lyDoOverride: targetOverride,
+			excludeShiftId: id,
+			skipTimeChecks,
+		});
+		if (!skipTimeChecks) {
+			data.canhBaoKhiTao = JSON.stringify(warnings);
+		}
 	}
 
 	const updatedShift = await prisma.shift.update({

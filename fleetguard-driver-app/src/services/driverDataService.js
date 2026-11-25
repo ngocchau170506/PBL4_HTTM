@@ -90,7 +90,7 @@ let mockDriverState = {
 };
 
 const formatDateTimeVN = (isoStr) => {
-  if (!isoStr) return "22/10/2026 • 14:00";
+  if (!isoStr) return "Chưa xác định";
   try {
     const d = new Date(isoStr);
     if (isNaN(d.getTime())) return String(isoStr);
@@ -151,7 +151,9 @@ export const driverDataService = {
       return {
         user: { ...mockDriverState.user },
         biometricProfile: { ...mockDriverState.biometricProfile },
-        currentShift: { ...mockDriverState.currentShift },
+        currentShift: mockDriverState.currentShift
+          ? { ...mockDriverState.currentShift }
+          : null,
         scoreLogs: [...mockDriverState.scoreLogs],
         violations: [...mockDriverState.violations],
       };
@@ -188,18 +190,21 @@ export const driverDataService = {
       }
 
       if (bio) {
+        const currentScore = mockDriverState.user.diem_uy_tin ?? 100;
+        const maxDriveMin = bio.thoiGianLaiToiDaKhuyenNghi || 240;
+        const avgDriveMin = bio.thoiGianLaiTrungBinhTruocMetMoi || 180;
         mockDriverState.biometricProfile = {
           khung_gio_yeu_sinh_hoc: bio.khungGioYeuSinhHoc || [
             "13:00 - 15:00",
             "01:00 - 04:00",
           ],
-          thoi_gian_lai_toi_da_khuyen_nghi_phut:
-            bio.thoiGianLaiToiDaKhuyenNghi || 180,
-          thoi_gian_lai_trung_binh_truoc_met_moi_phut:
-            bio.thoiGianLaiTrungBinhTruocMetMoi || 145,
+          thoi_gian_lai_toi_da_khuyen_nghi_phut: maxDriveMin,
+          thoi_gian_lai_trung_binh_truoc_met_moi_phut: avgDriveMin,
           ear_baseline: 0.285,
           danh_gia:
-            bio.danhGiaChung || mockDriverState.biometricProfile.danh_gia,
+            bio.danh_gia_chung ||
+            bio.danhGiaChung ||
+            `Điểm uy tín ${currentScore}/100. Hệ thống khuyến nghị nghỉ giải lao 15 phút sau mỗi ${Math.round(avgDriveMin / 60)} giờ lái liên tục.`,
         };
       }
 
@@ -231,46 +236,85 @@ export const driverDataService = {
           ? latestShift.canh_bao_khi_tao.join(" ")
           : "";
 
+        let restStopDisplay = "Theo lộ trình điều phối";
+        const rawRestStops =
+          rt.danh_sach_tram_dung_chan || rt.danhSachTramDungChan;
+        if (rawRestStops) {
+          try {
+            const parsedStops =
+              typeof rawRestStops === "string"
+                ? JSON.parse(rawRestStops)
+                : rawRestStops;
+            if (
+              Array.isArray(parsedStops) &&
+              parsedStops.length > 0 &&
+              parsedStops[0]?.ten
+            ) {
+              restStopDisplay = `${parsedStops[0].ten}${parsedStops[0].kmMarker ? ` (Km ${parsedStops[0].kmMarker})` : ""}`;
+            }
+          } catch {
+            // ignore parse error
+          }
+        }
+
         mockDriverState.currentShift = {
-          ...mockDriverState.currentShift,
-          id: latestShift?.id || matchedTrip?.shift_id || 2,
+          id:
+            latestShift?.id ||
+            matchedTrip?.shift_id ||
+            matchedTrip?.shiftId ||
+            null,
           trip_id: matchedTrip?.id || null,
-          bien_so_xe: veh.bien_so_xe || veh.bienSo || "43H-567.89",
-          loai_xe: veh.loai_xe || veh.loaiXe || "Xe tải thùng 8 tấn",
-          ma_thiet_bi: `${veh.iot_device?.ma_thiet_bi || veh.iotDevice?.maThietBi || "IOT-DN-02"} (Pi 4 + ESP32)`,
+          bien_so_xe: veh.bien_so_xe || veh.bienSo || "Chưa gán xe",
+          loai_xe: veh.loai_xe || veh.loaiXe || "Phương tiện vận tải",
+          ma_thiet_bi: `${veh.iot_device?.ma_thiet_bi || veh.iotDevice?.maThietBi || "IOT-EDGE"} (Pi 4 + ESP32)`,
           ten_tuyen:
-            rt.ten_tuyen ||
-            rt.tenTuyen ||
-            mockDriverState.currentShift.ten_tuyen,
-          khoang_cach_km: rt.khoang_cach_km || rt.khoangCachKm || 138.0,
+            rt.ten_tuyen || rt.tenTuyen || "Chưa xác định tuyến đường",
+          khoang_cach_km: rt.khoang_cach_km || rt.khoangCachKm || 0,
           thoi_gian_bat_dau: formatDateTimeVN(
             latestShift?.thoi_gian_bat_dau_du_kien ||
-              matchedTrip?.thoi_gian_bat_dau,
+              latestShift?.thoiGianBatDauDuKien ||
+              matchedTrip?.thoi_gian_bat_dau ||
+              matchedTrip?.thoiGianBatDau,
           ),
           thoi_gian_ket_thuc: formatDateTimeVN(
-            latestShift?.thoi_gian_ket_thuc_du_kien,
+            latestShift?.thoi_gian_ket_thuc_du_kien ||
+              latestShift?.thoiGianKetThucDuKien ||
+              matchedTrip?.thoi_gian_ket_thuc ||
+              matchedTrip?.thoiGianKetThuc,
           ),
           tai_xe_chinh: mockDriverState.user.ho_ten,
+          tai_xe_phu: latestShift?.tai_xe_phu || null,
           active_driver_name:
-            matchedTrip?.driver?.user?.ho_ten || mockDriverState.user.ho_ten,
-          shift_status: latestShift?.trang_thai || "ACCEPTED",
+            matchedTrip?.driver?.user?.ho_ten ||
+            matchedTrip?.driver?.user?.hoTen ||
+            mockDriverState.user.ho_ten,
+          shift_status:
+            latestShift?.trang_thai || latestShift?.trangThai || "ACCEPTED",
           trip_status:
-            matchedTrip?.trang_thai === "IN_PROGRESS"
+            matchedTrip?.trang_thai === "IN_PROGRESS" ||
+            matchedTrip?.trangThai === "IN_PROGRESS"
               ? "IN_PROGRESS"
-              : matchedTrip?.trang_thai === "RESTING"
+              : matchedTrip?.trang_thai === "RESTING" ||
+                  matchedTrip?.trangThai === "RESTING"
                 ? "RESTING"
-                : matchedTrip?.trang_thai === "COMPLETED"
+                : matchedTrip?.trang_thai === "COMPLETED" ||
+                    matchedTrip?.trangThai === "COMPLETED"
                   ? "COMPLETED"
                   : "NOT_STARTED",
+          calibration_mode: null,
           canh_bao_sinh_hoc:
-            warnings || mockDriverState.currentShift.canh_bao_sinh_hoc,
+            warnings ||
+            "Ca trực nằm trong khung giờ an toàn, phù hợp với nhịp sinh học của bạn.",
           telemetry: {
-            toc_do_kmh: matchedTrip?.latest_telemetry?.toc_do_kmh ?? 64,
-            co2_ppm: matchedTrip?.latest_telemetry?.co2_ppm ?? 780,
-            cpu_temp_c: veh.iot_device?.cpu_temp_c ?? 63.5,
-            nearest_rest_stop: "Trạm dịch vụ Tam Kỳ (Cách 14 km)",
+            toc_do_kmh: matchedTrip?.latest_telemetry?.toc_do_kmh ?? 0,
+            co2_ppm: matchedTrip?.latest_telemetry?.co2_ppm ?? 450,
+            cpu_temp_c:
+              veh.iot_device?.cpu_temp_c ?? veh.iotDevice?.cpuTempC ?? null,
+            nearest_rest_stop: restStopDisplay,
           },
         };
+      } else {
+        mockDriverState.currentShift = null;
       }
 
       if (Array.isArray(scoreLogs)) {
@@ -338,7 +382,9 @@ export const driverDataService = {
     return {
       user: { ...mockDriverState.user },
       biometricProfile: { ...mockDriverState.biometricProfile },
-      currentShift: { ...mockDriverState.currentShift },
+      currentShift: mockDriverState.currentShift
+        ? { ...mockDriverState.currentShift }
+        : null,
       scoreLogs: [...mockDriverState.scoreLogs],
       violations: [...mockDriverState.violations],
     };
@@ -346,6 +392,7 @@ export const driverDataService = {
 
   // 3. TÀI XẾ NHẬN CA / TỪ CHỐI CA
   async respondShift(decision, reason = "") {
+    if (!mockDriverState.currentShift) return null;
     if (!USE_MOCK && authToken) {
       const shiftId = mockDriverState.currentShift.id;
       await apiRequest(`/shifts/${shiftId}/respond`, {
@@ -362,6 +409,7 @@ export const driverDataService = {
 
   // 4. HIỆU CHUẨN KHUÔN MẶT ĐẦU CA & BẮT ĐẦU CHUYẾN (ONLINE / OFFLINE HANDOVER)
   async completeCalibration(isOfflineMode = false) {
+    if (!mockDriverState.currentShift) return null;
     if (!USE_MOCK && authToken && !isOfflineMode) {
       const trip = await apiRequest("/trips/start", {
         method: "POST",
@@ -385,6 +433,7 @@ export const driverDataService = {
 
   // 5. TẠM DỪNG NGHỈ TẠI TRẠM (RESTING)
   async toggleResting() {
+    if (!mockDriverState.currentShift) return null;
     const current = mockDriverState.currentShift.trip_status;
     const nextStatus = current === "RESTING" ? "IN_PROGRESS" : "RESTING";
 
@@ -403,6 +452,7 @@ export const driverDataService = {
   // 6. ĐỔI TÀI (CO-DRIVING HANDOVER)
   async switchCoDriver(isOfflineMode = false) {
     const shift = mockDriverState.currentShift;
+    if (!shift) return null;
     if (!USE_MOCK && authToken && !isOfflineMode) {
       await apiRequest(`/trips/${shift.trip_id}/switch-driver`, {
         method: "POST",
@@ -422,6 +472,7 @@ export const driverDataService = {
 
   // 7. HOÀN THÀNH CHUYẾN ĐI
   async completeTrip() {
+    if (!mockDriverState.currentShift) return null;
     if (!USE_MOCK && authToken) {
       const tripId = mockDriverState.currentShift.trip_id;
       await apiRequest(`/trips/${tripId}/status`, {

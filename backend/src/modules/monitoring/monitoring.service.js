@@ -65,18 +65,22 @@ export const getPriorityFleet = async () => {
 				latestViolation?.loaiViPham?.includes('MICROSLEEP') ||
 				(latestLog?.co2Level && latestLog.co2Level > 1100));
 
-		const speed = isOnTrip
-			? latestLog?.tocDo
-				? Math.round(latestLog.tocDo)
-				: 65
-			: 0;
-		const co2 = isOnTrip
-			? latestLog?.co2Level
-				? Math.round(latestLog.co2Level)
-				: isDanger
-					? 1340
-					: 680
-			: 450;
+		const speed =
+			isOnTrip && latestLog?.tocDo != null ? Math.round(latestLog.tocDo) : 0;
+		const co2 =
+			latestLog?.co2Level != null ? Math.round(latestLog.co2Level) : 450;
+
+		let restStopName = 'Trạm Dừng Nghỉ Nam Hải Vân (Km 22)';
+		if (routeObj?.danhSachTramDungChan) {
+			try {
+				const parsedStops = JSON.parse(routeObj.danhSachTramDungChan);
+				if (Array.isArray(parsedStops) && parsedStops.length > 0 && parsedStops[0]?.ten) {
+					restStopName = `${parsedStops[0].ten}${parsedStops[0].kmMarker ? ` (Km ${parsedStops[0].kmMarker})` : ''}`;
+				}
+			} catch {
+				// fallback to default name
+			}
+		}
 
 		const driverDisplayName = driver?.user?.hoTen
 			? isOnTrip
@@ -119,18 +123,18 @@ export const getPriorityFleet = async () => {
 					: 'Phương tiện đang dừng đỗ tại bãi, sẵn sàng cho ca chạy tiếp theo.',
 			countdownSeconds: isDanger ? 769 : 900,
 			nearestRestStop: {
-				name: 'Trạm Dừng Nghỉ Nam Hải Vân (Km 22)',
+				name: restStopName,
 			},
 			iot_device: v.iotDevice
 				? {
 						...v.iotDevice,
 						ma_thiet_bi: v.iotDevice.maThietBi || `IOT-DN-0${v.id}`,
-						cpu_serial: v.iotDevice.cpuSerial || '10000000a1b2c3d4',
-						cpu_temp_c: v.iotDevice.cpuTempC || 64.5,
-						free_storage_mb: v.iotDevice.freeStorageMb || 24500,
+						cpu_serial: v.iotDevice.cpuSerial || null,
+						cpu_temp_c: v.iotDevice.cpuTempC ?? null,
+						free_storage_mb: v.iotDevice.freeStorageMb ?? null,
 						ai_model_version: v.iotDevice.aiModelVersion || 'yolo26n-v1.1',
-						trang_thai_ket_noi: v.iotDevice.trangThaiKetNoi || 'ONLINE',
-						last_heartbeat_at: v.iotDevice.lastHeartbeatAt || new Date(),
+						trang_thai_ket_noi: v.iotDevice.trangThaiKetNoi || 'OFFLINE',
+						last_heartbeat_at: v.iotDevice.lastHeartbeatAt || null,
 					}
 				: null,
 		};
@@ -138,21 +142,56 @@ export const getPriorityFleet = async () => {
 };
 
 export const getMonitoringStats = async () => {
-	const [vehicles, activeVehicles, pendingViolations] = await Promise.all([
-		prisma.vehicle.count(),
-		prisma.vehicle.count({ where: { trangThai: 'IN_USE' } }),
-		prisma.violation.count({
-			where: {
-				trangThai: 'PENDING_MANUAL_REVIEW',
-			},
-		}),
-	]);
+	const startOfDay = new Date();
+	startOfDay.setHours(0, 0, 0, 0);
+
+	const [vehicles, activeVehicles, microsleepAlerts, fatigueWarnings] =
+		await Promise.all([
+			prisma.vehicle.count({ where: { trangThai: { not: 'MAINTENANCE' } } }),
+			prisma.vehicle.count({
+				where: {
+					OR: [
+						{ trangThai: 'IN_USE' },
+						{
+							trips: {
+								some: { trangThai: { in: ['IN_PROGRESS', 'RESTING'] } },
+							},
+						},
+					],
+				},
+			}),
+			prisma.violation.count({
+				where: {
+					loaiViPham: { in: ['MICROSLEEP', 'BUON_NGU'] },
+					trangThai: {
+						in: ['CONFIRMED', 'MANUALLY_CONFIRMED', 'PENDING_MANUAL_REVIEW'],
+					},
+					thoiGianViPham: { gte: startOfDay },
+				},
+			}),
+			prisma.violation.count({
+				where: {
+					loaiViPham: {
+						in: [
+							'YAWNING_FATIGUE',
+							'HIGH_CO2',
+							'PHONE_DISTRACTION',
+							'DEVICE_TAMPERING',
+						],
+					},
+					trangThai: {
+						in: ['CONFIRMED', 'MANUALLY_CONFIRMED', 'PENDING_MANUAL_REVIEW'],
+					},
+					thoiGianViPham: { gte: startOfDay },
+				},
+			}),
+		]);
 
 	return {
-		activeVehicles: activeVehicles || 2,
-		microsleepAlerts: pendingViolations || 1,
-		fatigueWarnings: 1,
-		normalVehicles: Math.max(1, vehicles - (pendingViolations || 1)),
+		activeVehicles,
+		microsleepAlerts,
+		fatigueWarnings,
+		normalVehicles: Math.max(0, vehicles - microsleepAlerts),
 	};
 };
 

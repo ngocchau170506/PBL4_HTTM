@@ -98,6 +98,7 @@ export default function ShiftDetailModal({
     hardBlockReason,
     isWeakHour,
     isLongDuration,
+    isYellowWarning,
     newStart,
     newEnd,
   } = validateSmartSchedule({
@@ -136,7 +137,7 @@ export default function ShiftDetailModal({
     }
     if (
       !isAcceptedOnlyVehicle &&
-      (isLongDuration || isWeakHour) &&
+      (isLongDuration || isWeakHour || isYellowWarning) &&
       !overrideReason.trim()
     ) {
       toast.error("Bắt buộc nhập lý do ghi đè!");
@@ -153,6 +154,11 @@ export default function ShiftDetailModal({
       alerts.push({
         level: "SOFT_WARNING",
         message: `Ca dài (${durationHours}h) vượt mức khuyến nghị`,
+      });
+    if (isYellowWarning)
+      alerts.push({
+        level: "SOFT_WARNING",
+        message: `Tài xế đang ở mức Cảnh cáo vàng (Uy tín: ${selectedDriver?.diem_uy_tin ?? 65}/100)`,
       });
 
     await onUpdateShift(shift.id, {
@@ -343,7 +349,8 @@ export default function ShiftDetailModal({
                   {hardBlockReason}
                 </p>
               </div>
-            ) : !isAcceptedOnlyVehicle && (isWeakHour || isLongDuration) ? (
+            ) : !isAcceptedOnlyVehicle &&
+              (isWeakHour || isLongDuration || isYellowWarning) ? (
               <div className="border-alert-warning/40 bg-alert-warning/15 text-alert-warning space-y-2 rounded-2xl border p-3.5">
                 <div className="flex items-center gap-2 font-bold">
                   <AlertTriangle className="h-4 w-4 shrink-0" />
@@ -351,9 +358,11 @@ export default function ShiftDetailModal({
                 </div>
                 <p className="text-brand-text-secondary text-[11px] leading-relaxed">
                   {isWeakHour &&
-                    "• Ca chạy giao thoa với khung giờ yếu sinh học (13:00 - 15:00). "}
+                    "• Ca chạy giao thoa với khung giờ yếu sinh học (13:00 - 15:00 / 01:00 - 04:00). "}
                   {isLongDuration &&
-                    `• Thời lượng ca (${durationHours}h) vượt mức khuyến nghị.`}
+                    `• Thời lượng ca (${durationHours}h) vượt mức khuyến nghị. `}
+                  {isYellowWarning &&
+                    `• Tài xế đang ở mức Cảnh cáo vàng (Uy tín: ${selectedDriver?.diem_uy_tin ?? 65}/100).`}
                 </p>
                 <InputField
                   label="Lý do ghi đè"

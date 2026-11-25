@@ -84,10 +84,35 @@ export const updateDriverStatus = async (driverId, { cap_canh_bao, ly_do }, acto
     updateData.trangThaiTaiXe = 'AVAILABLE';
   }
 
-  const updatedDriver = await prisma.driver.update({
-    where: { userId: id },
-    data: updateData,
-    include: { user: true },
+  const targetScore = updateData.uyTin ?? oldScore;
+  const scoreDiff = targetScore - oldScore;
+  const scoreReason =
+    ly_do ||
+    (newStatus === 'SUSPENDED_RED'
+      ? 'Quản trị viên khóa khẩn cấp tài khoản tài xế'
+      : 'Quản trị viên mở khóa và khôi phục điểm uy tín tài xế');
+
+  const updatedDriver = await prisma.$transaction(async (tx) => {
+    const savedDriver = await tx.driver.update({
+      where: { userId: id },
+      data: updateData,
+      include: { user: true },
+    });
+
+    if (scoreDiff !== 0) {
+      await tx.driverScoreLog.create({
+        data: {
+          driverId: id,
+          loaiThayDoi: scoreDiff > 0 ? 'CONG_DIEM' : 'TRU_DIEM',
+          soDiemThayDoi: scoreDiff,
+          diemTruoc: oldScore,
+          diemSau: savedDriver.uyTin,
+          lyDo: scoreReason,
+        },
+      });
+    }
+
+    return savedDriver;
   });
 
   logAuditAction({
@@ -100,7 +125,20 @@ export const updateDriverStatus = async (driverId, { cap_canh_bao, ly_do }, acto
     lyDo: ly_do || 'Cập nhật trạng thái tài xế từ bảng điều khiển',
   });
 
-  return formatDriver(updatedDriver);
+  return {
+    ...formatDriver(updatedDriver),
+    scoreChange:
+      scoreDiff !== 0
+        ? {
+            driver_id: id,
+            diem_truoc: oldScore,
+            diem_sau: updatedDriver.uyTin,
+            so_diem_thay_doi: scoreDiff,
+            cap_canh_bao: updatedDriver.capCanhBao,
+            ly_do: scoreReason,
+          }
+        : null,
+  };
 };
 
 export const getDriverScoreLogs = async (driverId) => {
