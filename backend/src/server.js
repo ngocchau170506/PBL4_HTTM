@@ -1,7 +1,7 @@
 import http from 'http';
 import jwt from 'jsonwebtoken';
 import { Server as SocketIOServer } from 'socket.io';
-import app from './app.js';
+import app, { isAllowedOrigin } from './app.js';
 import { setSocketIO } from './modules/iot/iot.service.js';
 
 const PORT = process.env.PORT || 3000;
@@ -11,32 +11,16 @@ const JWT_SECRET =
 
 const server = http.createServer(app);
 
-const envOrigins = (process.env.CORS_ORIGINS || '')
-	.split(',')
-	.map((o) => o.trim())
-	.filter(Boolean);
-
-const ALLOWED_ORIGINS = [
-	...new Set([
-		'http://localhost:5173',
-		'http://localhost:5174',
-		'http://127.0.0.1:5173',
-		'http://127.0.0.1:5174',
-		'http://172.20.10.2:5173',
-		'http://172.20.10.2:5174',
-		'http://172.20.10.2:3000',
-		`http://localhost:${PORT}`,
-		`http://127.0.0.1:${PORT}`,
-		'http://localhost:5000',
-		'http://127.0.0.1:5000',
-		...envOrigins,
-	]),
-];
-
 // Khởi tạo Socket.io Server cho Bản đồ trực tuyến & Cảnh báo thời gian thực
 const io = new SocketIOServer(server, {
 	cors: {
-		origin: ALLOWED_ORIGINS,
+		origin: (origin, callback) => {
+			if (isAllowedOrigin(origin)) {
+				callback(null, true);
+			} else {
+				callback(new Error('CORS: Socket origin không được phép.'));
+			}
+		},
 		methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
 		credentials: true,
 	},

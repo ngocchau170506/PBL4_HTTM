@@ -1,19 +1,25 @@
-FROM node:22-alpine
+FROM node:22-slim
 
 WORKDIR /app
 
-# copy package first để cache npm install
-COPY package*.json ./
+# OpenSSL & CA certs for Prisma PostgreSQL TLS, curl for Docker healthcheck
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssl \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
+COPY package*.json ./
 RUN npm ci --omit=dev
 
-# copy toàn bộ source
 COPY . .
 
-# Prisma generate (chỉ chạy build image)
-RUN npx prisma generate
+RUN sed -i 's/\r$//' docker-entrypoint.sh && \
+    cp docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh && \
+    chmod +x /usr/local/bin/docker-entrypoint.sh && \
+    mkdir -p /app/uploads/videos && \
+    npx prisma generate
 
 EXPOSE 3000
 
-# Production: chạy node trực tiếp (không dùng nodemon)
-CMD ["npm", "run", "start"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

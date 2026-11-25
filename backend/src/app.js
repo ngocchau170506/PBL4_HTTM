@@ -62,23 +62,39 @@ const ALLOWED_ORIGINS = [
 		'http://localhost:5174',
 		'http://127.0.0.1:5173',
 		'http://127.0.0.1:5174',
-		'http://172.20.10.2:5173',
-		'http://172.20.10.2:5174',
-		'http://172.20.10.2:3000',
 		`http://localhost:${PORT}`,
 		`http://127.0.0.1:${PORT}`,
 		'http://localhost:5000',
 		'http://127.0.0.1:5000',
 		'http://localhost:3000',
 		'http://127.0.0.1:3000',
+		'http://localhost',
+		'http://127.0.0.1',
 		...envOrigins,
 	]),
 ];
 
+const PRIVATE_LAN_ORIGIN_RE =
+	/^https?:\/\/(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$/i;
+
+export const isAllowedOrigin = (origin) => {
+	if (!origin) return true;
+	if (ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin)) {
+		return true;
+	}
+	if (
+		process.env.ALLOW_PRIVATE_LAN_CORS !== 'false' &&
+		PRIVATE_LAN_ORIGIN_RE.test(origin)
+	) {
+		return true;
+	}
+	return false;
+};
+
 app.use(
 	cors({
 		origin: (origin, callback) => {
-			if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+			if (isAllowedOrigin(origin)) {
 				callback(null, true);
 			} else {
 				console.warn(`⚠️ CORS blocked origin: ${origin}`);

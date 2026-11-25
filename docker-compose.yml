@@ -1,0 +1,113 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pbl4_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-pbl4_fleet}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pbl4_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-pbl4_fleet}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pbl4_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-3000}:3000"
+    volumes:
+      - ./backend/uploads:/app/uploads
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/pbl4_fleet?schema=public}
+      DIRECT_URL: ${DOCKER_DIRECT_URL:-postgresql://postgres:postgres@postgres:5432/pbl4_fleet?schema=public}
+      ACCESS_JWT_SECRET: ${ACCESS_JWT_SECRET:-pbl4_access_token_secret_key_2026_super_secure_node_jwt_auth_key}
+      IOT_DEVICE_SECRET: ${IOT_DEVICE_SECRET:-your_iot_device_secret_token}
+      BACKEND_URL: ${DOCKER_PUBLIC_BACKEND_URL:-}
+      ALLOW_PRIVATE_LAN_CORS: "true"
+      AUTO_DB_PUSH: ${AUTO_DB_PUSH:-true}
+      AUTO_SEED_IF_EMPTY: ${AUTO_SEED_IF_EMPTY:-true}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  server-ai:
+    build:
+      context: ./edge-ai-system
+      dockerfile: server_ai/Dockerfile
+    container_name: pbl4_server_ai
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${SERVER_AI_PORT:-5000}:5000"
+      - "${SERVER_UDP_PORT:-5005}:5005/udp"
+    volumes:
+      - ./edge-ai-system/server_ai/data:/app/server_ai/data
+      - ./edge-ai-system/server_ai/evidence:/app/server_ai/evidence
+    environment:
+      SERVER_ENV_PROFILE: prod
+      SERVER_HTTP_HOST: 0.0.0.0
+      SERVER_HTTP_PORT: 5000
+      SERVER_UDP_PORT: 5005
+      TIER2_VERIFIER_MODE: ${TIER2_VERIFIER_MODE:-b1}
+      SERVER_STITCH_MP4: "1"
+      PBL4_BACKEND_URL: http://backend:3000
+      PBL4_DEVICE_TOKEN: ${IOT_DEVICE_SECRET:-your_iot_device_secret_token}
+      PBL4_DEVICE_ID: ${PBL4_DEVICE_ID:-IOT-DN-01}
+      PBL4_TRIP_ID: ""
+      PBL4_TELEMETRY_INTERVAL_S: ${PBL4_TELEMETRY_INTERVAL_S:-3.0}
+      PBL4_HEARTBEAT_INTERVAL_S: ${PBL4_HEARTBEAT_INTERVAL_S:-30.0}
+      PBL4_FORWARD_NON_PENALTY: ${PBL4_FORWARD_NON_PENALTY:-0}
+      SERVER_ADMIN_TOKEN: ${SERVER_ADMIN_TOKEN:-pbl4_server_ai_admin_token_2026_dev}
+      SERVER_OPERATOR_TOKEN: ${SERVER_OPERATOR_TOKEN:-pbl4_server_ai_operator_token_2026_dev}
+      SERVER_DEVICE_TOKEN: ${SERVER_DEVICE_TOKEN:-pbl4_server_ai_device_token_2026_dev}
+      SERVER_VIEWER_TOKEN: ${SERVER_VIEWER_TOKEN:-pbl4_server_ai_viewer_token_2026_dev}
+      SERVER_DRIVER_TOKEN: ${SERVER_DRIVER_TOKEN:-pbl4_server_ai_driver_token_2026_dev}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/v1
+        VITE_SOCKET_URL: ""
+    container_name: pbl4_web
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-80}:80"
+
+volumes:
+  pbl4_postgres_data:

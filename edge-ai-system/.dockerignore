@@ -1,0 +1,14 @@
+__pycache__
+*.pyc
+.venv
+venv
+.git
+pi_edge
+firmware
+Tai_Lieu
+server_ai/data
+server_ai/evidence
+server_ai/.env
+*.db
+*.db-wal
+*.db-shm

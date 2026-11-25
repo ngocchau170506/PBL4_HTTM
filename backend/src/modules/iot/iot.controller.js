@@ -57,8 +57,10 @@ export const handleCreateEdgeViolation = async (req, res) => {
 
 		let uploadedVideoUrl = bodyData.video_url || bodyData.videoUrl || null;
 		if (req.file) {
-			const backendUrl =
-				process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3000}`;
+			const hasExplicitBackendUrl = process.env.BACKEND_URL !== undefined;
+			const backendUrl = hasExplicitBackendUrl
+				? process.env.BACKEND_URL.replace(/\/$/, '')
+				: `http://localhost:${process.env.PORT || 3000}`;
 			uploadedVideoUrl = `${backendUrl}/uploads/videos/${req.file.filename}`;
 		}
 
