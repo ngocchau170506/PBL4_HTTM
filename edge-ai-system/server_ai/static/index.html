@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PI_AI — Server of AI Fleet Dashboard</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div id="login-screen">
+  <div class="login-box">
+    <h2>PI_AI — Đăng nhập Server of AI</h2>
+    <p style="color:var(--muted);font-size:13px">Nhập token RBAC (viewer / operator / admin) đã cấu hình trong <code>data/tokens.json</code></p>
+    <input id="token-input" type="password" placeholder="Token truy cập RBAC" />
+    <button onclick="doLogin()">Đăng nhập</button>
+    <p id="login-err" style="color:var(--red);font-size:12px"></p>
+  </div>
+</div>
+
+<div id="app">
+  <nav>
+    <h1>🚐 Server of AI</h1>
+    <button class="navbtn active" data-tab="overview">Tổng quan</button>
+    <button class="navbtn" data-tab="map">Bản đồ Offline-Safe</button>
+    <button class="navbtn" data-tab="violations">Vi phạm & Hậu kiểm Tầng 2</button>
+    <button class="navbtn" data-tab="commands">Điều khiển & Config Pi</button>
+    <button class="navbtn" data-tab="mute">Tắt còi & Điểm AT</button>
+    <button class="navbtn" data-tab="incidents">Sự cố</button>
+    <button class="navbtn" data-tab="reports">Báo cáo</button>
+    <button class="navbtn" data-tab="admin">RBAC / Quản trị</button>
+    <div style="margin-top:auto;padding-top:16px;color:var(--muted);font-size:12px" id="whoami"></div>
+    <button class="action ghost" style="margin-top:8px;width:100%" onclick="doLogout()">Đăng xuất</button>
+  </nav>
+
+  <main>
+    <div class="tab active" id="tab-overview">
+      <div class="grid" id="kpi-row"></div>
+      <div class="panel">
+        <h3>Hạm đội kết nối</h3>
+        <table id="fleet-table">
+          <thead><tr><th>Xe</th><th>Tài xế</th><th>Trạng thái</th><th>Tốc độ</th><th>CO2 (ppm)</th><th>Nhiệt Pi</th><th>Điểm AT</th><th>Chế độ Media</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h3>Giám sát Nguồn, Nhiệt (ngưỡng 70°C) & 2 Bo ESP32</h3>
+        <table id="hw-power-table">
+          <thead><tr><th>Xe</th><th>Nhiệt Pi</th><th>Áp Core (V)</th><th>Throttled / Sụt áp</th><th>Cam / AI FPS</th><th>ESP #1 (Audio MAX98357A / MQ-135)</th><th>ESP #2 (BLE / GPS / Wi-Fi Survival / Heap)</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="panel" id="live-stream-panel" style="display:none">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <h3 id="live-stream-title" style="margin:0">Camera trực tiếp (LAN)</h3>
+          <div class="row" style="gap:8px;align-items:center">
+            <a id="live-stream-direct-link" href="#" target="_blank" rel="noopener" class="action ghost" style="text-decoration:none;font-size:12px">Mở trang xem Pi (:8080)</a>
+            <button class="action ghost" onclick="closeLiveStream()">✕ Đóng Camera</button>
+          </div>
+        </div>
+        <img id="live-stream-img" alt="Live Camera Stream" style="margin-top:10px;max-width:100%;border-radius:8px;border:1px solid var(--border);background:#000" />
+        <p id="live-stream-hint" style="margin:8px 0 0;font-size:12px;color:var(--muted)"></p>
+      </div>
+      <div class="panel">
+        <h3>Quản lý Tài xế (Hướng Con Người — Công tâm & Huấn luyện)</h3>
+        <table id="drivers-table">
+          <thead><tr><th>Tài xế</th><th>Xe</th><th>Chuyến</th><th>Điểm AT TB</th><th>AI báo</th><th>Người duyệt</th><th>Báo giả (Hoàn điểm)</th><th>Phản ứng MUTE</th><th>Đánh giá</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-map">
+      <div class="panel">
+        <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+          <h3 style="margin:0">Định vị GNSS Thật — Hệ tọa độ ENU mét &amp; Quỹ đạo (100% Offline, 0 tọa độ mẫu)</h3>
+          <div class="row" style="gap:8px;align-items:center">
+            <select id="map-vehicle-select" onchange="onMapVehicleChange()" style="min-width:140px"></select>
+            <button class="action ghost" onclick="refreshMapTrack()">↻ Làm mới quỹ đạo</button>
+          </div>
+        </div>
+        <canvas id="offline-map" width="900" height="440" style="width:100%;background:#0b1220;border:1px solid var(--border);border-radius:8px"></canvas>
+        <div id="map-list" style="margin-top:10px;font-size:13px;color:var(--muted)"></div>
+      </div>
+      <div class="panel">
+        <h3>Bảng Tính Toán Vị Trí Thật (WGS-84 · DMS · ECEF X/Y/Z · UTM · Sai số &amp; Chẩn đoán UART2)</h3>
+        <table id="geo-positions-table">
+          <thead>
+            <tr>
+              <th>Xe</th>
+              <th>Nguồn / Trạng thái</th>
+              <th>WGS-84 &amp; DMS</th>
+              <th>UTM / ECEF (m)</th>
+              <th>Tốc độ · Hướng · Độ cao</th>
+              <th>Sai số / Vệ tinh / UART2</th>
+              <th>Mở bản đồ</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-violations">
+      <div class="panel">
+        <h3>Vi phạm & Hậu kiểm Tầng 2 + Con Người (HITL)</h3>
+        <p id="tier2-engine-banner" style="margin:0 0 10px;font-size:12px;color:var(--amber)">Đang kiểm tra bộ hậu kiểm Tầng 2...</p>
+        <table id="violations-table">
+          <thead><tr><th>Thời gian</th><th>Xe</th><th>Loại</th><th>Hậu kiểm Tầng 2</th><th>Độ tin cậy</th><th>Người duyệt</th><th>Ảnh</th><th>Video / Duyệt</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="panel" id="video-player-panel" style="display:none">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <h3 id="video-player-title" style="margin:0">Xem lại clip 10s (H.264 / WebM — HTTP 206)</h3>
+          <div class="row" style="gap:10px;align-items:center">
+            <a id="video-download-link" href="#" target="_blank" rel="noopener" style="font-size:13px">Mở / Tải clip</a>
+            <button class="action ghost" onclick="closeVideoPanel()">✕ Đóng</button>
+          </div>
+        </div>
+        <video id="video-player" controls playsinline style="margin-top:10px;max-width:100%;max-height:420px;background:#000;border-radius:8px"></video>
+        <p id="video-player-msg" style="margin:8px 0 0;font-size:12px;color:var(--muted)"></p>
+        <div id="storyboard-box" style="display:none;margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+          <div class="row" style="justify-content:space-between;align-items:center">
+            <strong style="font-size:13px">Xem từng khung hình (Smart Storyboard — tương thích 100% iPhone/Android)</strong>
+            <span id="storyboard-label" style="font-size:12px;color:var(--muted)">0 / 0</span>
+          </div>
+          <input id="storyboard-slider" type="range" min="0" max="0" value="0" style="width:100%;margin:8px 0" oninput="showStoryboardFrame(this.value)" />
+          <img id="storyboard-img" alt="Keyframe" style="max-width:100%;max-height:300px;border-radius:6px;border:1px solid var(--border);background:#000" />
+        </div>
+        <div id="human-review-box" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+          <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+            <input id="review-note-input" placeholder="Ghi chú người quản lý (vd: Nhắm mắt rõ / Chói nắng báo giả)..." style="flex:1;min-width:220px" />
+            <button class="action" onclick="submitHumanReview('HUMAN_CONFIRMED')">✅ Xác nhận vi phạm</button>
+            <button class="action ghost" onclick="submitHumanReview('HUMAN_FALSE_POSITIVE')">↩ Báo giả (Hoàn điểm)</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-commands">
+      <div class="panel">
+        <h3>Gửi lệnh điều khiển 2 chiều tới Pi / ESP32</h3>
+        <div class="row">
+          <input id="cmd-vehicle" placeholder="vehicle_id (vd XE-01)">
+          <select id="cmd-select">
+            <option value="VOICE:1">VOICE:1 (Ngủ gật)</option>
+            <option value="VOICE:2">VOICE:2 (Ngáp)</option>
+            <option value="VOICE:3">VOICE:3 (Mất tập trung)</option>
+            <option value="VOICE:4">VOICE:4 (CO2 cảnh báo)</option>
+            <option value="VOICE:5">VOICE:5 (CO2 nguy hiểm)</option>
+            <option value="VOL:50">VOL:50 (Âm lượng loa 50%)</option>
+            <option value="VOL:65">VOL:65 (Âm lượng loa 65% — USB)</option>
+            <option value="VOL:85">VOL:85 (Âm lượng loa 85% — Buck)</option>
+            <option value="VOL:100">VOL:100 (Âm lượng loa 100%)</option>
+            <option value="STOP">STOP (Tắt loa)</option>
+            <option value="MUTE">MUTE (Tạm im 30s)</option>
+            <option value="WHOAMI">WHOAMI (Kiểm tra vai trò ESP)</option>
+            <option value="PING">PING</option>
+          </select>
+          <button class="action" onclick="sendCommand()">Gửi lệnh</button>
+        </div>
+        <table id="commands-table" style="margin-top:12px">
+          <thead><tr><th>UID</th><th>Xe</th><th>Lệnh</th><th>Trạng thái</th><th>Chi tiết ACK</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h3>Cấu hình từ xa (Remote Config -> Pi)</h3>
+        <div class="row">
+          <input id="cfg-vehicle" placeholder="vehicle_id (vd XE-01)">
+          <label><input type="checkbox" id="cfg-smoking" checked> Cho phép cảnh báo Smoking</label>
+          <label><input type="checkbox" id="cfg-phone" checked> Cho phép cảnh báo Phone</label>
+          <button class="action" onclick="saveRemoteConfig()">Lưu Config</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-mute">
+      <div class="panel">
+        <h3>Nhật ký tắt cảnh báo</h3>
+        <table id="mute-table">
+          <thead><tr><th>Thời gian</th><th>Xe</th><th>Trip</th><th>Nguồn</th><th>Phản ứng</th><th>Xếp loại</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h3>Điểm an toàn chuyến đi (Trip)</h3>
+        <table id="trips-table">
+          <thead><tr><th>Trip</th><th>Xe</th><th>Tài xế</th><th>Quãng đường (km)</th><th>Điểm AT</th><th>Vi phạm</th><th>Lần MUTE</th><th>Trạng thái</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-incidents">
+      <div class="panel">
+        <h3>Sự cố (Chống bão sự cố với Cooldown)</h3>
+        <table id="incidents-table">
+          <thead><tr><th>Thời gian</th><th>Xe</th><th>Mức</th><th>Loại</th><th>Tiêu đề</th><th>Trạng thái</th><th>Hành động</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-reports">
+      <div class="panel">
+        <h3>Xuất CSV / JSON</h3>
+        <div class="row">
+          <select id="report-kind">
+            <option value="violations">Vi phạm</option>
+            <option value="dismissals">Tắt cảnh báo</option>
+            <option value="trips">Chuyến đi</option>
+          </select>
+          <select id="report-fmt"><option value="csv">CSV</option><option value="json">JSON</option></select>
+          <button class="action" onclick="exportReport()">Tải xuống</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-admin">
+      <div class="panel">
+        <h3>Quản trị RBAC Token</h3>
+        <div class="row">
+          <select id="new-token-role">
+            <option value="viewer">viewer</option>
+            <option value="operator">operator</option>
+            <option value="device">device</option>
+            <option value="driver_phone">driver_phone</option>
+            <option value="admin">admin</option>
+          </select>
+          <button class="action" onclick="issueToken()">Tạo token mới</button>
+        </div>
+        <p id="new-token-result" style="color:var(--green);margin-top:8px"></p>
+      </div>
+      <div class="panel">
+        <h3>Trạng thái Bảo mật 2 Cơ chế (Dual-Token Grace & Vault)</h3>
+        <pre id="security-health-box" style="font-size:12px;color:var(--muted);white-space:pre-wrap">Đang kiểm tra...</pre>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div id="toast"></div>
+<script src="/static/dashboard.js"></script>
+</body>
+</html>

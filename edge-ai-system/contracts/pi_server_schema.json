@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract_version": "1.0.0",
+  "description": "Single Source of Truth JSON contract shared between pi_edge, firmware (ESP32 #1), and server_ai.",
+  "endpoints": {
+    "health": "GET /api/v1/health",
+    "auth_me": "GET /api/v1/auth/me",
+    "telemetry": "POST /api/v1/telemetry",
+    "esp_bridge_telemetry": "POST /api/v1/esp/bridge_telemetry",
+    "violation": "POST /api/v1/violation",
+    "violation_burst": "POST /api/v1/violation_burst",
+    "video": "POST /api/v1/video",
+    "alert_dismissed": "POST /api/v1/events/alert_dismissed",
+    "commands_ack": "POST /api/v1/commands/ack",
+    "commands_pull": "GET /api/v1/pi/pull_commands"
+  },
+  "auth_headers_accepted": [
+    "Authorization",
+    "X-API-Token",
+    "X-Dashboard-Token",
+    "X-Auth-Token"
+  ],
+  "schemas": {
+    "TelemetryPayload": {
+      "required": ["schema_version", "vehicle_id", "timestamp_ms", "camera", "gps", "mq135", "pi", "driver_state", "esp"],
+      "fields": {
+        "schema_version": "str",
+        "vehicle_id": "str",
+        "vehicle_name": "str?",
+        "driver_id": "str?",
+        "driver_name": "str?",
+        "timestamp_ms": "int",
+        "telemetry_seq": "int?",
+        "run_mode": "str?",
+        "access_info": {
+          "local_ip": "str?",
+          "web_port": "int?",
+          "stream_url": "str?"
+        },
+        "camera": {
+          "status": "str",
+          "fps": "float",
+          "face_detected": "bool",
+          "is_stale": "bool",
+          "resolution": "str?",
+          "error": "str?"
+        },
+        "gps": {
+          "lat": "float?",
+          "lon": "float?",
+          "speed_kmh": "float",
+          "altitude_m": "float?",
+          "heading_deg": "float?",
+          "hdop": "float?",
+          "accuracy_m": "float?",
+          "fix_quality": "int?",
+          "satellites": "int?",
+          "sats_in_view": "int?",
+          "gps_rx_bytes": "int?",
+          "nmea_ok": "int?",
+          "is_valid": "bool",
+          "source": "str?"
+        },
+        "mq135": {
+          "co2_ppm": "float",
+          "raw_adc": "int?",
+          "air_quality_level": "str?"
+        },
+        "pi": {
+          "cpu_temp_c": "float?",
+          "cpu_usage_pct": "float?",
+          "ram_used_mb": "float?",
+          "thermal_level": "int",
+          "throttled": "str|int",
+          "camera_fps": "float?",
+          "loop_fps": "float?",
+          "ai_fps": "float?",
+          "stream_fps": "float?",
+          "alert_latency_p95_ms": "float?"
+        },
+        "driver_state": {
+          "alert_state": "str",
+          "alert_type": "str",
+          "verification_mode": "str",
+          "alert_reason": "str?",
+          "behavior_detail": "str?",
+          "detected_classes": "list",
+          "allow_smoking": "bool?",
+          "allow_phone": "bool?"
+        },
+        "esp": {
+          "connected": "bool",
+          "reset_count": "int?",
+          "brownout": "bool?",
+          "hw_events": "list?"
+        },
+        "mute_state": {
+          "active": "bool?",
+          "newly_triggered": "bool?",
+          "alert_type": "str?",
+          "mute_duration_s": "int?"
+        }
+      }
+    },
+    "ViolationBurstMeta": {
+      "required": [
+        "schema_version",
+        "event_id",
+        "idempotency_key",
+        "vehicle_id",
+        "alert_state",
+        "alert_type",
+        "verification_mode",
+        "started_at",
+        "confirmed_at",
+        "duration_seconds"
+      ],
+      "allowed_alert_states": ["EDGE_TRIGGERED", "SERVER_CNN_CONFIRMED", "SERVER_CNN_REJECTED"],
+      "allowed_verification_modes": ["SINGLE_MODEL_YOLO", "YOLO_BLAZEFACE_SEQ", "DUAL_MODEL_FUSED", "SERVER_CNN_VERIFIED"]
+    },
+    "CommandAckPayload": {
+      "required": ["cmd_uid", "vehicle_id", "result"]
+    }
+  }
+}
