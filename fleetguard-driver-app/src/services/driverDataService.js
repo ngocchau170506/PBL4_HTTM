@@ -1,14 +1,28 @@
 // ============================================================================
 // CẤU HÌNH KẾT NỐI BACKEND CHO MOBILE APP (REACT NATIVE / WEB MOBILE PREVIEW)
 // ============================================================================
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { API_CONFIG } from "../../mobileConfig";
-const USE_MOCK = false; // Đổi thành true nếu muốn chạy 100% dữ liệu giả lập
-// Lưu ý:
-// - Nếu chạy trên Web / iOS Simulator: dùng "http://localhost:3000/api/v1"
-// - Nếu chạy trên Android Emulator: đổi thành "http://10.0.2.2:3000/api/v1"
-// - Nếu chạy trên Điện thoại thật (Expo Go): đổi thành IP LAN máy tính, VD: "http://172.20.10.2:3000/api/v1"
-const API_BASE_URL = API_CONFIG.BASE_URL;
 
+const USE_MOCK = false; // Đổi thành true nếu muốn chạy 100% dữ liệu giả lập
+const STORAGE_KEYS = {
+  SERVER_URL: "@fleetguard_server_url",
+  TOKEN: "@fleetguard_auth_token",
+  USER: "@fleetguard_user",
+};
+
+const normalizeServerUrl = (raw) => {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return API_CONFIG.SOCKET_URL;
+  let normalized = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : `http://${trimmed}`;
+  normalized = normalized.replace(/\/+$/, "").replace(/\/api\/v1$/i, "");
+  // Nếu user chỉ nhập IP (không có port), mặc định dùng cổng :3000 (Backend) hoặc :80 (Docker Caddy)
+  return normalized;
+};
+
+let currentServerUrl = normalizeServerUrl(API_CONFIG.SOCKET_URL);
 let authToken = null;
 
 // Helper gọi API chuẩn (Không cần cài thêm thư viện ngoài, chạy được cả trên RN và Web)
@@ -19,12 +33,16 @@ async function apiRequest(endpoint, options = {}) {
     ...(options.headers || {}),
   };
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+  const response = await fetch(`${currentServerUrl}/api/v1${endpoint}`, {
     ...options,
     headers,
   });
 
-  const json = await response.json();
+  const contentType = response.headers.get("content-type") || "";
+  const json = contentType.includes("application/json")
+    ? await response.json()
+    : { success: response.ok, message: await response.text() };
+
   if (!response.ok || json.success === false) {
     throw new Error(
       json.message || json.error?.message || "Lỗi kết nối tới máy chủ",
@@ -106,6 +124,75 @@ const formatDateTimeVN = (isoStr) => {
 };
 
 export const driverDataService = {
+  async initSession() {
+    try {
+      const [savedUrl, savedToken, savedUserRaw] = await Promise.all([
+        AsyncStorage.getItem(STORAGE_KEYS.SERVER_URL),
+        AsyncStorage.getItem(STORAGE_KEYS.TOKEN),
+        AsyncStorage.getItem(STORAGE_KEYS.USER),
+      ]);
+      if (savedUrl) {
+        currentServerUrl = normalizeServerUrl(savedUrl);
+      }
+      if (savedToken) {
+        authToken = savedToken;
+      }
+      if (savedUserRaw) {
+        const parsedUser = JSON.parse(savedUserRaw);
+        mockDriverState.user = { ...mockDriverState.user, ...parsedUser };
+      }
+      return {
+        hasSession: Boolean(savedToken),
+        serverUrl: currentServerUrl,
+        user: savedToken ? { ...mockDriverState.user } : null,
+      };
+    } catch {
+      return {
+        hasSession: false,
+        serverUrl: currentServerUrl,
+        user: null,
+      };
+    }
+  },
+
+  getServerUrl() {
+    return currentServerUrl;
+  },
+
+  getSocketUrl() {
+    return currentServerUrl;
+  },
+
+  async setServerUrl(rawUrl) {
+    currentServerUrl = normalizeServerUrl(rawUrl);
+    await AsyncStorage.setItem(STORAGE_KEYS.SERVER_URL, currentServerUrl).catch(
+      () => {},
+    );
+    return currentServerUrl;
+  },
+
+  resolveMediaUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== "string") return null;
+    const trimmed = rawUrl.trim();
+    if (!trimmed) return null;
+    const localBackendPrefix = /^https?:\/\/(localhost|127\.0\.0\.1):3000(\/uploads\/.+)$/i;
+    const match = trimmed.match(localBackendPrefix);
+    if (match) {
+      return `${currentServerUrl}${match[2]}`;
+    }
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+    if (trimmed.startsWith("/")) return `${currentServerUrl}${trimmed}`;
+    return `${currentServerUrl}/${trimmed}`;
+  },
+
+  async logout() {
+    authToken = null;
+    await Promise.all([
+      AsyncStorage.removeItem(STORAGE_KEYS.TOKEN),
+      AsyncStorage.removeItem(STORAGE_KEYS.USER),
+    ]).catch(() => {});
+  },
+
   // 1. ĐĂNG NHẬP TÀI XẾ
   async login(username, password, consentChecked) {
     if (!consentChecked) {
@@ -141,6 +228,16 @@ export const driverDataService = {
       cap_canh_bao: drv.capCanhBao || "NORMAL",
       privacy_consent_at: new Date().toLocaleDateString("vi-VN"),
     };
+
+    if (authToken) {
+      await Promise.all([
+        AsyncStorage.setItem(STORAGE_KEYS.TOKEN, authToken),
+        AsyncStorage.setItem(
+          STORAGE_KEYS.USER,
+          JSON.stringify(mockDriverState.user),
+        ),
+      ]).catch(() => {});
+    }
 
     return { ...mockDriverState.user };
   },
@@ -232,9 +329,18 @@ export const driverDataService = {
       if (latestShift || matchedTrip) {
         const veh = latestShift?.vehicle || matchedTrip?.vehicle || {};
         const rt = latestShift?.route || matchedTrip?.route || {};
-        const warnings = Array.isArray(latestShift?.canh_bao_khi_tao)
-          ? latestShift.canh_bao_khi_tao.join(" ")
-          : "";
+        const rawWarnings = latestShift?.canh_bao_khi_tao;
+        let warnings = "";
+        if (Array.isArray(rawWarnings)) {
+          warnings = rawWarnings
+            .map((w) =>
+              typeof w === "string" ? w : w?.message || w?.reason || "",
+            )
+            .filter(Boolean)
+            .join(" • ");
+        } else if (typeof rawWarnings === "string") {
+          warnings = rawWarnings;
+        }
 
         let restStopDisplay = "Theo lộ trình điều phối";
         const rawRestStops =
@@ -450,20 +556,56 @@ export const driverDataService = {
   },
 
   // 6. ĐỔI TÀI (CO-DRIVING HANDOVER)
-  async switchCoDriver(isOfflineMode = false) {
+  async getCoDriverCandidates() {
+    if (USE_MOCK || !authToken) return [];
+    const list = await apiRequest("/drivers");
+    const ownId = Number(
+      mockDriverState.user.driver_id || mockDriverState.user.id,
+    );
+    return (Array.isArray(list) ? list : [])
+      .filter(
+        (d) =>
+          Number(d.user_id || d.id) !== ownId &&
+          d.cap_canh_bao !== "SUSPENDED_RED",
+      )
+      .map((d) => ({
+        id: d.user_id || d.id,
+        ho_ten: d.ho_ten || d.user?.ho_ten || `Tài xế #${d.id}`,
+        cap_canh_bao: d.cap_canh_bao || "NORMAL",
+        trang_thai_lai_xe: d.trang_thai_lai_xe || "AVAILABLE",
+      }));
+  },
+
+  async switchCoDriver(isOfflineMode = false, coDriver = null) {
     const shift = mockDriverState.currentShift;
     if (!shift) return null;
     if (!USE_MOCK && authToken && !isOfflineMode) {
-      await apiRequest(`/trips/${shift.trip_id}/switch-driver`, {
-        method: "POST",
-        body: JSON.stringify({ isOfflineMode }),
-      }).catch(() => null);
+      const updatedTrip = await apiRequest(
+        `/trips/${shift.trip_id}/switch-driver`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            newDriverId: coDriver?.id || null,
+            isOfflineMode,
+          }),
+        },
+      );
+      const nextDriverName =
+        updatedTrip?.driver?.user?.ho_ten ||
+        updatedTrip?.driver?.user?.hoTen ||
+        coDriver?.ho_ten;
+      if (nextDriverName) {
+        shift.active_driver_name = nextDriverName;
+      }
+    } else if (coDriver?.ho_ten) {
+      shift.active_driver_name = coDriver.ho_ten;
+    } else if (shift.tai_xe_phu) {
+      shift.active_driver_name =
+        shift.active_driver_name === shift.tai_xe_chinh
+          ? shift.tai_xe_phu
+          : shift.tai_xe_chinh;
     }
 
-    shift.active_driver_name =
-      shift.active_driver_name === shift.tai_xe_chinh
-        ? shift.tai_xe_phu
-        : shift.tai_xe_chinh;
     shift.calibration_mode = isOfflineMode
       ? "PENDING_CALIBRATION"
       : "ONLINE_SUCCESS";

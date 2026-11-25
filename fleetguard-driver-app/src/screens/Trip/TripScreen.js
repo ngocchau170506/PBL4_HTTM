@@ -8,15 +8,28 @@ import {
   Play,
   RefreshCw,
   Truck,
+  Users,
   Wind,
+  X,
   XCircle,
 } from "lucide-react-native";
 import React, { useState } from "react";
-import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { COLORS } from "../../../mobileConfig";
 import AppButton from "../../components/common/AppButton";
 import AppCard from "../../components/common/AppCard";
 import StatusBadge from "../../components/common/StatusBadge";
+import driverDataService from "../../services/driverDataService";
 import CalibrationModal from "./CalibrationModal";
 
 export default function TripScreen({
@@ -29,6 +42,12 @@ export default function TripScreen({
   onCompleteTrip,
 }) {
   const [showCalibModal, setShowCalibModal] = useState(false);
+  const [showDeclineModal, setShowDeclineModal] = useState(false);
+  const [declineReason, setDeclineReason] = useState("");
+  const [showSwitchModal, setShowSwitchModal] = useState(false);
+  const [coDrivers, setCoDrivers] = useState([]);
+  const [loadingCoDrivers, setLoadingCoDrivers] = useState(false);
+  const [selectedCoDriver, setSelectedCoDriver] = useState(null);
 
   const handleFinishCalibration = async () => {
     setShowCalibModal(false);
@@ -41,14 +60,44 @@ export default function TripScreen({
     );
   };
 
-  const handleSwitchCoDriver = async () => {
-    await onSwitchDriver(isOfflineMode);
+  const handleOpenSwitchModal = async () => {
+    setShowSwitchModal(true);
+    setSelectedCoDriver(null);
+    setLoadingCoDrivers(true);
+    try {
+      const list = await driverDataService.getCoDriverCandidates();
+      setCoDrivers(list);
+      if (list.length > 0) setSelectedCoDriver(list[0]);
+    } catch {
+      setCoDrivers([]);
+    } finally {
+      setLoadingCoDrivers(false);
+    }
+  };
+
+  const handleConfirmSwitchCoDriver = async () => {
+    if (!selectedCoDriver) {
+      Alert.alert("Chưa chọn tài xế", "Vui lòng chọn tài xế phụ nhận bàn giao tay lái!");
+      return;
+    }
+    await onSwitchDriver(isOfflineMode, selectedCoDriver);
+    setShowSwitchModal(false);
     Alert.alert(
       "Đổi tài thành công (Co-driving)",
       isOfflineMode
-        ? "Đã chuyển tay lái qua Wi-Fi nội bộ của Pi 4 (Offline Handover)!"
-        : "Đã đóng đoạn lái cũ và mở đoạn lái mới trong trip_driver_segments!",
+        ? `Đã bàn giao tay lái cho ${selectedCoDriver.ho_ten} qua chế độ ngoại tuyến!`
+        : `Đã bàn giao tay lái cho ${selectedCoDriver.ho_ten} và ghi nhận nhật ký hệ thống!`,
     );
+  };
+
+  const handleConfirmDecline = async () => {
+    if (!declineReason.trim()) {
+      Alert.alert("Thiếu lý do", "Vui lòng nhập lý do từ chối ca trực!");
+      return;
+    }
+    await onRespondShift("DECLINED", declineReason.trim());
+    setDeclineReason("");
+    setShowDeclineModal(false);
   };
 
   if (!shift) {
@@ -195,7 +244,7 @@ export default function TripScreen({
               title="Từ chối ca"
               variant="danger"
               icon={XCircle}
-              onPress={() => onRespondShift("DECLINED")}
+              onPress={() => setShowDeclineModal(true)}
               style={{ flex: 1 }}
             />
             <AppButton
@@ -237,7 +286,7 @@ export default function TripScreen({
                 title="Đổi tài (Co-driver)"
                 variant="secondary"
                 icon={RefreshCw}
-                onPress={handleSwitchCoDriver}
+                onPress={handleOpenSwitchModal}
                 style={{ flex: 1 }}
               />
             </View>
@@ -265,6 +314,111 @@ export default function TripScreen({
         driverName={shift.active_driver_name}
         onFinishCalibration={handleFinishCalibration}
       />
+
+      {/* Modal nhập lý do từ chối ca */}
+      <Modal visible={showDeclineModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Lý do từ chối ca #{shift.id}</Text>
+              <TouchableOpacity onPress={() => setShowDeclineModal(false)}>
+                <X size={20} color={COLORS.textMuted} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.subInfo}>
+              Vui lòng nêu rõ lý do để Điều phối viên kịp thời sắp xếp tài xế thay thế.
+            </Text>
+            <TextInput
+              value={declineReason}
+              onChangeText={setDeclineReason}
+              multiline
+              numberOfLines={3}
+              placeholder="VD: Sức khỏe không đảm bảo / Đang có lịch nghỉ phép..."
+              placeholderTextColor={COLORS.textSubtle}
+              style={styles.modalInput}
+            />
+            <View style={styles.btnRow}>
+              <AppButton
+                title="Hủy"
+                variant="secondary"
+                onPress={() => setShowDeclineModal(false)}
+                style={{ flex: 1 }}
+              />
+              <AppButton
+                title="Xác nhận từ chối"
+                variant="danger"
+                onPress={handleConfirmDecline}
+                style={{ flex: 1.5 }}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal chọn tài xế phụ khi đổi tài */}
+      <Modal visible={showSwitchModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <View style={styles.modalHeader}>
+              <View style={styles.vehicleRow}>
+                <Users size={18} color={COLORS.brandBlueSky} />
+                <Text style={styles.modalTitle}>Chọn Tài xế nhận bàn giao</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowSwitchModal(false)}>
+                <X size={20} color={COLORS.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            {loadingCoDrivers ? (
+              <ActivityIndicator
+                size="small"
+                color={COLORS.brandBlueSky}
+                style={{ marginVertical: 24 }}
+              />
+            ) : coDrivers.length === 0 ? (
+              <Text style={[styles.subInfo, { marginVertical: 16 }]}>
+                Không có tài xế hợp lệ khác sẵn sàng nhận bàn giao tay lái.
+              </Text>
+            ) : (
+              <View style={{ gap: 8, marginVertical: 14 }}>
+                {coDrivers.map((d) => {
+                  const active = selectedCoDriver?.id === d.id;
+                  return (
+                    <TouchableOpacity
+                      key={d.id}
+                      onPress={() => setSelectedCoDriver(d)}
+                      style={[
+                        styles.coDriverItem,
+                        active && styles.coDriverItemActive,
+                      ]}
+                    >
+                      <Text style={styles.coDriverName}>{d.ho_ten}</Text>
+                      <Text style={styles.coDriverMeta}>
+                        {d.trang_thai_lai_xe} • {d.cap_canh_bao}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            <View style={styles.btnRow}>
+              <AppButton
+                title="Đóng"
+                variant="secondary"
+                onPress={() => setShowSwitchModal(false)}
+                style={{ flex: 1 }}
+              />
+              <AppButton
+                title="Xác nhận Đổi tài"
+                variant="primary"
+                onPress={handleConfirmSwitchCoDriver}
+                style={{ flex: 1.5 }}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -389,5 +543,62 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
     lineHeight: 18,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.82)",
+    justifyContent: "center",
+    padding: 18,
+  },
+  modalBox: {
+    backgroundColor: COLORS.brandSurface,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: COLORS.brandBorder,
+    padding: 18,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  modalTitle: {
+    color: COLORS.textPrimary,
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  modalInput: {
+    backgroundColor: COLORS.brandDark,
+    borderWidth: 1,
+    borderColor: COLORS.brandBorder,
+    borderRadius: 12,
+    padding: 12,
+    color: COLORS.textPrimary,
+    fontSize: 12,
+    minHeight: 76,
+    textAlignVertical: "top",
+    marginVertical: 14,
+  },
+  coDriverItem: {
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.brandBorder,
+    backgroundColor: COLORS.brandDark,
+  },
+  coDriverItemActive: {
+    borderColor: COLORS.brandPrimary,
+    backgroundColor: COLORS.brandBlueNight,
+  },
+  coDriverName: {
+    color: COLORS.textPrimary,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  coDriverMeta: {
+    color: COLORS.textMuted,
+    fontSize: 11,
+    marginTop: 2,
   },
 });

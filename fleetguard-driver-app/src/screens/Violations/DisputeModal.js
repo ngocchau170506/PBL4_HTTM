@@ -16,6 +16,7 @@ const REASONS = [
   { code: "FALSE_DETECTION", label: "AI nhận diện nhầm hành vi" },
   { code: "SENSOR_ERROR", label: "Nhiễu cảm biến MQ-135 / GPS" },
   { code: "NOT_ME", label: "Đã đổi tài nhưng chưa kịp cập nhật" },
+  { code: "OTHER", label: "Lý do khác" },
 ];
 
 export default function DisputeModal({
@@ -26,21 +27,30 @@ export default function DisputeModal({
 }) {
   const [selectedCode, setSelectedCode] = useState("FALSE_DETECTION");
   const [explanation, setExplanation] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   if (!violation) return null;
 
-  const handleSend = () => {
+  const handleSend = async () => {
+    if (submitting) return;
     if (!explanation.trim()) {
       Alert.alert("Thiếu thông tin", "Vui lòng nhập nội dung giải trình!");
       return;
     }
-    onSubmitDispute({
-      violationId: violation.id,
-      reasonCode: selectedCode,
-      explanation: explanation.trim(),
-    });
-    setExplanation("");
-    onClose();
+    setSubmitting(true);
+    try {
+      await onSubmitDispute({
+        violationId: violation.id,
+        reasonCode: selectedCode,
+        explanation: explanation.trim(),
+      });
+      setExplanation("");
+      onClose();
+    } catch {
+      // Lỗi đã được hiển thị qua Alert ở App.js
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -106,8 +116,9 @@ export default function DisputeModal({
               style={{ flex: 1 }}
             />
             <AppButton
-              title="Gửi đơn khiếu nại"
+              title={submitting ? "Đang gửi..." : "Gửi đơn khiếu nại"}
               icon={Send}
+              isLoading={submitting}
               onPress={handleSend}
               style={{ flex: 2 }}
             />

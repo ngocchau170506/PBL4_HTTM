@@ -31,11 +31,11 @@ export default function App() {
   };
 
   useEffect(() => {
-    driverDataService.getDriverDashboard().then((data) => {
-      setShift(data.currentShift);
-      setBiometricProfile(data.biometricProfile);
-      setScoreLogs(data.scoreLogs);
-      setViolations(data.violations);
+    driverDataService.initSession().then((session) => {
+      if (session.hasSession && session.user) {
+        setUser(session.user);
+        loadDashboard();
+      }
     });
   }, []);
 
@@ -78,9 +78,13 @@ export default function App() {
     };
   }, [user?.id, user?.driver_id]);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     mobileSocket.disconnect();
+    await driverDataService.logout();
     setUser(null);
+    setShift(null);
+    setViolations([]);
+    setScoreLogs([]);
   };
 
   const handleLogin = async (username, password, consent) => {
@@ -93,38 +97,68 @@ export default function App() {
     await loadDashboard();
   };
 
-  const handleRespondShift = async (decision) => {
-    const updated = await driverDataService.respondShift(decision);
-    setShift(updated);
+  const handleRespondShift = async (decision, reason = "") => {
+    try {
+      const updated = await driverDataService.respondShift(decision, reason);
+      setShift(updated);
+      await loadDashboard();
+    } catch (err) {
+      Alert.alert("Lỗi thao tác ca", err.message || "Không thể phản hồi ca trực.");
+      throw err;
+    }
   };
 
   const handleCompleteCalibration = async (offline) => {
-    const updated = await driverDataService.completeCalibration(offline);
-    setShift(updated);
+    try {
+      const updated = await driverDataService.completeCalibration(offline);
+      setShift(updated);
+    } catch (err) {
+      Alert.alert("Lỗi bắt đầu chuyến", err.message || "Không thể bắt đầu chuyến.");
+      throw err;
+    }
   };
 
   const handleToggleRest = async () => {
-    const updated = await driverDataService.toggleResting();
-    setShift(updated);
+    try {
+      const updated = await driverDataService.toggleResting();
+      setShift(updated);
+    } catch (err) {
+      Alert.alert("Lỗi cập nhật trạng thái", err.message || "Không thể đổi trạng thái nghỉ.");
+    }
   };
 
-  const handleSwitchDriver = async (offline) => {
-    const updated = await driverDataService.switchCoDriver(offline);
-    setShift(updated);
+  const handleSwitchDriver = async (offline, coDriver = null) => {
+    try {
+      const updated = await driverDataService.switchCoDriver(offline, coDriver);
+      setShift(updated);
+    } catch (err) {
+      Alert.alert("Lỗi đổi tài", err.message || "Không thể bàn giao tay lái.");
+      throw err;
+    }
   };
 
   const handleCompleteTrip = async () => {
-    const updated = await driverDataService.completeTrip();
-    setShift(updated);
+    try {
+      const updated = await driverDataService.completeTrip();
+      setShift(updated);
+      await loadDashboard();
+    } catch (err) {
+      Alert.alert("Lỗi kết thúc chuyến", err.message || "Không thể hoàn thành chuyến đi.");
+    }
   };
 
   const handleSubmitDispute = async (payload) => {
-    const updatedList = await driverDataService.submitDispute(payload);
-    setViolations(updatedList);
-    Alert.alert(
-      "Đã gửi khiếu nại",
-      "Đơn khiếu nại đã được đẩy lên Web Dashboard của Điều phối viên theo quy trình Four-Eyes!",
-    );
+    try {
+      const updatedList = await driverDataService.submitDispute(payload);
+      setViolations(updatedList);
+      Alert.alert(
+        "Đã gửi khiếu nại",
+        "Đơn khiếu nại đã được đẩy lên Web Dashboard của Điều phối viên theo quy trình Four-Eyes!",
+      );
+    } catch (err) {
+      Alert.alert("Lỗi gửi khiếu nại", err.message || "Không thể gửi đơn khiếu nại.");
+      throw err;
+    }
   };
 
   const handleUpdateProfile = async (updatedFields) => {
@@ -157,7 +191,7 @@ export default function App() {
           />
 
           <View style={styles.content}>
-            {activeTab === "TRIP" && shift && (
+            {activeTab === "TRIP" && (
               <TripScreen
                 shift={shift}
                 isOfflineMode={isOfflineMode}

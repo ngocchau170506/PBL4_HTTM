@@ -1,14 +1,16 @@
 import { FileVideo, Scale } from "lucide-react-native";
 import React, { useState } from "react";
-import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { COLORS } from "../../../mobileConfig";
 import AppButton from "../../components/common/AppButton";
 import AppCard from "../../components/common/AppCard";
 import StatusBadge from "../../components/common/StatusBadge";
 import DisputeModal from "./DisputeModal";
+import VideoEvidenceModal from "./VideoEvidenceModal";
 
 export default function ViolationsScreen({ violations = [], onSubmitDispute }) {
   const [selectedForDispute, setSelectedForDispute] = useState(null);
+  const [selectedForVideo, setSelectedForVideo] = useState(null);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 16 }}>
@@ -19,8 +21,18 @@ export default function ViolationsScreen({ violations = [], onSubmitDispute }) {
         Chỉ hiển thị dữ liệu cá nhân của bạn. Các vi phạm CONFIRMED được quyền gửi khiếu nại 1 lần.
       </Text>
 
-      {violations.map((v) => {
-        const isConfirmed = v.trang_thai_xac_thuc === "CONFIRMED";
+      {violations.length === 0 ? (
+        <AppCard>
+          <Text style={styles.vTitle}>Chưa có vi phạm nào</Text>
+          <Text style={[styles.descText, { marginBottom: 0 }]}>
+            Lịch sử lái xe của bạn hiện đang an toàn, không có lỗi vi phạm nào được ghi nhận.
+          </Text>
+        </AppCard>
+      ) : (
+        violations.map((v) => {
+          const isConfirmed =
+            v.trang_thai_xac_thuc === "CONFIRMED" ||
+            v.trang_thai_xac_thuc === "MANUALLY_CONFIRMED";
         const isRefunded =
           v.trang_thai_diem === "REFUNDED" || v.dispute_status === "APPROVED";
         const isDisputeRejected = v.dispute_status === "REJECTED";
@@ -130,12 +142,7 @@ export default function ViolationsScreen({ violations = [], onSubmitDispute }) {
                 title="Xem Clip 10s"
                 variant="secondary"
                 icon={FileVideo}
-                onPress={() =>
-                  Alert.alert(
-                    `Bằng chứng Video #${v.id}`,
-                    "Đang phát clip 10 giây trích xuất từ Ring Buffer RAM trên Raspberry Pi 4 (H.264 <= 2MB).",
-                  )
-                }
+                onPress={() => setSelectedForVideo(v)}
                 style={{ flex: 1 }}
               />
               {canDispute && (
@@ -150,7 +157,13 @@ export default function ViolationsScreen({ violations = [], onSubmitDispute }) {
             </View>
           </AppCard>
         );
-      })}
+      }))}
+
+      <VideoEvidenceModal
+        visible={Boolean(selectedForVideo)}
+        violation={selectedForVideo}
+        onClose={() => setSelectedForVideo(null)}
+      />
 
       <DisputeModal
         visible={Boolean(selectedForDispute)}

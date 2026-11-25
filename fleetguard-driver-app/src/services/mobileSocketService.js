@@ -1,5 +1,5 @@
 import { io } from "socket.io-client";
-import { API_CONFIG } from "../../mobileConfig";
+import driverDataService from "./driverDataService";
 
 class MobileSocketService {
   socket = null;
@@ -7,9 +7,9 @@ class MobileSocketService {
   connect(token, driverId, callbacks = {}) {
     if (this.socket?.connected) return;
 
-    this.socket = io(API_CONFIG.SOCKET_URL, {
+    this.socket = io(driverDataService.getSocketUrl(), {
       auth: { token },
-      transports: ["websocket"],
+      transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionDelay: 1000,
     });
@@ -19,13 +19,16 @@ class MobileSocketService {
     });
 
     this.socket.on("driver:score_changed", (data) => {
-      if (data.driver_id === driverId || !data.driver_id) {
+      if (
+        !data?.driver_id ||
+        Number(data.driver_id) === Number(driverId)
+      ) {
         callbacks.onScoreChanged?.(data);
       }
     });
 
     this.socket.on("violation:new", (data) => {
-      if (data.driver_id === driverId) {
+      if (Number(data?.driver_id) === Number(driverId)) {
         callbacks.onViolationNew?.(data);
       }
     });
