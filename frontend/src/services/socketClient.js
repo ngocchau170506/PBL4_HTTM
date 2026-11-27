@@ -1,4 +1,4 @@
-import { io } from "socket.io-client";
+﻿import { io } from "socket.io-client";
 import toast from "react-hot-toast";
 
 export const SOCKET_EVENTS = {
@@ -9,7 +9,9 @@ export const SOCKET_EVENTS = {
   DEVICE_HEALTH: "device:health",
 };
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:3000";
+// Dùng origin của window để Socket.io đi qua Vite proxy khi truy cập từ IP mạng LAN
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL ||
+  (typeof window !== "undefined" ? window.location.origin : "http://localhost:3000");
 const USE_MOCK_SOCKET = false;
 
 class SocketService {

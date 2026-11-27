@@ -90,10 +90,10 @@ export const getViolationTypeByCode = (code) => {
   if (upper.includes('TAMPER') || upper.includes('CHE') || upper.includes('RÚT') || upper.includes('OCCLUD')) {
     return VIOLATION_TYPES.DEVICE_TAMPERING;
   }
-  if (upper.includes('MICROSLEEP') || upper.includes('EYES_CLOSED') || upper.includes('NGỦ GẬT') || upper.includes('BUON_NGU')) {
+  if (upper.includes('MICROSLEEP') || upper.includes('DROWSY') || upper.includes('EYES_CLOSED') || upper.includes('NGỦ GẬT') || upper.includes('BUON_NGU')) {
     return VIOLATION_TYPES.BUON_NGU;
   }
-  if (upper.includes('PHONE') || upper.includes('ĐIỆN THOẠI') || upper.includes('DIEN_THOAI')) {
+  if (upper.includes('PHONE') || upper.includes('DISTRACT') || upper.includes('SMOK') || upper.includes('ĐIỆN THOẠI') || upper.includes('DIEN_THOAI')) {
     return VIOLATION_TYPES.DIEN_THOAI;
   }
   if (upper.includes('YAWN') || upper.includes('NGÁP') || upper.includes('MET_MOI') || upper.includes('FATIGUE')) {

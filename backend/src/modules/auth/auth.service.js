@@ -240,31 +240,6 @@ export const changeOwnPassword = async (
 	return { success: true, message: 'Đổi mật khẩu thành công.' };
 };
 
-export const resetUserPasswordByAdmin = async (
-	targetUserId,
-	newPassword = 'password123',
-	adminUser,
-) => {
-	const pTargetId = parseInt(targetUserId, 10);
-	const passwordHash = await bcrypt.hash(newPassword, 10);
-
-	const updated = await prisma.user.update({
-		where: { id: pTargetId },
-		data: { passwordHash },
-	});
-
-	const { logAuditAction } = await import('../../common/audit.service.js');
-	await logAuditAction({
-		userId: adminUser.id,
-		userName: adminUser.hoTen,
-		hanhDong: 'ADMIN_RESET_PASSWORD',
-		doiTuongLoai: 'USER',
-		doiTuongId: String(pTargetId),
-		lyDo: `Quản trị viên cấp lại mật khẩu mặc định cho tài khoản ${updated.username}`,
-	});
-
-	return { success: true, message: `Đã đặt lại mật khẩu cho ${updated.hoTen}.` };
-};
 
 export const updateOwnProfile = async (userId, { ho_ten, hoTen, so_dien_thoai, sdt }) => {
 	const pId = parseInt(userId, 10);

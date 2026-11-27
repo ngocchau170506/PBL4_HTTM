@@ -1,0 +1,21 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 5000,
+    "title": "Hệ Thống Máy Chủ Giám Sát Xe Trung Tâm",
+    "env": "production"
+  },
+  "database": {
+    "path": "data/fleet_server.db",
+    "history_retention_days": 30
+  },
+  "evidence": {
+    "storage_dir": "evidence",
+    "max_image_mb": 5,
+    "jpeg_quality": 85
+  },
+  "downlink": {
+    "default_command_timeout_sec": 60,
+    "auto_ack_coordinates": true
+  }
+}

@@ -1,4 +1,4 @@
-import cookieParser from 'cookie-parser';
+﻿import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
@@ -7,7 +7,7 @@ import jwt from 'jsonwebtoken';
 import path from 'path';
 
 import { setupSwagger } from './config/swagger.js';
-import assetsRouter from './modules/assets/assets.router.js';
+import assetsRouter, { vehiclesRouter, routesRouter } from './modules/assets/assets.router.js';
 import auditRouter from './modules/audit/audit.router.js';
 import authRouter from './modules/auth/auth.router.js';
 import biometricsRouter from './modules/biometrics/biometrics.router.js';
@@ -72,10 +72,28 @@ const ALLOWED_ORIGINS = [
 	]),
 ];
 
+// Cho phép mọi IP trong mạng local (192.168.x.x, 172.x.x.x, 10.x.x.x)
+const isLocalNetworkOrigin = (origin) => {
+	if (!origin) return true;
+	try {
+		const url = new URL(origin);
+		const hostname = url.hostname;
+		return (
+			hostname === 'localhost' ||
+			hostname === '127.0.0.1' ||
+			/^192\.168\.\d+\.\d+$/.test(hostname) ||
+			/^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(hostname) ||
+			/^10\.\d+\.\d+\.\d+$/.test(hostname)
+		);
+	} catch {
+		return false;
+	}
+};
+
 app.use(
 	cors({
 		origin: (origin, callback) => {
-			if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+			if (isLocalNetworkOrigin(origin) || ALLOWED_ORIGINS.includes(origin)) {
 				callback(null, true);
 			} else {
 				console.warn(`⚠️ CORS blocked origin: ${origin}`);
@@ -133,8 +151,8 @@ setupSwagger(app);
 app.use('/api/auth', authRouter);
 app.use('/api/assets', assetsRouter);
 app.use('/api/drivers', driversRouter);
-app.use('/api/vehicles', assetsRouter);
-app.use('/api/routes', assetsRouter);
+app.use('/api/vehicles', vehiclesRouter);
+app.use('/api/routes', routesRouter);
 app.use('/api/trips', tripsRouter);
 app.use('/api/iot', iotRouter);
 app.use('/api/violations', violationsRouter);
@@ -152,8 +170,8 @@ app.use('/api/edge', iotRouter);
 const v1Router = express.Router();
 v1Router.use('/auth', authRouter);
 v1Router.use('/drivers', driversRouter);
-v1Router.use('/vehicles', assetsRouter);
-v1Router.use('/routes', assetsRouter);
+v1Router.use('/vehicles', vehiclesRouter);
+v1Router.use('/routes', routesRouter);
 v1Router.use('/assets', assetsRouter);
 v1Router.use('/trips', tripsRouter);
 v1Router.use('/iot', iotRouter);

@@ -1,7 +1,7 @@
 import { resolveViolationFromFlag } from '../../common/constants/violationTypes.js';
 import prisma from '../../common/prisma.js';
 import { getAiConfig } from '../configs/configs.service.js';
-import { resolveViolationFromFlag } from '../../common/constants/violationTypes.js';
+import { createViolationRecord, enrichViolationRecord } from '../violations/violations.service.js';
 
 let ioInstance = null;
 
@@ -28,9 +28,9 @@ export const processIotDataPacket = async ({
 	aiViolationFlag,
 }) => {
 	const rawTripId = tripId ?? trip_id;
-	const rawDeviceId = deviceId ?? device_id ?? 1;
+	const rawDeviceId = deviceId ?? device_id;
 	let parsedTripId = rawTripId ? parseInt(rawTripId, 10) : null;
-	let parsedDeviceId = parseInt(rawDeviceId, 10);
+	let parsedDeviceId = Number.isInteger(Number(rawDeviceId)) ? parseInt(rawDeviceId, 10) : null;
 
 	const lat = parseFloat(viDo ?? vi_do_gps ?? 16.0544);
 	const lng = parseFloat(kinhDo ?? kinh_do_gps ?? 108.2022);
@@ -38,8 +38,10 @@ export const processIotDataPacket = async ({
 	const rawCo2 = co2Level ?? co2_ppm;
 	const co2 = rawCo2 !== undefined && rawCo2 !== null ? parseFloat(rawCo2) : null;
 
-	// 1. Tự tìm chuyến IN_PROGRESS hoặc tìm deviceId từ tripId
+	// 1. Tự tìm chuyến IN_PROGRESS hoặc tìm deviceId từ tripId / maThietBi
 	let tripInfo = null;
+	let targetDevice = null;
+
 	if (parsedTripId) {
 		tripInfo = await prisma.trip.findUnique({
 			where: { id: parsedTripId },
@@ -50,23 +52,42 @@ export const processIotDataPacket = async ({
 			},
 		});
 		if (tripInfo?.vehicle?.iotDevice?.id) {
-			parsedDeviceId = tripInfo.vehicle.iotDevice.id;
+			targetDevice = tripInfo.vehicle.iotDevice;
+			parsedDeviceId = targetDevice.id;
 		}
-	} else if (parsedDeviceId) {
-		const device = await prisma.iotDevice.findUnique({
-			where: { id: parsedDeviceId },
-			include: { vehicle: true },
-		});
-		if (device && device.vehicleId) {
-			tripInfo = await prisma.trip.findFirst({
-				where: { vehicleId: device.vehicleId, trangThai: 'IN_PROGRESS' },
-				include: {
-					driver: { include: { user: true } },
-					vehicle: { include: { iotDevice: true } },
-					route: true,
-				},
+	}
+
+	if (!targetDevice) {
+		if (parsedDeviceId) {
+			targetDevice = await prisma.iotDevice.findUnique({
+				where: { id: parsedDeviceId },
+				include: { vehicle: true },
 			});
-			if (tripInfo) parsedTripId = tripInfo.id;
+		}
+		if (!targetDevice && rawDeviceId) {
+			targetDevice = await prisma.iotDevice.findFirst({
+				where: { maThietBi: String(rawDeviceId) },
+				include: { vehicle: true },
+			});
+		}
+		if (!targetDevice) {
+			targetDevice = await prisma.iotDevice.findFirst({
+				include: { vehicle: true },
+			});
+		}
+		if (targetDevice) {
+			parsedDeviceId = targetDevice.id;
+			if (!tripInfo && targetDevice.vehicleId) {
+				tripInfo = await prisma.trip.findFirst({
+					where: { vehicleId: targetDevice.vehicleId, trangThai: 'IN_PROGRESS' },
+					include: {
+						driver: { include: { user: true } },
+						vehicle: { include: { iotDevice: true } },
+						route: true,
+					},
+				});
+				if (tripInfo) parsedTripId = tripInfo.id;
+			}
 		}
 	}
 
@@ -209,17 +230,30 @@ export const processEdgeViolation = async ({
 		}
 	}
 
-	const parsedTripId = parseInt(trip_id || tripId || 1, 10);
+	let parsedTripId = parseInt(trip_id || tripId, 10);
 	let parsedDriverId = parseInt(driver_id || driverId || 0, 10);
 
-	// Tự động lấy tài xế từ Trip nếu Pi 4 chỉ gửi trip_id hoặc gửi lệch driver_id
-	const tripInfo = await prisma.trip.findUnique({
-		where: { id: parsedTripId },
-		include: {
-			driver: { include: { user: true } },
-			vehicle: true,
-		},
-	});
+	// Tự động lấy chuyến đi và tài xế nếu Pi 4 chỉ gửi trip_id hoặc trip_id không khớp
+	let tripInfo = parsedTripId
+		? await prisma.trip.findUnique({
+				where: { id: parsedTripId },
+				include: {
+					driver: { include: { user: true } },
+					vehicle: true,
+				},
+		  })
+		: null;
+
+	if (!tripInfo) {
+		tripInfo = await prisma.trip.findFirst({
+			where: { trangThai: 'IN_PROGRESS' },
+			include: {
+				driver: { include: { user: true } },
+				vehicle: true,
+			},
+		});
+		if (tripInfo) parsedTripId = tripInfo.id;
+	}
 
 	if (tripInfo && (!parsedDriverId || parsedDriverId !== tripInfo.driverId)) {
 		parsedDriverId = tripInfo.driverId;

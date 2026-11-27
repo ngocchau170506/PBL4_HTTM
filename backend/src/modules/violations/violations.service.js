@@ -9,12 +9,6 @@ import { sendViolationEmailAlert } from '../../common/email.service.js';
 import prisma from '../../common/prisma.js';
 import { getAiConfig } from '../configs/configs.service.js';
 import { formatDriver } from '../drivers/drivers.service.js';
-import {
-  VIOLATION_TYPES,
-  getViolationTypeById,
-  getViolationTypeByCode,
-  getAllViolationTypes,
-} from '../../common/constants/violationTypes.js';
 
 export { getAllViolationTypes };
 

@@ -1,4 +1,4 @@
-import L from "leaflet";
+﻿import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { useEffect, useRef, useState } from "react";
 
@@ -23,6 +23,55 @@ const createVehicleIcon = (colorHex, isDanger = false, plateText = "") => {
       </div>
     `,
   });
+};
+
+const createVehiclePopupContent = (v, lat, lng, plate, isDanger, isWarning) => {
+  const speed = v.currentSpeed ?? v.speed ?? v.telemetry?.toc_do ?? v.telemetry?.toc_do_kmh ?? 0;
+  const co2 = v.currentCo2 ?? v.co2 ?? v.telemetry?.co2_ppm ?? v.telemetry?.co2_level ?? 450;
+  const driver = v.driver || v.driverName || v.tai_xe_hien_tai || "Chưa gán tài xế";
+  const statusText = isDanger ? "NGUY HIỂM" : isWarning ? "CẢNH BÁO" : "BÌNH THƯỜNG";
+  const badgeBg = isDanger ? "#fee2e2" : isWarning ? "#fef3c7" : "#dcfce7";
+  const badgeColor = isDanger ? "#b91c1c" : isWarning ? "#b45309" : "#15803d";
+  const alertText = v.alertType || v.aiViolationFlag || (isDanger ? "Phát hiện buồn ngủ" : null);
+
+  return `
+    <div style="font-family: system-ui, -apple-system, sans-serif; min-width: 250px; color: #0f172a; padding: 4px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1.5px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 8px;">
+        <span style="font-weight: 900; font-size: 15px; color: #1e293b; letter-spacing: -0.3px;">🚚 ${plate}</span>
+        <span style="background: ${badgeBg}; color: ${badgeColor}; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 9999px;">
+          ${statusText}
+        </span>
+      </div>
+
+      <div style="font-size: 12px; line-height: 1.6; color: #334155; margin-bottom: 8px;">
+        <p style="margin: 2px 0;">👤 <b>Tài xế:</b> <span style="font-weight: 600; color: #0f172a;">${driver}</span></p>
+        <p style="margin: 2px 0;">📍 <b>Toạ độ GPS:</b> <span style="font-family: monospace; font-weight: 700; color: #2563eb;">${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}</span></p>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: #f8fafc; padding: 8px; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 8px;">
+        <div>
+          <span style="font-size: 10px; color: #64748b; display: block; font-weight: 600;">⚡ Vận tốc</span>
+          <span style="font-size: 14px; font-weight: 900; color: #0f172a;">${speed} <small style="font-size: 10px; font-weight: 600; color: #64748b;">km/h</small></span>
+        </div>
+        <div>
+          <span style="font-size: 10px; color: #64748b; display: block; font-weight: 600;">💨 Khí CO2 Cabin</span>
+          <span style="font-size: 14px; font-weight: 900; color: ${Number(co2) > 1000 ? '#dc2626' : '#059669'};">${co2} <small style="font-size: 10px; font-weight: 600; color: #64748b;">ppm</small></span>
+        </div>
+      </div>
+
+      ${alertText ? `
+        <div style="background: #fef2f2; border-left: 3px solid #ef4444; padding: 4px 8px; border-radius: 4px; margin-bottom: 8px; font-size: 11px; color: #991b1b; font-weight: 600;">
+          ⚠️ ${alertText}
+        </div>
+      ` : ''}
+
+      <div style="display: flex; gap: 6px;">
+        <a href="https://www.google.com/maps?q=${lat},${lng}" target="_blank" rel="noopener noreferrer" style="flex: 1; background: #2563eb; color: white; text-align: center; text-decoration: none; padding: 6px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; transition: background 0.2s;">
+          🧭 Mở Google Maps
+        </a>
+      </div>
+    </div>
+  `;
 };
 
 const createRestStopIcon = (stopName, kmRemaining, etaMinutes) => {
@@ -125,7 +174,9 @@ export default function LeafletMapView({
         v.lat ?? v.telemetry?.vi_do ?? v.telemetry?.vi_do_gps ?? 16.0544;
       const lng =
         v.lng ?? v.telemetry?.kinh_do ?? v.telemetry?.kinh_do_gps ?? 108.2022;
-      const plate = v.plate || v.bien_so || v.bien_so_xe || "Xe IoT";
+            const plate = v.plate || v.bien_so || v.bien_so_xe || "Xe IoT";
+      const speed = v.currentSpeed ?? v.speed ?? v.telemetry?.toc_do ?? v.telemetry?.toc_do_kmh ?? 0;
+      const co2 = v.currentCo2 ?? v.co2 ?? v.telemetry?.co2_ppm ?? v.telemetry?.co2_level ?? 450;
 
       const isDanger =
         v.priorityLevel === "DANGER" || v.alertType === "MICROSLEEP";

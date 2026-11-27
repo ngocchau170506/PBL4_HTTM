@@ -1,0 +1,12 @@
+# ==============================================================================
+# HỆ THỐNG MÁY CHỦ GIÁM SÁT & QUẢN LÝ XE TRUNG TÂM (FLEET MANAGEMENT SERVER)
+# ==============================================================================
+# Máy chủ trung tâm được xây dựng 100% bằng THƯ VIỆN TIÊU CHUẨN (Python Standard Library).
+# Bạn KHÔNG BẮT BUỘC phải cài đặt thêm bất kỳ thư viện nào bên ngoài!
+#
+# Yêu cầu hệ điều hành:
+#   - Windows 10/11, Ubuntu/Debian Linux, hoặc macOS
+#   - Python 3.8 trở lên (đã có sẵn: http.server, sqlite3, json, urllib, socket)
+#
+# (Tùy chọn nâng cao - Chỉ cần khi cắm cáp USB ESP32 trực tiếp vào PC để quét cổng COM):
+# pyserial>=3.5

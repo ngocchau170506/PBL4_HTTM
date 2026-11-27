@@ -1,4 +1,4 @@
-import http from 'http';
+﻿import http from 'http';
 import jwt from 'jsonwebtoken';
 import { Server as SocketIOServer } from 'socket.io';
 import app from './app.js';
@@ -33,7 +33,15 @@ const ALLOWED_ORIGINS = [
 // Khởi tạo Socket.io Server cho Bản đồ trực tuyến & Cảnh báo thời gian thực
 const io = new SocketIOServer(server, {
 	cors: {
-		origin: ALLOWED_ORIGINS,
+		origin: (origin, cb) => {
+			if (!origin) return cb(null, true);
+			try {
+				const h = new URL(origin).hostname;
+				const ok = h === 'localhost' || h === '127.0.0.1' ||
+					/^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /^10\./.test(h);
+				cb(null, ok || ALLOWED_ORIGINS.includes(origin));
+			} catch { cb(null, false); }
+		},
 		methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
 		credentials: true,
 	},

@@ -1,0 +1,26 @@
+﻿PI_AI Server of AI (AI Media Gateway + PBL4_HTTM Bridge) - Quickstart
+=====================================================================
+Doc chi tiet tai file: HANDOFF_SERVER_INTEGRATION.md
+
+1. Cai dat moi truong Python (1 lan):
+   python -m venv venv
+   .\venv\Scripts\Activate.ps1
+   pip install -r server_ai\requirements.txt
+   pip install imageio-ffmpeg   # (khuyen dung de ghep MP4 H.264 chuan cho moi trinh duyet)
+
+2. Cau hinh token (KHONG commit len Git):
+   Copy server_ai\data\tokens.json.example -> server_ai\data\tokens.json
+   Dien token role "device" trung voi token ben Pi 4 & IOT_DEVICE_SECRET cua Node.js backend.
+
+3. Chay song song va gop voi PBL4_HTTM Backend (Node.js :3000):
+   $env:SERVER_ENV_PROFILE="prod"
+   $env:PBL4_BACKEND_URL="http://127.0.0.1:3000"
+   $env:PBL4_DEVICE_TOKEN="<IOT_DEVICE_SECRET_TRONG_BACKEND_ENV>"
+   $env:PBL4_DEVICE_ID="XE-01"
+   python server_ai\run_server.py
+
+   (Hoac test nhanh cuc bo 127.0.0.1 khong can tokens.json:
+    $env:SERVER_ENV_PROFILE="lab"; python server_ai\run_server.py)
+
+4. Mo Cloudflare Tunnel HTTPS cho Pi 4 (cua so PowerShell thu 2):
+   .\server_ai\run_tunnel.ps1 -LocalUrl http://127.0.0.1:5000

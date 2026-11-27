@@ -1,0 +1,11 @@
+﻿{
+  "schema_version": "2.0",
+  "active": {
+    "REPLACE_ADMIN_TOKEN_MIN_32_CHARS": "admin",
+    "REPLACE_OPERATOR_TOKEN_MIN_32_CHARS": "operator",
+    "REPLACE_VIEWER_TOKEN_MIN_32_CHARS": "viewer",
+    "REPLACE_DEVICE_TOKEN_SAME_AS_PI_AND_PBL4": "device",
+    "REPLACE_DRIVER_PHONE_TOKEN_MIN_32_CHARS": "driver_phone"
+  },
+  "grace": {}
+}
