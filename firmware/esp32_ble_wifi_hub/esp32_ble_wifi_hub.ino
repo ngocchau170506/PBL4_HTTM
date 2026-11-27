@@ -20,7 +20,7 @@
  *      - Streams live GPS + hub health to Pi every 1s via FDBLE:{...}
  *      - Keeps live GPS working even if Raspberry Pi 4 freezes/powers off!
  *   2. Open BLE Nordic UART Service (NUS) for Driver Mobile App (no PIN):
- *      - Phone -> Hub : MUTE | SOS | ACK | REST_START | REST_END | STATUS
+ *      - Phone -> Hub : MUTE | SOS | ACK | REST_START | REST_END | CALIBRATE | STATUS
  *      - Hub -> Phone : ALERT:... (instant) & GPS:{...} (every 2s while connected)
  *   3. On-Demand Wi-Fi Survival Bridge:
  *      - Wi-Fi stays OFF while Pi sends heartbeats (HB:{...})
@@ -460,7 +460,7 @@ static void processBleEvents(unsigned long now) {
   if (bleConnected && !oldBleConnected) {
     oldBleConnected = true;
     Serial.println("EVT,BLE_STATE,PHONE_CONNECTED");
-    bleNotifyText("PI_AI_HUB CONNECTED (" + cfgVehicleId + ") - Cmds: MUTE, SOS, ACK, REST_START, REST_END, STATUS");
+    bleNotifyText("PI_AI_HUB CONNECTED (" + cfgVehicleId + ") - Cmds: MUTE, SOS, ACK, REST_START, REST_END, CALIBRATE, STATUS");
   } else if (!bleConnected && oldBleConnected) {
     oldBleConnected = false;
     Serial.println("EVT,BLE_STATE,PHONE_DISCONNECTED");
@@ -520,10 +520,13 @@ static void processBleEvents(unsigned long now) {
   } else if (up == "REST_END" || up == "REST_BREAK_END") {
     Serial.println("EVT,BLE_ACTION,REST_BREAK_END");
     bleNotifyText("OK:REST_BREAK_END");
+  } else if (up == "CALIBRATE" || up == "CALIBRATE_LOCK" || up == "CAL") {
+    Serial.println("EVT,BLE_ACTION,CALIBRATE_LOCK");
+    bleNotifyText("OK:CALIBRATE_LOCK");
   } else if (up == "STATUS" || up == "?") {
     emitStatusJson(true);
   } else {
-    bleNotifyText("ERR:UNKNOWN_CMD (" + s + ") Use: MUTE|SOS|ACK|REST_START|REST_END|STATUS");
+    bleNotifyText("ERR:UNKNOWN_CMD (" + s + ") Use: MUTE|SOS|ACK|REST_START|REST_END|CALIBRATE|STATUS");
   }
 }
 
@@ -734,7 +737,7 @@ static void handleSerialCommand(const String &raw) {
     return;
   }
   if (up == "WHOAMI") {
-    Serial.println("EVT,WHOAMI,ROLE=COMMS_BLE_GPS_HUB,FW=PI_AI_3.0");
+    Serial.println("EVT,WHOAMI,ROLE=COMMS_BLE_GPS_HUB,FW=PI_AI_3.1");
     return;
   }
   if (up == "STATUS") {
@@ -855,7 +858,7 @@ void setup() {
   digitalWrite(LED_PIN, LOW);
 
   Serial.println("EVT,BOOT_BLE_GPS_HUB_READY,115200");
-  Serial.println("EVT,WHOAMI,ROLE=COMMS_BLE_GPS_HUB,FW=PI_AI_3.0");
+  Serial.println("EVT,WHOAMI,ROLE=COMMS_BLE_GPS_HUB,FW=PI_AI_3.1");
   esp_reset_reason_t rr = esp_reset_reason();
   Serial.printf("EVT,RESET_REASON,%s\n", resetReasonName(rr));
   if (rr == ESP_RST_BROWNOUT) {

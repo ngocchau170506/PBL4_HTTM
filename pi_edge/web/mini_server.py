@@ -12,6 +12,7 @@ Security & Performance guarantees:
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import threading
 import time
@@ -19,8 +20,8 @@ from concurrent.futures import ThreadPoolExecutor
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
-from urllib.parse import parse_qs, urlparse
+from typing import Any, Callable, Dict, Optional, Tuple
+from urllib.parse import parse_qs, unquote, urlparse
 
 import cv2
 import numpy as np
@@ -30,6 +31,47 @@ from pi_edge.core.access_control import AuditLogger, EdgeAccessController, is_al
 MAX_POST_BODY_BYTES = 128 * 1024  # 128 KB max for Pi edge JSON commands
 MAX_STREAM_CLIENTS = 2  # Never let MJPEG streams starve /api/control or /api/v1/health (6-worker pool)!
 ALLOWED_EVIDENCE_EXTS = {".jpg", ".jpeg", ".mp4", ".webm"}
+ALLOWED_APP_IOT_EXTS = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+}
+
+
+def _allowed_lan_origin(origin: str) -> Optional[str]:
+    raw = (origin or "").strip()
+    if not raw or "\r" in raw or "\n" in raw:
+        return None
+    parsed = urlparse(raw)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    if parsed.path or parsed.params or parsed.query or parsed.fragment:
+        return None
+    if parsed.username is not None or parsed.password is not None:
+        return None
+    host = (parsed.hostname or "").lower()
+    if not host or host.startswith("."):
+        return None
+    allowed = False
+    if host in ("localhost", "127.0.0.1"):
+        allowed = True
+    elif (host.endswith(".local") and len(host) > 6) or (
+        host.endswith(".trycloudflare.com") and len(host) > 18
+    ):
+        allowed = True
+    else:
+        try:
+            ip = ipaddress.IPv4Address(host)
+            b = ip.packed
+            if b[0] == 10 or (b[0] == 192 and b[1] == 168) or (b[0] == 172 and 16 <= b[1] <= 31):
+                allowed = True
+        except ValueError:
+            allowed = False
+    if not allowed:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 _LIVE_VIEWER_HTML = """<!DOCTYPE html>
 <html lang="vi">
@@ -76,6 +118,7 @@ _LIVE_VIEWER_HTML = """<!DOCTYPE html>
     <img id="cam-img" alt="PI_AI Live Camera Stream">
     <div class="grid">
       <div class="kpi"><div class="lbl">Trạng thái AI</div><div id="m-ai" class="val">-</div></div>
+      <div class="kpi"><div class="lbl">Cân chỉnh 10s</div><div id="m-cal" class="val">-</div></div>
       <div class="kpi"><div class="lbl">Camera / AI FPS</div><div id="m-fps" class="val">-</div></div>
       <div class="kpi"><div class="lbl">Nhiệt Pi / Sụt áp</div><div id="m-temp" class="val">-</div></div>
       <div class="kpi"><div class="lbl">GPS ESP32 #2</div><div id="m-gps" class="val">-</div></div>
@@ -130,9 +173,29 @@ function updateMeta(d) {
   alertEl.textContent = at + (st.camera && st.camera.face_detected ? ' (Có mặt)' : ' (Chưa thấy mặt)');
   alertEl.className = 'val ' + (at === 'NORMAL' ? 'ok' : 'err');
   document.getElementById('m-fps').textContent = (pi.camera_fps ?? 0) + ' / ' + (pi.ai_fps ?? 0);
+  const cal = ds.calibration || {};
+  const calEl = document.getElementById('m-cal');
+  if (calEl) {
+    if (cal.state === 'RUNNING') {
+      calEl.textContent = 'ĐANG ĐO ' + Number(cal.progress_s || 0).toFixed(1) + 's/' + Number(cal.duration_s || 10).toFixed(0) + 's';
+      calEl.className = 'val warn';
+    } else if (cal.locked) {
+      calEl.textContent = 'ĐÃ KHÓA (EAR<=' + Number(cal.ear_closed_threshold || 0.18).toFixed(2) + ')';
+      calEl.className = 'val ok';
+    } else if (cal.state === 'DONE') {
+      calEl.textContent = 'TẠM (EAR<=' + Number(cal.ear_closed_threshold || 0.18).toFixed(2) + ')';
+      calEl.className = 'val ok';
+    } else if (cal.state === 'FAILED') {
+      calEl.textContent = 'CHƯA THẤY MẶT';
+      calEl.className = 'val err';
+    } else {
+      calEl.textContent = 'CHỜ CAMERA';
+      calEl.className = 'val warn';
+    }
+  }
   const tEl = document.getElementById('m-temp');
   tEl.textContent = (pi.cpu_temp_c ?? '-') + '°C | ' + (pi.throttled || '0x0');
-  tEl.className = 'val ' + ((pi.cpu_temp_c || 0) >= 70 ? 'err' : 'ok');
+  tEl.className = 'val ' + ((pi.cpu_temp_c || 0) >= 80 ? 'err' : ((pi.cpu_temp_c || 0) >= 70 ? 'warn' : 'ok'));
   const gEl = document.getElementById('m-gps');
   if (gps.is_valid && gps.lat != null && gps.lon != null) {
     gEl.textContent = 'FIX (' + (gps.satellites || 0) + ' sat)';
@@ -214,6 +277,7 @@ class MiniWebServer:
         max_stream_fps: float = 30.0,
         jpeg_quality: int = 82,
         enable_live_stream: bool = True,
+        app_iot_dir: Optional[Path] = None,
     ):
         self.host = host
         self.port = int(port)
@@ -222,6 +286,9 @@ class MiniWebServer:
         self.access = access
         self.audit = audit
         self.violations_dir = Path(violations_dir)
+        self.app_iot_dir = (
+            Path(app_iot_dir) if app_iot_dir is not None else (Path(__file__).resolve().parents[2] / "APP_IOT")
+        )
         self.on_control_cmd = on_control_cmd
         self.on_esp_bridge = on_esp_bridge
         self.on_stream_frame_sent = on_stream_frame_sent
@@ -304,6 +371,13 @@ class MiniWebServer:
                         pass
                 return {k: v.value for k, v in ck.items()}
 
+            def _send_cors_headers(self) -> Optional[str]:
+                allowed = _allowed_lan_origin(self.headers.get("Origin", ""))
+                if allowed:
+                    self.send_header("Access-Control-Allow-Origin", allowed)
+                    self.send_header("Vary", "Origin")
+                return allowed
+
             def _send_json(self, code: int, payload: Dict[str, Any]) -> None:
                 body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
                 self.send_response(code)
@@ -312,9 +386,22 @@ class MiniWebServer:
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("X-Frame-Options", "DENY")
                 self.send_header("Referrer-Policy", "no-referrer")
+                self._send_cors_headers()
                 self.send_header("Connection", "close")
                 self.end_headers()
                 self.wfile.write(body)
+
+            def do_OPTIONS(self):
+                allowed = _allowed_lan_origin(self.headers.get("Origin", ""))
+                self.send_response(204)
+                if allowed:
+                    self.send_header("Access-Control-Allow-Origin", allowed)
+                    self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                    self.send_header("Access-Control-Allow-Headers", "Authorization, X-Auth-Token, Content-Type")
+                    self.send_header("Vary", "Origin")
+                self.send_header("Content-Length", "0")
+                self.send_header("Connection", "close")
+                self.end_headers()
 
             def _auth(self, min_role: str, query: Dict[str, str], required_audit: bool = False, allow_query_token: bool = False):
                 clean_path = urlparse(self.path).path
@@ -383,11 +470,91 @@ class MiniWebServer:
                         200,
                         {
                             "ok": not parent.audit.audit_degraded,
+                            "target": "pi_local",
+                            "app_iot_available": bool(
+                                parent.app_iot_dir and (parent.app_iot_dir / "driver.html").is_file()
+                            ),
                             "web_mode": parent.web_mode,
                             "enable_live_stream": parent.enable_live_stream,
                             "stream_clients": stream_clients,
                             "audit_degraded": parent.audit.audit_degraded,
                             "ts": time.time(),
+                        },
+                    )
+                    return
+
+                app_enabled = parent.enable_live_stream or parent.web_mode == "full_local"
+
+                if path == "/driver":
+                    if not app_enabled:
+                        self._send_json(404, {"ok": False, "error": "ROUTE_DISABLED_IN_SERVER_MODE"})
+                        return
+                    if not (parent.app_iot_dir and (parent.app_iot_dir / "driver.html").is_file()):
+                        self._send_json(404, {"ok": False, "error": "APP_IOT_NOT_FOUND"})
+                        return
+                    self.send_response(307)
+                    self.send_header("Location", "/app_iot/driver.html")
+                    self.send_header("Content-Length", "0")
+                    self._send_cors_headers()
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    return
+
+                if path == "/app_iot" or path.startswith("/app_iot/"):
+                    if not app_enabled:
+                        self._send_json(404, {"ok": False, "error": "ROUTE_DISABLED_IN_SERVER_MODE"})
+                        return
+                    raw_rel = path[len("/app_iot/"):] if path.startswith("/app_iot/") else ""
+                    rel_unquoted = unquote(raw_rel)
+                    if "\\" in rel_unquoted or "\x00" in rel_unquoted:
+                        self._send_json(403, {"ok": False, "error": "PATH_TRAVERSAL_FORBIDDEN"})
+                        return
+                    rel_raw = rel_unquoted.lstrip("/")
+                    if not rel_raw or ".." in rel_unquoted.split("/") or ".." in Path(rel_raw).parts:
+                        self._send_json(403, {"ok": False, "error": "PATH_TRAVERSAL_FORBIDDEN"})
+                        return
+                    base_resolved = parent.app_iot_dir.resolve()
+                    target = (base_resolved / rel_raw).resolve()
+                    if not target.is_relative_to(base_resolved):
+                        self._send_json(403, {"ok": False, "error": "PATH_TRAVERSAL_FORBIDDEN"})
+                        return
+                    ctype = ALLOWED_APP_IOT_EXTS.get(target.suffix.lower())
+                    if not ctype:
+                        self._send_json(403, {"ok": False, "error": "FILE_TYPE_FORBIDDEN"})
+                        return
+                    if not target.is_file():
+                        self._send_json(404, {"ok": False, "error": "NOT_FOUND"})
+                        return
+                    data_bytes = target.read_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", ctype)
+                    self.send_header("Content-Length", str(len(data_bytes)))
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("Cache-Control", "no-cache")
+                    self._send_cors_headers()
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.wfile.write(data_bytes)
+                    return
+
+                if path == "/api/app_status":
+                    if not app_enabled:
+                        self._send_json(404, {"ok": False, "error": "ROUTE_DISABLED_IN_SERVER_MODE"})
+                        return
+                    dec = self._auth("viewer", q)
+                    if dec is None:
+                        return
+                    with parent._cond:
+                        st = dict(parent._state)
+                    self._send_json(
+                        200,
+                        {
+                            "ok": True,
+                            "source": "pi_local",
+                            "role": dec.role,
+                            "web_mode": parent.web_mode,
+                            "enable_live_stream": parent.enable_live_stream,
+                            "state": st,
                         },
                     )
                     return
@@ -533,7 +700,7 @@ class MiniWebServer:
                     return
 
                 if path == "/api/web_login":
-                    if not parent.enable_live_stream:
+                    if not (parent.enable_live_stream or parent.web_mode == "full_local"):
                         self._send_json(404, {"ok": False, "error": "LIVE_STREAM_DISABLED"})
                         return
                     data = self._read_bounded_json()
@@ -566,6 +733,7 @@ class MiniWebServer:
                     self.send_header("Content-Length", str(len(body)))
                     self.send_header("Set-Cookie", f"web_token={tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=43200")
                     self.send_header("X-Content-Type-Options", "nosniff")
+                    self._send_cors_headers()
                     self.send_header("Connection", "close")
                     self.end_headers()
                     self.wfile.write(body)
@@ -577,6 +745,7 @@ class MiniWebServer:
                     self.send_header("Content-Type", "application/json; charset=utf-8")
                     self.send_header("Content-Length", str(len(body)))
                     self.send_header("Set-Cookie", "web_token=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0")
+                    self._send_cors_headers()
                     self.send_header("Connection", "close")
                     self.end_headers()
                     self.wfile.write(body)
@@ -592,11 +761,10 @@ class MiniWebServer:
                     self._send_json(200, res)
                     return
 
-                if parent.web_mode != "full_local":
-                    self._send_json(404, {"ok": False, "error": "ROUTE_DISABLED_IN_SERVER_MODE"})
-                    return
-
                 if path == "/api/control":
+                    if not (parent.web_mode == "full_local" or parent.enable_live_stream):
+                        self._send_json(404, {"ok": False, "error": "ROUTE_DISABLED_IN_SERVER_MODE"})
+                        return
                     dec = self._auth("operator", q, required_audit=True)
                     if dec is None:
                         return
@@ -609,6 +777,10 @@ class MiniWebServer:
                         return
                     ok, detail = parent.on_control_cmd(cmd) if parent.on_control_cmd else (True, "NO_ESP")
                     self._send_json(200, {"ok": ok, "cmd": cmd, "detail": detail})
+                    return
+
+                if parent.web_mode != "full_local":
+                    self._send_json(404, {"ok": False, "error": "ROUTE_DISABLED_IN_SERVER_MODE"})
                     return
 
                 self._send_json(404, {"ok": False, "error": "NOT_FOUND"})
@@ -635,6 +807,3 @@ class MiniWebServer:
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
-
-
-from typing import Tuple  # noqa: E402

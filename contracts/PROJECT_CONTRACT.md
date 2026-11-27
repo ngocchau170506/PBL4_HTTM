@@ -26,10 +26,11 @@
 
 ---
 
-## 3. Các Quyết Định Bổ Sung Đã Được MAIN Phê Duyệt (24/11/2026)
+## 3. Các Quyết Định Bổ Sung Đã Được MAIN Phê Duyệt (`24/11/2026` & Cập nhật `2026-11-26`)
 
-1. **Ngưỡng nhiệt Pi 4 (`THERMAL_CRIT_C = 70.0°C`):** Khóa chính thức mức bảo vệ chủ động `70°C` (L3) thay cho ngưỡng cũ `80°C`, đi kèm yêu cầu lắp tản nhiệt chủ động (heatsink + quạt) trên xe.
+1. **Ngưỡng nhiệt Pi 4 (`THERMAL_CRIT_C = 80.0°C` — cập nhật phê duyệt `2026-11-26`):** Nâng ngưỡng bảo vệ nhiệt Pi 4 từ `70.0°C` lên **`80.0°C`** (`THERMAL_WARM_C = 70.0°C`, `THERMAL_HOT_C = 75.0°C`, `THERMAL_CRIT_C = 80.0°C`; phía Server `PI_THERMAL_CRIT1_C = 75.0°C`, `PI_THERMAL_CRIT2_C = 80.0°C`; bit throttle phần cứng `throttled & 0xF` vẫn ép L3 như cũ) để Pi 4 chạy đủ công suất suy luận Tầng 1 không trượt nhãn mắt, đi kèm yêu cầu lắp tản nhiệt chủ động (heatsink + quạt) trên xe.
 2. **BLE NUS mở trên ESP32 #2 (`LCK-05 v3`):** Giữ chế độ mở (không PIN bắt buộc) để bảo đảm kết nối thông suốt `App ↔ ESP32 #2 ↔ Server`; ưu tiên sửa trọn vẹn MTU framing, OTP pairing và độ bền kết nối.
 3. **Chính sách mất mặt (`ENABLE_NO_FACE_TAMPER_ALERT = 0`):** Giữ nguyên chế độ tắt hoàn toàn để tránh làm phiền tài xế (rủi ro vận hành đã được MAIN xem xét và chấp thuận).
 4. **Hạ tầng Tunnel & App di động:** Tên miền Named Tunnel & ứng dụng di động chính thức thuộc phạm vi nhóm đối tác App (`APP_IOT/` là gói bàn giao tham chiếu chuẩn giao thức).
-5. **AI Tầng 2 CNN (`LCK-02` điều chỉnh phạm vi):** Ngưng phát triển/huấn luyện thêm model CNN `.onnx` mới ở hiện tại; giữ sạch gói bàn giao `CNN_IOT/` & giao diện cắm Tầng 2 để nhóm có thể kích hoạt về sau nếu cần, tập trung độ chính xác thực chiến vào **AI Tầng 1 (`pi_edge/`)**.
+5. **Bác bỏ Tầng 2 CNN (`LCK-02` — khóa phạm vi `2026-11-26`):** Tầng 2 CNN bị bác bỏ — cấm phát triển/thêm model `.onnx` mới, cấm sửa `CNN_IOT/**` hoặc `server_ai/server_core/deep_verifier.py`, không đổi `TIER2_VERIFIER_MODE`; toàn bộ cải thiện độ chính xác thực chiến đặt tại **AI Tầng 1 (`pi_edge/ai/`)**.
+6. **Hai chế độ cân chỉnh MediaPipe 10s ở Tầng 1 (`2026-11-26`):** Bổ sung bộ cân chỉnh tư thế & ngưỡng mắt cá nhân 10.0 giây bằng MediaPipe 478 điểm TFLite (`cv2.dnn.readNetFromTFLite`, không import gói `mediapipe` Python trên Pi 4): (1) **Chế độ `BOOT`** tự động chạy 10s ngay khi nhận khung hình thật đầu tiên từ Camera (không tự ý ghi đè hồ sơ đã khóa `locked=true`); (2) **Chế độ `APP_LOCK`** khi tài xế bấm nút trên `APP_IOT` qua BLE (`CALIBRATE` → `EVT,BLE_ACTION,CALIBRATE_LOCK`) hoặc HTTP (`/api/v1/phone/action` `CALIBRATE_LOCK` → xếp hàng lệnh `CALIBRATE` tới Pi) để đo và lưu nguyên tử vào `pi_edge/calibration/driver_profile.json` (`locked=true`).

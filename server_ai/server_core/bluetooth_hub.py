@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from server_ai.server_core import database, geo_engine
 from server_ai.server_core.sse_broker import broker
 
-ACTION_TYPES = {"ACK_AWAKE", "MUTE_ALERT", "REST_BREAK_START", "REST_BREAK_END", "SOS"}
+ACTION_TYPES = {"ACK_AWAKE", "MUTE_ALERT", "REST_BREAK_START", "REST_BREAK_END", "SOS", "CALIBRATE_LOCK"}
 OTP_TTL_S = 300.0
 
 
@@ -190,10 +190,19 @@ def phone_telemetry(vehicle_id: str, payload: dict) -> dict:
     return {"ok": True, "received_at": time.time(), "relayed_stored": relayed_stored, "gps_result": gps_result}
 
 
-def phone_action(vehicle_id: str, action: str, detail: Optional[dict] = None) -> dict:
+def phone_action(
+    vehicle_id: str,
+    action: str,
+    detail: Optional[dict] = None,
+    actor_role: str = "driver_phone",
+) -> dict:
+    if not vehicle_id or not str(vehicle_id).strip():
+        raise HTTPException(status_code=400, detail="Can vehicle_id hop le")
+    vehicle_id = str(vehicle_id).strip()
     if action not in ACTION_TYPES:
         raise HTTPException(status_code=400, detail=f"action khong hop le, cho phep: {sorted(ACTION_TYPES)}")
     detail = detail or {}
+    command_id: Optional[str] = None
     if action == "SOS":
         from server_ai.server_core.analytics import raise_incident
 
@@ -206,6 +215,7 @@ def phone_action(vehicle_id: str, action: str, detail: Optional[dict] = None) ->
             bypass_cooldown=True,
         )
     elif action == "MUTE_ALERT":
+        from server_ai.server_core import commands
         from server_ai.server_core.mute_tracker import record_dismissal
 
         record_dismissal(
@@ -215,14 +225,65 @@ def phone_action(vehicle_id: str, action: str, detail: Optional[dict] = None) ->
             driver_id=detail.get("driver_id"),
             gps=detail.get("gps"),
         )
+        queued = commands.enqueue_command(
+            vehicle_id,
+            "MUTE",
+            source="PHONE_HTTP",
+            actor_role=actor_role or "driver_phone",
+        )
+        command_id = queued["cmd_uid"]
+    elif action == "REST_BREAK_START":
+        from server_ai.server_core import commands
+
+        queued = commands.enqueue_command(
+            vehicle_id,
+            "REST_BREAK_REQUEST",
+            source="PHONE_HTTP",
+            actor_role=actor_role or "driver_phone",
+        )
+        command_id = queued["cmd_uid"]
+        with database.tx() as conn:
+            conn.execute(
+                "INSERT INTO cabin_sensor_events (vehicle_id, ts, sensor_type, payload_json) VALUES (?,?,?,?)",
+                (
+                    vehicle_id,
+                    time.time(),
+                    "PHONE_REST_BREAK_START",
+                    database.dumps({**detail, "command_id": command_id}),
+                ),
+            )
+    elif action == "CALIBRATE_LOCK":
+        from server_ai.server_core import commands
+
+        queued = commands.enqueue_command(
+            vehicle_id,
+            "CALIBRATE",
+            source="PHONE_HTTP",
+            actor_role=actor_role or "driver_phone",
+        )
+        command_id = queued["cmd_uid"]
+        with database.tx() as conn:
+            conn.execute(
+                "INSERT INTO cabin_sensor_events (vehicle_id, ts, sensor_type, payload_json) VALUES (?,?,?,?)",
+                (
+                    vehicle_id,
+                    time.time(),
+                    "PHONE_CALIBRATE_LOCK",
+                    database.dumps({**detail, "command_id": command_id}),
+                ),
+            )
     else:
         with database.tx() as conn:
             conn.execute(
                 "INSERT INTO cabin_sensor_events (vehicle_id, ts, sensor_type, payload_json) VALUES (?,?,?,?)",
                 (vehicle_id, time.time(), f"PHONE_{action}", database.dumps(detail)),
             )
-    broker.publish("phone_action", {"vehicle_id": vehicle_id, "action": action, "detail": detail})
-    return {"ok": True, "action": action}
+    broker.publish("phone_action", {"vehicle_id": vehicle_id, "action": action, "detail": detail, "command_id": command_id})
+    out = {"ok": True, "action": action}
+    if command_id:
+        out["command_id"] = command_id
+        out["cmd_uid"] = command_id
+    return out
 
 
 _notif_lock = threading.Lock()

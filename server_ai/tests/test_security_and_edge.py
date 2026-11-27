@@ -885,6 +885,171 @@ class TestServerAiSecurityAndCnn(unittest.TestCase):
         self.assertGreater(trk["total_distance_km"], 0.30)
         self.assertAlmostEqual(trk["points"][-1]["north_m"], 333.0, delta=15.0)
 
+    def test_22_calibrate_whitelist_phone_action_idor_and_thermal_80c(self):
+        """Verify CALIBRATE command whitelist, phone_action CALIBRATE_LOCK auto-enqueue + IDOR block, and 75/80°C thermal thresholds."""
+        import server_ai.server_core.commands as srv_cmds
+        import server_ai.server_core.config as srv_cfg
+
+        # 1. Thermal thresholds updated per MAIN approval (75.0°C / 80.0°C)
+        self.assertEqual(srv_cfg.PI_THERMAL_CRIT1_C, 75.0)
+        self.assertEqual(srv_cfg.PI_THERMAL_CRIT2_C, 80.0)
+
+        # 76.0°C with thermal_level=2 & throttled=0x0 MUST NOT raise PI_OVERHEAT under new 80°C threshold
+        self.client.post(
+            "/api/v1/telemetry",
+            headers=self.device,
+            json={"vehicle_id": "XE-TH80", "pi": {"cpu_temp_c": 76.0, "thermal_level": 2, "throttled": "0x0"}},
+        )
+        incs_warm = self.client.get("/api/v1/incidents?vehicle_id=XE-TH80", headers=self.viewer).json()["incidents"]
+        self.assertEqual([i for i in incs_warm if i["category"] == "PI_OVERHEAT"], [])
+
+        # >= 80.0°C MUST raise PI_OVERHEAT
+        self.client.post(
+            "/api/v1/telemetry",
+            headers=self.device,
+            json={"vehicle_id": "XE-TH80", "pi": {"cpu_temp_c": 80.5, "thermal_level": 2, "throttled": "0x0"}},
+        )
+        incs_crit = self.client.get("/api/v1/incidents?vehicle_id=XE-TH80", headers=self.viewer).json()["incidents"]
+        self.assertEqual(len([i for i in incs_crit if i["category"] == "PI_OVERHEAT"]), 1)
+
+        # 2. CALIBRATE command accepted by operator /api/v1/server/command
+        self.assertTrue(srv_cmds.validate_command("CALIBRATE"))
+        r_op = self.client.post("/api/v1/server/command", headers=self.operator, json={"vehicle_id": "XE-CAL-OP", "cmd": "CALIBRATE"})
+        self.assertEqual(r_op.status_code, 200)
+        self.assertEqual(r_op.json()["command"], "CALIBRATE")
+
+        # 3. Paired driver phone CALIBRATE_LOCK auto-enqueues CALIBRATE for its bound vehicle & blocks cross-vehicle IDOR
+        otp_a = self.client.post("/api/v1/phone/pair_otp", headers=self.operator, json={"vehicle_id": "XE-CAL-A", "driver_id": "DRV-CAL"}).json()["pair_code"]
+        drv_tok = self.client.post("/api/v1/phone/pair", json={"vehicle_id": "XE-CAL-A", "pair_code": otp_a}).json()["driver_phone_token"]
+
+        # Cross-vehicle IDOR attempt onto XE-CAL-B MUST be rejected 403 with zero queued commands
+        r_idor = self.client.post(
+            "/api/v1/phone/action",
+            headers={"Authorization": f"Bearer {drv_tok}"},
+            json={"vehicle_id": "XE-CAL-B", "action": "CALIBRATE_LOCK"},
+        )
+        self.assertEqual(r_idor.status_code, 403)
+        self.assertEqual(self.client.get("/api/v1/commands?vehicle_id=XE-CAL-B", headers=self.viewer).json()["commands"], [])
+
+        # Legitimate CALIBRATE_LOCK on XE-CAL-A enqueues CALIBRATE immediately & records cabin_sensor_events
+        r_cal = self.client.post(
+            "/api/v1/phone/action",
+            headers={"Authorization": f"Bearer {drv_tok}"},
+            json={"vehicle_id": "XE-CAL-A", "action": "CALIBRATE_LOCK", "detail": {"source": "PWA_HTTP"}},
+        )
+        self.assertEqual(r_cal.status_code, 200)
+        cmd_id = r_cal.json().get("command_id")
+        self.assertTrue(cmd_id and cmd_id.startswith("CMD_"))
+
+        ev_row = self.db.get_conn().execute(
+            "SELECT sensor_type, payload_json FROM cabin_sensor_events WHERE vehicle_id='XE-CAL-A' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        self.assertIsNotNone(ev_row)
+        self.assertEqual(ev_row["sensor_type"], "PHONE_CALIBRATE_LOCK")
+        self.assertIn(cmd_id, ev_row["payload_json"])
+
+        # Next telemetry cycle delivers CALIBRATE to XE-CAL-A and accepts optional driver_state.calibration
+        t_resp = self.client.post(
+            "/api/v1/telemetry",
+            headers=self.device,
+            json={
+                "vehicle_id": "XE-CAL-A",
+                "driver_state": {
+                    "alert_state": "NORMAL",
+                    "alert_type": "NORMAL",
+                    "verification_mode": "YOLO_BLAZEFACE_SEQ",
+                    "detected_classes": [],
+                    "calibration": {
+                        "state": "RUNNING",
+                        "mode": "APP_LOCK",
+                        "progress_s": 3.5,
+                        "duration_s": 10.0,
+                        "locked": False,
+                        "profile_ts": None,
+                        "ear_closed_threshold": None,
+                        "glare_mode": False,
+                    },
+                },
+            },
+        ).json()
+        self.assertEqual(t_resp["commands"], [{"cmd_uid": cmd_id, "cmd": "CALIBRATE"}])
+
+        ack_r = self.client.post(
+            "/api/v1/commands/ack",
+            headers=self.device,
+            json={"cmd_uid": cmd_id, "vehicle_id": "XE-CAL-A", "result": "OK", "detail": "CALIBRATION_STARTED"},
+        )
+        self.assertEqual(ack_r.status_code, 200)
+        self.assertEqual(ack_r.json()["status"], "EXECUTED_OK")
+
+    def test_23_phone_status_idor_mute_enqueue_and_lan_cors(self):
+        """Verify GET /api/v1/phone/status (with cross-vehicle IDOR 403), MUTE/REST enqueue via phone_action, and safe LAN CORS."""
+        # 1. Seed telemetry on XE-PH-1 with calibration + GPS + Pi temp
+        self.client.post(
+            "/api/v1/telemetry",
+            headers=self.device,
+            json={
+                "vehicle_id": "XE-PH-1",
+                "camera": {"status": "ONLINE", "fps": 28.5, "face_detected": True},
+                "gps": {"lat": 16.0685, "lon": 108.2215, "speed_kmh": 42.0, "satellites": 9, "is_valid": True},
+                "pi": {"cpu_temp_c": 58.4, "thermal_level": 0},
+                "driver_state": {
+                    "alert_state": "NORMAL",
+                    "alert_type": "NORMAL",
+                    "calibration": {"state": "DONE", "locked": True, "progress_s": 10.0, "duration_s": 10.0, "ear_closed_threshold": 0.19},
+                },
+            },
+        )
+        otp = self.client.post("/api/v1/phone/pair_otp", headers=self.operator, json={"vehicle_id": "XE-PH-1"}).json()["pair_code"]
+        drv_tok = self.client.post("/api/v1/phone/pair", json={"vehicle_id": "XE-PH-1", "pair_code": otp}).json()["driver_phone_token"]
+        drv_hdr = {"Authorization": f"Bearer {drv_tok}"}
+
+        # 2. Bound vehicle gets live status; another vehicle gets 403 IDOR blocked
+        st_ok = self.client.get("/api/v1/phone/status?vehicle_id=XE-PH-1", headers=drv_hdr)
+        self.assertEqual(st_ok.status_code, 200)
+        body = st_ok.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["source"], "server_http")
+        self.assertEqual(body["vehicle_id"], "XE-PH-1")
+        self.assertEqual(body["vehicle_status"], "ONLINE")
+        self.assertEqual(body["calibration"]["state"], "DONE")
+        self.assertTrue(body["calibration"]["locked"])
+        self.assertAlmostEqual(body["gps"]["speed_kmh"], 42.0, places=1)
+        self.assertAlmostEqual(body["pi"]["cpu_temp_c"], 58.4, places=1)
+
+        st_idor = self.client.get("/api/v1/phone/status?vehicle_id=XE-OTHER", headers=drv_hdr)
+        self.assertEqual(st_idor.status_code, 403)
+
+        # 3. MUTE_ALERT enqueues MUTE & REST_BREAK_START enqueues REST_BREAK_REQUEST
+        r_mute = self.client.post("/api/v1/phone/action", headers=drv_hdr, json={"vehicle_id": "XE-PH-1", "action": "MUTE_ALERT"})
+        self.assertEqual(r_mute.status_code, 200)
+        mute_uid = r_mute.json().get("command_id")
+        self.assertTrue(mute_uid and mute_uid.startswith("CMD_"))
+
+        r_rest = self.client.post("/api/v1/phone/action", headers=drv_hdr, json={"vehicle_id": "XE-PH-1", "action": "REST_BREAK_START"})
+        self.assertEqual(r_rest.status_code, 200)
+        rest_uid = r_rest.json().get("command_id")
+        self.assertTrue(rest_uid and rest_uid.startswith("CMD_"))
+
+        pulled = self.client.get("/api/v1/commands/pull?vehicle_id=XE-PH-1", headers=self.device).json()["commands"]
+        self.assertEqual([c["cmd"] for c in pulled], ["MUTE", "REST_BREAK_REQUEST"])
+
+        # 4. LAN CORS allows private LAN origin, blocks evil public origin
+        lan_ok = self.client.get("/api/v1/health", headers={"Origin": "http://192.168.1.9:8080"})
+        self.assertEqual(lan_ok.status_code, 200)
+        self.assertEqual(lan_ok.headers.get("access-control-allow-origin"), "http://192.168.1.9:8080")
+
+        lan_pre = self.client.options(
+            "/api/v1/phone/status",
+            headers={"Origin": "http://192.168.1.9:8080", "Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "Authorization"},
+        )
+        self.assertEqual(lan_pre.status_code, 200)
+        self.assertEqual(lan_pre.headers.get("access-control-allow-origin"), "http://192.168.1.9:8080")
+
+        evil_get = self.client.get("/api/v1/health", headers={"Origin": "https://evil.example.com"})
+        self.assertEqual(evil_get.status_code, 200)
+        self.assertNotIn("access-control-allow-origin", {k.lower() for k in evil_get.headers.keys()})
+
 
 if __name__ == "__main__":
     unittest.main()

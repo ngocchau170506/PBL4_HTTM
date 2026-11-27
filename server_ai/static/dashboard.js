@@ -142,6 +142,15 @@ function scheduleRefresh(delayMs = 400) {
   }, delayMs);
 }
 
+function ensureCommandSelectOptions() {
+  const sel = document.getElementById("cmd-select");
+  if (!sel || sel.querySelector('option[value="CALIBRATE"]')) return;
+  const opt = document.createElement("option");
+  opt.value = "CALIBRATE";
+  opt.textContent = "CALIBRATE (Cân chỉnh MediaPipe 10s)";
+  sel.appendChild(opt);
+}
+
 async function boot(meInfo) {
   try {
     const me = meInfo || await api("/api/v1/auth/me");
@@ -154,6 +163,7 @@ async function boot(meInfo) {
   document.getElementById("login-screen").style.display = "none";
   document.getElementById("app").classList.add("active");
   document.getElementById("whoami").textContent = `${ROLE} (...${TOKEN.slice(-6)})`;
+  ensureCommandSelectOptions();
   applyRoleVisibility();
   document.querySelectorAll(".navbtn").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
   await refreshAll();
@@ -296,6 +306,25 @@ function closeLiveStream() {
   if (panel) panel.style.display = "none";
 }
 
+function formatCalibrationBadge(cal) {
+  if (!cal || typeof cal !== "object" || !cal.state) return "";
+  const st = String(cal.state).toUpperCase();
+  if (st === "RUNNING") {
+    const prog = cal.progress_s != null ? `${Number(cal.progress_s).toFixed(1)}s` : "";
+    const dur = cal.duration_s != null ? `/${Number(cal.duration_s).toFixed(0)}s` : "";
+    return `<div style="font-size:11px;color:var(--amber);margin-top:2px">🎯 Calib ${esc(prog)}${esc(dur)}</div>`;
+  }
+  if (st === "DONE" || (st === "IDLE" && cal.locked)) {
+    const lockTag = cal.locked ? "Đã khóa" : "Tạm";
+    const earTag = cal.ear_closed_threshold != null ? ` · EAR&lt;${esc(Number(cal.ear_closed_threshold).toFixed(2))}` : "";
+    return `<div style="font-size:11px;color:var(--green);margin-top:2px">🎯 Calib: ${lockTag}${earTag}</div>`;
+  }
+  if (st === "FAILED") {
+    return `<div style="font-size:11px;color:var(--amber);margin-top:2px">⚠ Calib lỗi</div>`;
+  }
+  return "";
+}
+
 function renderFleet(vehicles, trips) {
   const tbody = document.querySelector("#fleet-table tbody");
   tbody.innerHTML = vehicles.map((v) => {
@@ -306,10 +335,11 @@ function renderFleet(vehicles, trips) {
     const co2 = mq.co2_ppm ?? mq.ppm ?? "-";
     const pi = raw.pi || raw.hardware || {};
     const temp = pi.cpu_temp_c ?? pi.soc_temp_c ?? pi.temp_c ?? "-";
+    const calHtml = formatCalibrationBadge((raw.driver_state || {}).calibration);
     const sUrl = safeUrl(v.stream_url);
     return `<tr>
       <td>${esc(v.vehicle_id)}</td>
-      <td>${esc(v.current_driver_name || v.current_driver_id || "-")}</td>
+      <td>${esc(v.current_driver_name || v.current_driver_id || "-")}${calHtml}</td>
       <td>${badge(v.status)}</td>
       <td>${esc(speed)}</td>
       <td>${esc(co2)}</td>
@@ -330,7 +360,7 @@ function renderPowerHealth(vehicles) {
     const esp2 = raw.bluetooth_phone || {};
     const temp = pi.cpu_temp_c;
     const tempHtml = temp != null
-      ? `<span style="color:${Number(temp) >= 70 ? 'var(--red)' : (Number(temp) >= 65 ? 'var(--amber)' : 'var(--green)')}">${esc(temp)}°C</span>`
+      ? `<span style="color:${Number(temp) >= 80 ? 'var(--red)' : (Number(temp) >= 75 ? 'var(--amber)' : 'var(--green)')}">${esc(temp)}°C</span>`
       : "-";
     const coreV = pi.core_volt_v != null ? `${esc(pi.core_volt_v)}V` : "-";
     const thr = String(pi.throttled || "0x0");
@@ -889,6 +919,7 @@ function connectSSE() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  ensureCommandSelectOptions();
   const inp = document.getElementById("token-input");
   if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(); });
 });

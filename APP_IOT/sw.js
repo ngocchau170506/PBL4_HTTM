@@ -1,9 +1,9 @@
-// Offline-First Service Worker for PI_AI Driver Cockpit PWA (APP_IOT)
-const CACHE_NAME = "pi-ai-driver-pwa-v1";
+// Network-First Core Assets + Offline Fallback Service Worker for PI_AI Driver Cockpit PWA (APP_IOT)
+const CACHE_NAME = "pi-ai-driver-pwa-v3";
 const ASSETS = [
   "./driver.html",
   "./driver.css",
-  "./driver_ble.js?v=4",
+  "./driver_ble.js?v=7",
   "./driver_ble.js",
   "./manifest.json",
   "./icon.svg",
@@ -25,16 +25,43 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
+function isCoreAppAsset(pathname) {
+  return (
+    pathname.endsWith("/driver.html") ||
+    pathname.endsWith("/driver_ble.js") ||
+    pathname.endsWith("/driver.css") ||
+    pathname.endsWith("/driver")
+  );
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  if (url.pathname.startsWith("/api/")) return;
+  if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
+
+  // Network-first for driver.html / driver_ble.js / driver.css so version/server switches never stick to stale cache
+  if (req.mode === "navigate" || isCoreAppAsset(url.pathname)) {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {});
+          }
+          return res;
+        })
+        .catch(() => caches.match(req))
+    );
+    return;
+  }
+
+  // Stale-while-revalidate for static icons/manifest
   event.respondWith(
     caches.match(req).then((cached) => {
       const net = fetch(req)
         .then((res) => {
-          if (res && res.ok && url.origin === self.location.origin) {
+          if (res && res.ok) {
             const copy = res.clone();
             caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {});
           }

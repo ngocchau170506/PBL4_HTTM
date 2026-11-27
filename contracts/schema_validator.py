@@ -60,6 +60,29 @@ def validate_telemetry_payload(payload: Dict[str, Any]) -> Tuple[bool, List[str]
         for k in ("alert_state", "alert_type", "verification_mode"):
             if not ds.get(k):
                 errors.append(f"driver_state.{k} is required")
+        cal = ds.get("calibration")
+        if cal is not None:
+            if not isinstance(cal, dict):
+                errors.append("driver_state.calibration must be a dict when provided")
+            else:
+                def _is_num(v: Any) -> bool:
+                    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+                st = cal.get("state")
+                if st is not None and st not in ("IDLE", "RUNNING", "DONE", "FAILED"):
+                    errors.append(f"invalid driver_state.calibration.state: {st}")
+                if "mode" in cal and cal["mode"] is not None and cal["mode"] not in ("BOOT", "APP_LOCK"):
+                    errors.append(f"invalid driver_state.calibration.mode: {cal['mode']}")
+                for nk in ("progress_s", "duration_s"):
+                    if nk in cal and not _is_num(cal[nk]):
+                        errors.append(f"driver_state.calibration.{nk} must be int/float (not bool)")
+                for opt_nk in ("profile_ts", "ear_closed_threshold"):
+                    if opt_nk in cal and cal[opt_nk] is not None and not _is_num(cal[opt_nk]):
+                        errors.append(f"driver_state.calibration.{opt_nk} must be None or int/float (not bool)")
+                if "locked" in cal and cal["locked"] is not None and not isinstance(cal["locked"], bool):
+                    errors.append("driver_state.calibration.locked must be bool")
+                if "glare_mode" in cal and not isinstance(cal["glare_mode"], bool):
+                    errors.append("driver_state.calibration.glare_mode must be bool")
     else:
         errors.append("driver_state must be a dict")
 

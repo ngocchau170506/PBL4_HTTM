@@ -11,6 +11,7 @@
     "violation_burst": "POST /api/v1/violation_burst",
     "video": "POST /api/v1/video",
     "alert_dismissed": "POST /api/v1/events/alert_dismissed",
+    "phone_action": "POST /api/v1/phone/action",
     "commands_ack": "POST /api/v1/commands/ack",
     "commands_pull": "GET /api/v1/pi/pull_commands"
   },
@@ -86,7 +87,17 @@
           "behavior_detail": "str?",
           "detected_classes": "list",
           "allow_smoking": "bool?",
-          "allow_phone": "bool?"
+          "allow_phone": "bool?",
+          "calibration": {
+            "state": "str? (IDLE|RUNNING|DONE|FAILED)",
+            "mode": "str? (BOOT|APP_LOCK)",
+            "progress_s": "float?",
+            "duration_s": "float?",
+            "locked": "bool?",
+            "profile_ts": "float?",
+            "ear_closed_threshold": "float?",
+            "glare_mode": "bool?"
+          }
         },
         "esp": {
           "connected": "bool",
@@ -120,6 +131,11 @@
     },
     "CommandAckPayload": {
       "required": ["cmd_uid", "vehicle_id", "result"]
+    },
+    "ControlCommands": {
+      "server_to_pi_exact": ["STOP", "MUTE", "PING", "WHOAMI", "BT_UNPAIR", "BT_FORCE_RESCAN", "CONFIG_SET", "REST_BREAK_REQUEST", "CALIBRATE"],
+      "server_to_pi_prefixes": ["VOICE:", "ALERT:", "VOL:"],
+      "phone_actions": ["ACK_AWAKE", "MUTE_ALERT", "REST_BREAK_START", "REST_BREAK_END", "SOS", "CALIBRATE_LOCK"]
     }
   }
 }

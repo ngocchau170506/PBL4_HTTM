@@ -23,6 +23,7 @@ from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -129,6 +130,15 @@ async def enforce_body_size_limit(request: Request, call_next):
     response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     return response
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|[a-zA-Z0-9-]+\.local|[a-zA-Z0-9-]+\.trycloudflare\.com)(:\d+)?$",
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "X-Auth-Token", "Content-Type"],
+)
 
 
 def _sanitize_stream_url(raw_url: Optional[str]) -> Optional[str]:
@@ -966,7 +976,7 @@ async def phone_action(request: Request, role: str = Depends(auth.require_role("
     vid = payload.get("vehicle_id")
     if role == "driver_phone":
         bluetooth_hub.verify_driver_phone_binding(getattr(request.state, "token", ""), vid)
-    result = bluetooth_hub.phone_action(vid, payload.get("action"), payload.get("detail"))
+    result = bluetooth_hub.phone_action(vid, payload.get("action"), payload.get("detail"), actor_role=role)
     auth.audit(request, 200, vid, detail=f"phone_action={payload.get('action')}")
     return result
 
@@ -976,6 +986,38 @@ def phone_notifications(request: Request, vehicle_id: str, role: str = Depends(a
     if role == "driver_phone":
         bluetooth_hub.verify_driver_phone_binding(getattr(request.state, "token", ""), vehicle_id)
     return {"notifications": bluetooth_hub.pull_notifications(vehicle_id)}
+
+
+@app.get("/api/v1/phone/status")
+def phone_status(request: Request, vehicle_id: str, role: str = Depends(auth.require_role("driver_phone"))):
+    bluetooth_hub.verify_driver_phone_binding(getattr(request.state, "token", ""), vehicle_id)
+    v = database.get_vehicle(vehicle_id)
+    raw_t = (v or {}).get("last_telemetry_json")
+    t: dict = {}
+    if isinstance(raw_t, str) and raw_t.strip():
+        try:
+            parsed = json.loads(raw_t)
+            if isinstance(parsed, dict):
+                t = parsed
+        except Exception:
+            t = {}
+    elif isinstance(raw_t, dict):
+        t = raw_t
+    ds = t.get("driver_state") or {}
+    if not isinstance(ds, dict):
+        ds = {}
+    return {
+        "ok": True,
+        "source": "server_http",
+        "vehicle_id": vehicle_id,
+        "vehicle_status": (v or {}).get("status", "OFFLINE"),
+        "last_seen": (v or {}).get("last_seen"),
+        "camera": t.get("camera") or {},
+        "driver_state": ds,
+        "calibration": ds.get("calibration") or {},
+        "gps": t.get("gps") or {},
+        "pi": t.get("pi") or {},
+    }
 
 
 @app.get("/api/v1/vehicles/{vehicle_id}/bluetooth")

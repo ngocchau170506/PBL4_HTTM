@@ -33,6 +33,10 @@ fi
     if ($LASTEXITCODE -ne 0) { throw "SCP contracts that bai (exit=$LASTEXITCODE)" }
     scp -r pi_edge/app pi_edge/core pi_edge/camera pi_edge/ai pi_edge/evidence pi_edge/comms pi_edge/web pi_edge/deploy pi_edge/requirements-pi.txt pi_edge/__init__.py "${PI_USER}@${PI_IP}:/tmp/pi_ai_stage/pi_edge/"
     if ($LASTEXITCODE -ne 0) { throw "SCP pi_edge that bai (exit=$LASTEXITCODE)" }
+    if (Test-Path "APP_IOT") {
+        scp -r APP_IOT "${PI_USER}@${PI_IP}:/tmp/pi_ai_stage/"
+        if ($LASTEXITCODE -ne 0) { throw "SCP APP_IOT that bai (exit=$LASTEXITCODE)" }
+    }
 
     if (-not $SkipModels -and (Test-Path "pi_edge/models")) {
         Write-Host "[4/5] Dong bo pi_edge/models (best.pt, face_landmarker.task)..." -ForegroundColor Yellow
@@ -50,6 +54,9 @@ rm -f /tmp/pi_ai_stage/pi_edge/deploy/pi.env
 sed -i 's/\r$//' /tmp/pi_ai_stage/pi_edge/deploy/*.sh /tmp/pi_ai_stage/pi_edge/deploy/*.rules /tmp/pi_ai_stage/pi_edge/deploy/*.service /tmp/pi_ai_stage/pi_edge/deploy/pi.env.example 2>/dev/null || true
 cp -r /tmp/pi_ai_stage/contracts ${PI_DEST}/
 cp -r /tmp/pi_ai_stage/pi_edge/* ${PI_DEST}/pi_edge/
+if [ -d /tmp/pi_ai_stage/APP_IOT ]; then
+  cp -r /tmp/pi_ai_stage/APP_IOT ${PI_DEST}/
+fi
 rm -rf /tmp/pi_ai_stage
 chmod 600 ${PI_DEST}/pi_edge/deploy/pi.env 2>/dev/null || true
 chmod +x ${PI_DEST}/pi_edge/deploy/*.sh 2>/dev/null || true

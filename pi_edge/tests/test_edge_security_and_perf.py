@@ -340,11 +340,12 @@ class TestPiEdgeSecurityAndPerf(unittest.TestCase):
         self.assertTrue(pose.valid)
         self.assertIsNotNone(pose.face_box)
         x1, y1, x2, y2 = pose.face_box  # type: ignore[misc]
-        # Must sit near anchor (220, 109) rather than legacy top-left (0, 0, 61, 50)
+        # Must sit near anchor (220, 106) with aspect-preserving 1:1 letterbox (no 1.77x stretch!)
         self.assertGreater(x1, 140)
         self.assertLess(x2, 300)
-        self.assertGreater(y1, 50)
-        self.assertLess(y2, 170)
+        self.assertGreater(y1, 35)
+        self.assertLess(y2, 175)
+        self.assertLessEqual(abs((x2 - x1) - (y2 - y1)), 2)
 
     def test_16_esp_ble_hub_parser_actions_and_nack_handling(self):
         from pi_edge.comms.esp_ble_client import EspBleHubClient, classify_ble_hub_line
@@ -412,10 +413,12 @@ class TestPiEdgeSecurityAndPerf(unittest.TestCase):
         from pi_edge.core.telemetry import ThermalPolicy
 
         tp = ThermalPolicy()
-        self.assertEqual(tp.plan(69.5, 0).thermal_level, 2)
-        p70 = tp.plan(70.0, 0)
-        self.assertEqual(p70.thermal_level, 3)
-        self.assertFalse(p70.allow_face_geometry)
+        self.assertEqual(tp.plan(69.5, 0).thermal_level, 0)
+        self.assertEqual(tp.plan(72.0, 0).thermal_level, 1)
+        self.assertEqual(tp.plan(76.5, 0).thermal_level, 2)
+        p80 = tp.plan(80.0, 0)
+        self.assertEqual(p80.thermal_level, 3)
+        self.assertFalse(p80.allow_face_geometry)
 
         hub = EspBleHubClient(mode="MOCK")
         hub.start()
@@ -861,6 +864,997 @@ class TestPiEdgeSecurityAndPerf(unittest.TestCase):
                 self.assertEqual(ctx_off.exception.code, 404)
             finally:
                 srv_off.close()
+
+    def test_26_calibration_10s_boot_waits_for_real_frame_and_app_lock_persists_atomically(self):
+        from pi_edge.ai.calibration_10s import DriverCalibrator10s, MeshSample, load_driver_profile
+        from pi_edge.ai.face_geometry import BlazeFaceGeometry, HeadPoseEstimate
+        from pi_edge.ai.pipeline import EdgeAiPipeline
+
+        class _SpyYolo:
+            def __init__(self):
+                self.calls = 0
+
+            def predict(self, *args, **kwargs):
+                self.calls += 1
+                return []
+
+        sample_idx = {"n": 0}
+
+        def _fake_extractor(_frame):
+            sample_idx["n"] += 1
+            # Inject 1 blink frame (0.09) amidst normal open-eye EAR=0.30 samples
+            ear_val = 0.09 if sample_idx["n"] == 3 else 0.30
+            pose = HeadPoseEstimate(valid=True, yaw_deg=4.5, pitch_deg=-3.2, roll_deg=1.0, face_box=(100, 60, 220, 180), score=0.92)
+            ms = MeshSample(valid=True, presence=0.96, ear=ear_val, mar=0.06, left_eye_box=(120, 95, 148, 112), right_eye_box=(172, 95, 200, 112))
+            return pose, ms, True
+
+        with tempfile.TemporaryDirectory() as td:
+            cal_dir = Path(td) / "calibration"
+            cfg = EdgeConfig.from_env(
+                env={
+                    "RUN_MODE": "local",
+                    "ENV_PROFILE": "lab",
+                    "CALIBRATION_DIR": str(cal_dir),
+                    "VIOLATION_STORAGE_DIR": str(Path(td) / "v"),
+                }
+            )
+            geo = BlazeFaceGeometry("nonexistent.task")
+            cal = DriverCalibrator10s(cal_dir, geo, duration_s=10.0, auto_boot=True, sample_extractor=_fake_extractor)
+            yolo = _SpyYolo()
+            pipe = EdgeAiPipeline(cfg, yolo_model=yolo, face_geo=geo, calibrator=cal)
+            plan = ThermalPolicy().plan(55.0, 0)
+            frm = np.zeros((240, 320, 3), dtype=np.uint8)
+
+            # 1. While NO_CAMERA (frame=None) or camera is_stale=True across 8 seconds -> timer MUST NOT start!
+            for t_wait in (0.0, 2.5, 5.0, 8.0):
+                st_none = pipe.evaluate_tick(None, plan, now_mono=t_wait, is_stale=True)
+                st_stale = pipe.evaluate_tick(frm, plan, now_mono=t_wait + 0.1, is_stale=True)
+                self.assertEqual(st_none["calibration"]["state"], "IDLE")
+                self.assertEqual(st_stale["calibration"]["state"], "IDLE")
+                self.assertEqual(st_stale["calibration"]["progress_s"], 0.0)
+
+            # 2. First real fresh frame at t=20.0 starts Mode 1 (BOOT) 10.0s countdown!
+            st_start = pipe.evaluate_tick(frm, plan, now_mono=20.0, is_stale=False)
+            self.assertEqual(st_start["calibration"]["state"], "RUNNING")
+            self.assertEqual(st_start["calibration"]["mode"], "BOOT")
+
+            # Feed frames during 10s BOOT -> YOLO must rest (0 calls) and no false alerts trigger
+            for step in range(1, 10):
+                t_cur = 20.0 + step * 1.0
+                out = pipe._run_inference(frm, plan, now_mono=t_cur)
+                pipe._latest_infer = out
+                tick_st = pipe.evaluate_tick(frm, plan, now_mono=t_cur, is_stale=False)
+                self.assertEqual(tick_st["alert_state"], "NORMAL")
+                self.assertIn(tick_st["verification_mode"], ("SINGLE_MODEL_YOLO", "YOLO_BLAZEFACE_SEQ"))
+            self.assertEqual(yolo.calls, 0, "YOLO must rest during 10s MediaPipe calibration!")
+
+            # Finalize BOOT at t=30.1 -> temporary baseline (locked=False)
+            pipe._run_inference(frm, plan, now_mono=30.1)
+            boot_done = pipe.get_calibration_status(now_mono=30.1)
+            self.assertEqual(boot_done["state"], "DONE")
+            self.assertFalse(boot_done["locked"])
+            evt_boot = pipe.pop_calibration_event()
+            self.assertIsNotNone(evt_boot)
+            self.assertFalse(evt_boot["locked"])
+
+            # 3. Mode 2 (APP_LOCK): driver triggers CALIBRATE -> busy guard on duplicate -> atomic locked=True save
+            ok1, msg1 = pipe.request_calibration(source="APP_BLE", lock=True, now_mono=50.0)
+            self.assertTrue(ok1)
+            self.assertEqual(msg1, "CALIBRATION_STARTED")
+            ok2, msg2 = pipe.request_calibration(source="CONTROL_CMD", lock=True, now_mono=51.0)
+            self.assertFalse(ok2)
+            self.assertEqual(msg2, "CALIBRATION_BUSY")
+
+            for step in range(1, 11):
+                pipe._run_inference(frm, plan, now_mono=50.0 + step * 1.0)
+            lock_st = pipe.get_calibration_status(now_mono=60.1)
+            self.assertEqual(lock_st["state"], "DONE")
+            self.assertEqual(lock_st["mode"], "APP_LOCK")
+            self.assertTrue(lock_st["locked"])
+            self.assertTrue(lock_st["glare_mode"])
+            # 0.30 * 0.70 = 0.210 (blink 0.09 rejected!)
+            self.assertAlmostEqual(lock_st["ear_closed_threshold"], 0.210, places=3)
+
+            saved = load_driver_profile(cal_dir / "driver_profile.json")
+            self.assertIsNotNone(saved)
+            self.assertTrue(saved["locked"])
+            self.assertEqual(saved["source"], "APP_BLE")
+            self.assertGreaterEqual(saved["samples"], 8)
+            self.assertAlmostEqual(saved["neutral_yaw_deg"], 4.5, places=2)
+
+    def test_27_calibration_10s_locked_profile_survives_next_boot_and_failed_run_preserves_profile(self):
+        from pi_edge.ai.calibration_10s import DriverCalibrator10s, MeshSample, load_driver_profile, save_driver_profile_atomic
+        from pi_edge.ai.face_geometry import BlazeFaceGeometry, HeadPoseEstimate
+
+        with tempfile.TemporaryDirectory() as td:
+            cal_dir = Path(td) / "calibration"
+            prof_path = cal_dir / "driver_profile.json"
+            locked_prof = {
+                "locked": True,
+                "created_ts": 1700000123.45,
+                "source": "APP_BLE",
+                "ear_open_median": 0.31,
+                "ear_closed_threshold": 0.2232,
+                "mar_rest_median": 0.05,
+                "neutral_yaw_deg": 6.0,
+                "neutral_pitch_deg": -4.0,
+                "neutral_roll_deg": 0.5,
+                "glare_mode": True,
+                "samples": 42,
+            }
+            save_driver_profile_atomic(prof_path, locked_prof)
+
+            # Next Pi boot: even when 10s BOOT runs with different face values, locked=True profile MUST NOT be overwritten!
+            def _different_driver_extractor(_frame):
+                return (
+                    HeadPoseEstimate(valid=True, yaw_deg=-15.0, pitch_deg=10.0, roll_deg=0.0, face_box=(50, 50, 150, 150), score=0.9),
+                    MeshSample(valid=True, presence=0.95, ear=0.20, mar=0.08),
+                    False,
+                )
+
+            geo = BlazeFaceGeometry("nonexistent.task")
+            cal_boot = DriverCalibrator10s(cal_dir, geo, duration_s=10.0, auto_boot=True, sample_extractor=_different_driver_extractor)
+            self.assertTrue(cal_boot.get_status_dict()["locked"])
+            self.assertAlmostEqual(cal_boot.get_ear_closed_threshold(), 0.2232, places=4)
+
+            frm = np.zeros((160, 160, 3), dtype=np.uint8)
+            cal_boot.notify_real_camera_frame(now_mono=10.0)
+            self.assertEqual(cal_boot.get_status_dict()["state"], "RUNNING")
+            for k in range(1, 11):
+                cal_boot.step_frame(frm, now_mono=10.0 + k * 1.0)
+            st_after_boot = cal_boot.get_status_dict(now_mono=20.2)
+            self.assertEqual(st_after_boot["state"], "DONE")
+            self.assertTrue(st_after_boot["locked"])
+            disk_after_boot = load_driver_profile(prof_path)
+            self.assertEqual(disk_after_boot["created_ts"], 1700000123.45, "BOOT must NEVER overwrite locked driver_profile.json!")
+            self.assertAlmostEqual(disk_after_boot["ear_closed_threshold"], 0.2232, places=4)
+
+            # Explicit APP_LOCK with NO_FACE (0 samples) -> FAILED(NO_FACE) & previous locked profile preserved!
+            def _no_face_extractor(_frame):
+                return HeadPoseEstimate(valid=False, yaw_deg=0.0, pitch_deg=0.0, roll_deg=0.0), MeshSample(valid=False, presence=0.0, ear=0.0, mar=0.0), False
+
+            cal_fail = DriverCalibrator10s(cal_dir, geo, duration_s=10.0, auto_boot=False, sample_extractor=_no_face_extractor)
+            cal_fail.pop_event()
+            cal_fail.request_calibration(source="CONTROL_CMD", lock=True, now_mono=100.0)
+            for k in range(1, 11):
+                cal_fail.step_frame(frm, now_mono=100.0 + k * 1.0)
+            st_fail = cal_fail.get_status_dict(now_mono=110.1)
+            self.assertEqual(st_fail["state"], "FAILED")
+            evt_fail = cal_fail.pop_event()
+            self.assertEqual(evt_fail["reason"], "NO_FACE")
+            # Disk profile still intact!
+            self.assertEqual(load_driver_profile(prof_path)["created_ts"], 1700000123.45)
+
+            # Explicit APP_LOCK with 3 samples (< 5) -> FAILED(LOW_SAMPLES) & previous profile still preserved!
+            cnt = {"i": 0}
+            def _few_samples_extractor(_frame):
+                cnt["i"] += 1
+                if cnt["i"] <= 3:
+                    return (
+                        HeadPoseEstimate(valid=True, yaw_deg=0.0, pitch_deg=0.0, roll_deg=0.0, face_box=(40, 40, 120, 120), score=0.9),
+                        MeshSample(valid=True, presence=0.9, ear=0.28, mar=0.05),
+                        False,
+                    )
+                return _no_face_extractor(_frame)
+
+            cal_low = DriverCalibrator10s(cal_dir, geo, duration_s=10.0, auto_boot=False, sample_extractor=_few_samples_extractor)
+            cal_low.request_calibration(source="APP_HTTP", lock=True, now_mono=200.0)
+            for k in range(1, 11):
+                cal_low.step_frame(frm, now_mono=200.0 + k * 1.0)
+            self.assertEqual(cal_low.get_status_dict(now_mono=210.1)["state"], "FAILED")
+            self.assertEqual(cal_low.pop_event()["reason"], "LOW_SAMPLES")
+            self.assertEqual(load_driver_profile(prof_path)["created_ts"], 1700000123.45)
+
+    def test_28_eye_closed_not_overridden_by_normal_and_smart_roi_clahe_works_at_roll_zero(self):
+        from pi_edge.ai.calibration_10s import DriverCalibrator10s, MeshSample
+        from pi_edge.ai.face_geometry import HeadPoseEstimate
+        from pi_edge.ai.pipeline import EdgeAiPipeline
+
+        class _FakeBox:
+            def __init__(self, cid, conf, xyxy):
+                self.cls = [cid]
+                self.conf = [conf]
+                self.xyxy = [np.array(xyxy, dtype=np.float32)]
+
+        class _FakeRes:
+            def __init__(self, boxes):
+                self.names = {0: "Normal", 1: "Eye_Closed", 2: "Eye_Open"}
+                self.boxes = boxes
+
+        # Case A: Full-face "Normal" (0.76) MUST NOT override "Eye_Closed" (0.38)!
+        class _NormalPlusClosedYolo:
+            def predict(self, *args, **kwargs):
+                return [_FakeRes([_FakeBox(0, 0.76, [100, 60, 240, 200]), _FakeBox(1, 0.38, [120, 100, 155, 118])])]
+
+        class _UprightFaceGeo:
+            available = True
+
+            def detect_pose(self, _frame):
+                return HeadPoseEstimate(valid=True, yaw_deg=1.0, pitch_deg=-1.0, roll_deg=0.0, face_box=(100, 60, 240, 200), score=0.95)
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = EdgeConfig.from_env(
+                env={"RUN_MODE": "local", "ENV_PROFILE": "lab", "CALIBRATION_DIR": str(Path(td) / "cal")}
+            )
+            geo = _UprightFaceGeo()
+            cal = DriverCalibrator10s(Path(td) / "cal", geo, auto_boot=False)  # type: ignore[arg-type]
+            plan = ThermalPolicy().plan(55.0, 0)
+
+            pipe_a = EdgeAiPipeline(cfg, yolo_model=_NormalPlusClosedYolo(), face_geo=geo, calibrator=cal)  # type: ignore[arg-type]
+            out_a = pipe_a._run_inference(np.zeros((280, 360, 3), dtype=np.uint8), plan)
+            self.assertTrue(out_a.eye_closed, "Full-face 'Normal' box MUST NEVER suppress 'Eye_Closed'!")
+
+            # Case B: Upright head (roll=0°!) with glare where full-frame misses eyes -> Smart Face-ROI + CLAHE recovers BOTH eye boxes!
+            class _RoiOnlyYolo:
+                def __init__(self):
+                    self.calls = []
+
+                def predict(self, img, *args, **kwargs):
+                    self.calls.append(img.shape[:2])
+                    if len(self.calls) == 1:
+                        # Pass 1 (full-frame): only sees "Normal", 0 eye boxes!
+                        return [_FakeRes([_FakeBox(0, 0.68, [100, 60, 240, 200])])]
+                    # Pass 2 (Smart Face-ROI crop): detects BOTH closed eyes with distinct coordinates!
+                    return [
+                        _FakeRes(
+                            [
+                                _FakeBox(1, 0.74, [40, 62, 76, 80]),
+                                _FakeBox(1, 0.71, [108, 62, 144, 80]),
+                            ]
+                        )
+                    ]
+
+            roi_yolo = _RoiOnlyYolo()
+            pipe_b = EdgeAiPipeline(cfg, yolo_model=roi_yolo, face_geo=geo, calibrator=cal)  # type: ignore[arg-type]
+            pipe_b._mesh = None
+            glare_img = np.full((280, 360, 3), 90, dtype=np.uint8)
+            # Add bright eyeglass reflection patch in upper half of face_box (100..240, 60..130)
+            glare_img[80:115, 120:210] = 250
+            out_b = pipe_b._run_inference(glare_img, plan)
+            self.assertEqual(len(roi_yolo.calls), 2, "Smart Face-ROI must run even when head is upright (roll=0°)!")
+            self.assertTrue(out_b.eye_closed)
+            closed_boxes = [box for lbl, _, box in out_b.detections if lbl == "Eye_Closed"]
+            self.assertEqual(len(closed_boxes), 2, "Must map BOTH distinct Eye_Closed boxes onto full frame!")
+            self.assertNotEqual(closed_boxes[0], closed_boxes[1])
+            self.assertNotEqual(closed_boxes[0], (100, 60, 240, 200), "Eye box must NOT be overwritten with face_box!")
+
+            # Case C: Severe lens glare where BOTH full-frame and ROI see 0 eyes -> Hybrid 478-Mesh EAR rescues!
+            class _BlindEyeYolo:
+                def predict(self, *args, **kwargs):
+                    return [_FakeRes([_FakeBox(0, 0.60, [100, 60, 240, 200])])]
+
+            class _FakeMeshClosed:
+                available = True
+
+                def infer_ear_mar(self, _frame, _fbox):
+                    return MeshSample(
+                        valid=True,
+                        presence=0.91,
+                        ear=0.11,
+                        mar=0.05,
+                        left_eye_box=(122, 98, 152, 114),
+                        right_eye_box=(186, 98, 216, 114),
+                    )
+
+            pipe_c = EdgeAiPipeline(cfg, yolo_model=_BlindEyeYolo(), face_geo=geo, calibrator=cal)  # type: ignore[arg-type]
+            pipe_c._mesh = _FakeMeshClosed()  # type: ignore[assignment]
+            out_c = pipe_c._run_inference(glare_img, plan)
+            self.assertTrue(out_c.eye_closed, "Hybrid 478-Mesh EAR must rescue when YOLO sees 0 eyes under glare!")
+            self.assertIn("MeshEAR", out_c.behavior_detail)
+
+    def test_29_calibrate_command_whitelist_80c_thermal_levels_hud_and_no_mediapipe_import(self):
+        from contracts.schema_validator import validate_telemetry_payload
+        from pi_edge.app.main import _render_live_hud_overlay
+        from pi_edge.core.access_control import is_allowed_control_command
+
+        # 1. Whitelist CALIBRATE
+        self.assertTrue(is_allowed_control_command("CALIBRATE"))
+        self.assertTrue(is_allowed_control_command("  CALIBRATE  "))
+        self.assertFalse(is_allowed_control_command("CALIBRATE_HACK"))
+
+        # 2. Thermal defaults 70 / 75 / 80°C + intervals 0.08 / 0.15 / 0.25 / 0.40s
+        cfg = EdgeConfig.from_env(env={"RUN_MODE": "server", "ENV_PROFILE": "lab"})
+        self.assertEqual((cfg.thermal_warm_c, cfg.thermal_hot_c, cfg.thermal_crit_c), (70.0, 75.0, 80.0))
+        tp = ThermalPolicy(cfg.yolo_imgsz, cfg.thermal_warm_c, cfg.thermal_hot_c, cfg.thermal_crit_c)
+        p0 = tp.plan(68.0, 0)
+        p1 = tp.plan(72.0, 0)
+        p2 = tp.plan(77.0, 0)
+        p3 = tp.plan(80.0, 0)
+        p_uv = tp.plan(55.0, 0x1)
+        self.assertEqual((p0.thermal_level, p0.ai_min_interval_s, p0.allow_face_geometry), (0, 0.08, True))
+        self.assertEqual((p1.thermal_level, p1.ai_min_interval_s, p1.allow_face_geometry), (1, 0.15, True))
+        self.assertEqual((p2.thermal_level, p2.ai_min_interval_s, p2.allow_face_geometry), (2, 0.25, True))
+        self.assertEqual((p3.thermal_level, p3.ai_min_interval_s, p3.yolo_imgsz, p3.allow_face_geometry), (3, 0.40, 256, False))
+        self.assertEqual((p_uv.thermal_level, p_uv.allow_face_geometry), (3, False))
+
+        # 3. Telemetry exports driver_state.calibration & HUD draws CALIBRATING 10s banner + 2 eye boxes
+        with tempfile.TemporaryDirectory() as td:
+            spool = UnifiedSpoolStore(Path(td))
+            try:
+                sync = ServerSyncClient(cfg, auth_token="tok", spool=spool)
+                cal_dict = {
+                    "state": "RUNNING",
+                    "mode": "APP_LOCK",
+                    "progress_s": 4.2,
+                    "duration_s": 10.0,
+                    "locked": False,
+                    "profile_ts": None,
+                    "ear_closed_threshold": None,
+                    "glare_mode": False,
+                }
+                payload = sync.build_telemetry_payload(
+                    ai_state={
+                        "alert_state": "NORMAL",
+                        "alert_type": "NORMAL",
+                        "verification_mode": "YOLO_BLAZEFACE_SEQ",
+                        "face_detected": True,
+                        "thermal_level": 0,
+                        "calibration": cal_dict,
+                    },
+                    hw_snap={"temp_c": 62.0, "throttled": "0x0"},
+                    fps_snap={"camera_fps": 25.0, "ai_fps": 10.5},
+                    esp_sensor={"co2_ppm": 450.0, "gps": {"speed_kmh": 0.0, "is_valid": False}},
+                    esp_status={"connected": True},
+                    mute_state={},
+                )
+                ok_s, errs_s = validate_telemetry_payload(payload)
+                self.assertTrue(ok_s, f"Schema validation failed: {errs_s}")
+                self.assertEqual(payload["driver_state"]["calibration"], cal_dict)
+
+                canvas = np.zeros((240, 320, 3), dtype=np.uint8)
+                rendered = _render_live_hud_overlay(
+                    canvas.copy(),
+                    payload,
+                    {
+                        "pose": {"valid": True, "yaw_deg": 0.0, "pitch_deg": 0.0, "roll_deg": 0.0, "face_box": (80, 70, 220, 200)},
+                        "detections": [("Eye_Closed", 0.73, (100, 110, 130, 124)), ("Eye_Closed", 0.71, (165, 110, 195, 124))],
+                        "calibration": cal_dict,
+                    },
+                )
+                # Calibration banner region (y=35..60) must be drawn
+                self.assertGreater(int(np.max(rendered[35:60, :])), 0)
+            finally:
+                spool.close()
+
+        # 4. Zero `import mediapipe` anywhere in pi_edge/ (ARM64 Cortex-A72 SIGILL invariant!)
+        pi_edge_root = Path(__file__).resolve().parent.parent
+        for py_file in pi_edge_root.rglob("*.py"):
+            if py_file.resolve() == Path(__file__).resolve():
+                continue
+            src = py_file.read_text(encoding="utf-8")
+            for raw_line in src.splitlines():
+                code_line = raw_line.split("#", 1)[0].strip()
+                self.assertNotIn("import mediapipe", code_line, f"Forbidden mediapipe import in {py_file}")
+                self.assertNotIn("from mediapipe", code_line, f"Forbidden mediapipe import in {py_file}")
+
+    def test_30_main_control_calibrate_never_hits_esp1_and_returns_no_camera_when_disabled(self):
+        import os
+        import socket
+        from pi_edge.app.main import run as run_edge
+
+        with tempfile.TemporaryDirectory() as td:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", 0))
+                free_port = s.getsockname()[1]
+            env_patch = {
+                "RUN_MODE": "local",
+                "ENV_PROFILE": "lab",
+                "WEB_PORT": str(free_port),
+                "DISABLE_CAMERA": "1",
+                "DISABLE_AI": "1",
+                "ESP_MODE": "MOCK",
+                "ESP_BLE_MODE": "MOCK",
+                "VIOLATION_STORAGE_DIR": str(Path(td) / "v"),
+                "LOGS_DIR": str(Path(td) / "l"),
+                "AUDIT_DIR": str(Path(td) / "a"),
+                "CALIBRATION_DIR": str(Path(td) / "c"),
+                "CAMERA_FPS": "4",
+            }
+            old = {k: os.environ.get(k) for k in env_patch}
+            resp_holder = {"json": None}
+
+            def _client():
+                deadline = time.monotonic() + 2.5
+                while time.monotonic() < deadline:
+                    try:
+                        req = urllib.request.Request(
+                            f"http://127.0.0.1:{free_port}/api/control",
+                            data=b'{"cmd":"CALIBRATE"}',
+                            headers={"Content-Type": "application/json", "X-Auth-Token": "lab-pi-admin-token"},
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(req, timeout=1.0) as r:
+                            resp_holder["json"] = json.loads(r.read().decode("utf-8"))
+                            return
+                    except Exception:
+                        time.sleep(0.05)
+
+            try:
+                os.environ.update(env_patch)
+                t = threading.Thread(target=_client, daemon=True)
+                t.start()
+                rc = run_edge(cli_mode="local", max_ticks=5)
+                t.join(timeout=2.0)
+                self.assertEqual(rc, 0)
+                self.assertIsNotNone(resp_holder["json"])
+                self.assertFalse(resp_holder["json"]["ok"])
+                self.assertEqual(resp_holder["json"]["detail"], "NO_CAMERA")
+            finally:
+                for k, v in old.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+
+    def test_31_round2_mesh_gate_pitch_guard_calib_clamp_roi_256_and_calib_stop_order(self):
+        import os
+        import socket
+        from unittest import mock
+        from pi_edge.ai.calibration_10s import (
+            DriverCalibrator10s,
+            FaceMesh478TFLite,
+            MeshSample,
+            load_driver_profile,
+            save_driver_profile_atomic,
+        )
+        from pi_edge.ai.face_geometry import BlazeFaceGeometry, HeadPoseEstimate
+        from pi_edge.ai.pipeline import EdgeAiPipeline
+        from pi_edge.app.main import run as run_edge
+
+        # (a) FaceMesh478TFLite rejects black/flat frame AND anatomically degenerate 478-point output (even if Identity_2=0.99)
+        class _FakeBadMeshNet:
+            def setInput(self, _blob):
+                pass
+
+            def forward(self, name):
+                if name == "Identity":
+                    # Collapsed cluster (bw=5 < 48, bh=5 < 48)
+                    pts = np.full((1, 478, 3), 128.0, dtype=np.float32)
+                    pts[0, 0, :2] = [133.0, 133.0]
+                    return pts
+                return np.array([[0.99]], dtype=np.float32)
+
+        mesh_fake = FaceMesh478TFLite("nonexistent.task")
+        mesh_fake._net = _FakeBadMeshNet()
+        mesh_fake.available = True
+        black = np.zeros((256, 256, 3), dtype=np.uint8)
+        self.assertFalse(mesh_fake.infer_ear_mar(black, (0, 0, 256, 256)).valid)
+
+        rng = np.random.default_rng(7)
+        noisy = rng.integers(0, 255, size=(256, 256, 3), dtype=np.uint8)
+        self.assertFalse(mesh_fake.infer_ear_mar(noisy, (0, 0, 256, 256)).valid)
+
+        real_task = Path(__file__).resolve().parent.parent.parent / "models" / "face_landmarker.task"
+        if real_task.is_file():
+            mesh_real = FaceMesh478TFLite(str(real_task))
+            if mesh_real.available:
+                self.assertFalse(mesh_real.infer_ear_mar(black, (0, 0, 256, 256)).valid)
+
+        # (b) pitch=30 deg MUST NOT trigger Hybrid 478-Mesh EAR even with glare & zero-eye streak
+        class _FakeBox:
+            def __init__(self, cid, conf, xyxy):
+                self.cls = [cid]
+                self.conf = [conf]
+                self.xyxy = [np.array(xyxy, dtype=np.float32)]
+
+        class _FakeRes:
+            def __init__(self, boxes):
+                self.names = {0: "Normal", 1: "Eye_Closed", 2: "Eye_Open"}
+                self.boxes = boxes
+
+        class _Pitch30Geo:
+            available = True
+
+            def detect_pose(self, _frame):
+                return HeadPoseEstimate(valid=True, yaw_deg=0.0, pitch_deg=30.0, roll_deg=0.0, face_box=(100, 60, 240, 200), score=0.95)
+
+        class _NormalOnlyYolo:
+            def predict(self, *args, **kwargs):
+                return [_FakeRes([_FakeBox(0, 0.70, [100, 60, 240, 200])])]
+
+        class _SpyMesh:
+            available = True
+
+            def __init__(self):
+                self.calls = 0
+
+            def infer_ear_mar(self, _frame, _fbox):
+                self.calls += 1
+                return MeshSample(valid=True, presence=0.95, ear=0.10, mar=0.05)
+
+        with tempfile.TemporaryDirectory() as td:
+            cal_dir = Path(td) / "cal"
+            cfg = EdgeConfig.from_env(env={"RUN_MODE": "local", "ENV_PROFILE": "lab", "CALIBRATION_DIR": str(cal_dir)})
+            plan = ThermalPolicy().plan(55.0, 0)
+            glare_img = np.full((280, 360, 3), 90, dtype=np.uint8)
+            glare_img[80:115, 120:210] = 250
+
+            geo_p30 = _Pitch30Geo()
+            cal_p30 = DriverCalibrator10s(cal_dir, geo_p30, auto_boot=False)  # type: ignore[arg-type]
+            spy_mesh = _SpyMesh()
+            pipe_p30 = EdgeAiPipeline(cfg, yolo_model=_NormalOnlyYolo(), face_geo=geo_p30, calibrator=cal_p30)  # type: ignore[arg-type]
+            pipe_p30._mesh = spy_mesh  # type: ignore[assignment]
+            for _ in range(3):
+                out_p30 = pipe_p30._run_inference(glare_img, plan)
+                self.assertNotIn("MeshEAR", out_p30.behavior_detail)
+                self.assertIsNot(out_p30.eye_closed, True)
+            self.assertEqual(spy_mesh.calls, 0, "pitch=30 deg MUST NEVER activate MeshEAR!")
+
+            # (c) Calibration rejects off-axis samples (yaw=35, pitch=28) & load_driver_profile clamps neutral pose
+            def _off_axis_extractor(_frame):
+                return (
+                    HeadPoseEstimate(valid=True, yaw_deg=35.0, pitch_deg=28.0, roll_deg=0.0, face_box=(50, 50, 150, 150), score=0.9),
+                    MeshSample(valid=True, presence=0.95, ear=0.28, mar=0.05),
+                    False,
+                )
+
+            geo_dummy = BlazeFaceGeometry("nonexistent.task")
+            cal_rej = DriverCalibrator10s(cal_dir, geo_dummy, duration_s=10.0, auto_boot=False, sample_extractor=_off_axis_extractor)
+            cal_rej.request_calibration(source="CONTROL_CMD", lock=True, now_mono=10.0)
+            for k in range(1, 12):
+                cal_rej.step_frame(glare_img, now_mono=10.0 + k * 1.0)
+            self.assertEqual(cal_rej.get_status_dict(now_mono=22.0)["state"], "FAILED")
+            self.assertEqual(cal_rej.pop_event()["reason"], "NO_FACE")
+
+            bad_prof_path = cal_dir / "clamped_profile.json"
+            save_driver_profile_atomic(
+                bad_prof_path,
+                {
+                    "locked": True,
+                    "created_ts": 1700000999.0,
+                    "source": "APP_BLE",
+                    "ear_open_median": 0.28,
+                    "ear_closed_threshold": 0.19,
+                    "mar_rest_median": 0.05,
+                    "neutral_yaw_deg": 42.0,
+                    "neutral_pitch_deg": -33.0,
+                    "neutral_roll_deg": 27.0,
+                    "glare_mode": True,
+                    "samples": 20,
+                },
+            )
+            clamped = load_driver_profile(bad_prof_path)
+            self.assertIsNotNone(clamped)
+            self.assertEqual(clamped["neutral_yaw_deg"], 18.0)
+            self.assertEqual(clamped["neutral_pitch_deg"], -15.0)
+            self.assertEqual(clamped["neutral_roll_deg"], 15.0)
+
+            # (d) glare_mode=True + Pass 1 sees 2 eyes conf>=0.52 -> NO 2nd YOLO pass; when ROI runs -> imgsz=256
+            class _UprightGeo:
+                available = True
+
+                def detect_pose(self, _frame):
+                    return HeadPoseEstimate(valid=True, yaw_deg=0.0, pitch_deg=0.0, roll_deg=0.0, face_box=(100, 60, 240, 200), score=0.95)
+
+            class _TwoStrongEyesYolo:
+                def __init__(self):
+                    self.imgsz_calls = []
+
+                def predict(self, _img, *args, **kwargs):
+                    self.imgsz_calls.append(kwargs.get("imgsz"))
+                    return [
+                        _FakeRes(
+                            [
+                                _FakeBox(2, 0.72, [120, 100, 155, 118]),
+                                _FakeBox(2, 0.68, [180, 100, 215, 118]),
+                            ]
+                        )
+                    ]
+
+            cal_glare = DriverCalibrator10s(cal_dir, _UprightGeo(), auto_boot=False)  # type: ignore[arg-type]
+            cal_glare._profile = dict(clamped)  # glare_mode=True
+            y_strong = _TwoStrongEyesYolo()
+            pipe_g = EdgeAiPipeline(cfg, yolo_model=y_strong, face_geo=_UprightGeo(), calibrator=cal_glare)  # type: ignore[arg-type]
+            pipe_g._run_inference(glare_img, plan)
+            self.assertEqual(len(y_strong.imgsz_calls), 1, "Pass 1 with 2 eyes conf>=0.52 must NOT invoke 2nd YOLO pass even under glare_mode!")
+
+            class _OneEyeYolo:
+                def __init__(self):
+                    self.imgsz_calls = []
+
+                def predict(self, _img, *args, **kwargs):
+                    self.imgsz_calls.append(kwargs.get("imgsz"))
+                    return [_FakeRes([_FakeBox(2, 0.72, [120, 100, 155, 118])])]
+
+            y_one = _OneEyeYolo()
+            pipe_r = EdgeAiPipeline(cfg, yolo_model=y_one, face_geo=_UprightGeo(), calibrator=cal_glare)  # type: ignore[arg-type]
+            pipe_r._run_inference(glare_img, plan)
+            self.assertEqual(len(y_one.imgsz_calls), 2)
+            self.assertEqual(y_one.imgsz_calls[1], 256, "Smart ROI pass must always use imgsz=256!")
+
+            # (e) _exec_cmd("CALIBRATE") sends "STOP" strictly before "ALERT:1:120"
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", 0))
+                free_port = s.getsockname()[1]
+
+            esp_cmds = []
+
+            class _SpyEsp:
+                connected = True
+                device_role = "AUDIO_MQ135_NODE"
+                port = "MOCK"
+                baudrate = 115200
+
+                def __init__(self, *a, **kw):
+                    pass
+
+                def start(self):
+                    return True
+
+                def close(self):
+                    pass
+
+                def send_command(self, cmd, wait_ack=True, timeout_s=0.8):
+                    esp_cmds.append(str(cmd))
+                    return mock.Mock(ok=True, ack_line="OK", error="")
+
+                def get_sensor_snapshot(self):
+                    return {"co2_ppm": 400.0, "raw_adc": 0, "gps": {"lat": None, "lon": None, "speed_kmh": 0.0, "satellites": 0, "is_valid": False}}
+
+                def get_esp_status_block(self):
+                    return {"connected": True, "hw_events": []}
+
+                def pop_mute_state_block(self):
+                    return {"newly_triggered": False}
+
+            cam_ready_evt = threading.Event()
+
+            class _OpenedCam:
+                error = ""
+
+                def __init__(self, *a, **kw):
+                    pass
+
+                def start(self):
+                    cam_ready_evt.set()
+
+                def close(self):
+                    pass
+
+                def is_opened(self):
+                    return True
+
+                def read_latest(self, last_seen_id=0, timeout_s=0.05):
+                    time.sleep(0.05)
+                    return None
+
+            env_patch = {
+                "RUN_MODE": "local",
+                "ENV_PROFILE": "lab",
+                "WEB_PORT": str(free_port),
+                "DISABLE_CAMERA": "0",
+                "DISABLE_AI": "1",
+                "ESP_MODE": "MOCK",
+                "ESP_BLE_MODE": "MOCK",
+                "VIOLATION_STORAGE_DIR": str(Path(td) / "v2"),
+                "LOGS_DIR": str(Path(td) / "l2"),
+                "AUDIT_DIR": str(Path(td) / "a2"),
+                "CALIBRATION_DIR": str(Path(td) / "c2"),
+                "CAMERA_FPS": "4",
+            }
+            old_env = {k: os.environ.get(k) for k in env_patch}
+            resp_cal = {"json": None}
+
+            def _post_cal():
+                cam_ready_evt.wait(timeout=3.0)
+                deadline = time.monotonic() + 3.0
+                while time.monotonic() < deadline:
+                    try:
+                        req = urllib.request.Request(
+                            f"http://127.0.0.1:{free_port}/api/control",
+                            data=b'{"cmd":"CALIBRATE"}',
+                            headers={"Content-Type": "application/json", "X-Auth-Token": "lab-pi-admin-token"},
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(req, timeout=1.5) as r:
+                            resp_cal["json"] = json.loads(r.read().decode("utf-8"))
+                            return
+                    except Exception:
+                        time.sleep(0.05)
+
+            try:
+                os.environ.update(env_patch)
+                with (
+                    mock.patch("pi_edge.comms.esp_client.EspClient", _SpyEsp),
+                    mock.patch("pi_edge.camera.frame_source.CameraFrameSource", _OpenedCam),
+                    mock.patch("pi_edge.camera.camera_config.inspect_eth_camera_route_readonly", return_value={"ok": True}),
+                ):
+                    t = threading.Thread(target=_post_cal, daemon=True)
+                    t.start()
+                    rc = run_edge(cli_mode="local", max_ticks=8)
+                    t.join(timeout=3.0)
+                self.assertEqual(rc, 0)
+                self.assertIsNotNone(resp_cal["json"])
+                self.assertTrue(resp_cal["json"]["ok"], f"Unexpected CALIBRATE response: {resp_cal['json']}")
+                self.assertIn("STOP", esp_cmds)
+                self.assertIn("ALERT:1:120", esp_cmds)
+                self.assertLess(esp_cmds.index("STOP"), esp_cmds.index("ALERT:1:120"))
+            finally:
+                for k, v in old_env.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+
+    def test_32_standalone_app_iot_pi_local_routes_cors_and_rbac(self):
+        import http.client
+
+        with tempfile.TemporaryDirectory() as td:
+            app_dir = Path(td) / "APP_IOT"
+            app_dir.mkdir()
+            (app_dir / "driver.html").write_text("<!doctype html><title>Driver App</title>", encoding="utf-8")
+            (app_dir / "secret.py").write_text("SECRET = 1\n", encoding="utf-8")
+            vdir = Path(td) / "violations"
+            vdir.mkdir()
+            audit = AuditLogger(Path(td) / "audit")
+            ac = EdgeAccessController(
+                {
+                    "vwr-standalone-123": "viewer",
+                    "opr-standalone-123": "operator",
+                }
+            )
+
+            # 1. minimal_server + enable_live_stream=False -> /driver, /app_iot/*, /api/app_status, POST /api/control MUST be 404
+            srv_off = MiniWebServer(
+                "127.0.0.1",
+                0,
+                "minimal_server",
+                ac,
+                audit,
+                vdir,
+                enable_live_stream=False,
+                app_iot_dir=app_dir,
+            )
+            port_off = srv_off.start()
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", port_off, timeout=2)
+                conn.request("GET", "/api/v1/health")
+                r_h = conn.getresponse()
+                h_data = json.loads(r_h.read().decode("utf-8"))
+                self.assertEqual(r_h.status, 200)
+                self.assertEqual(h_data["target"], "pi_local")
+                self.assertTrue(h_data["app_iot_available"])
+                conn.close()
+
+                for method, path, body, hdrs in [
+                    ("GET", "/driver", None, {}),
+                    ("GET", "/app_iot/driver.html", None, {}),
+                    ("GET", "/api/app_status", None, {"X-Auth-Token": "vwr-standalone-123"}),
+                    (
+                        "POST",
+                        "/api/control",
+                        b'{"cmd":"CALIBRATE"}',
+                        {"Content-Type": "application/json", "X-Auth-Token": "opr-standalone-123"},
+                    ),
+                ]:
+                    c = http.client.HTTPConnection("127.0.0.1", port_off, timeout=2)
+                    c.request(method, path, body=body, headers=hdrs)
+                    resp = c.getresponse()
+                    resp.read()
+                    self.assertEqual(resp.status, 404, f"{method} {path} must be 404 when server mode & stream off")
+                    c.close()
+            finally:
+                srv_off.close()
+
+            # 2. enable_live_stream=True -> /driver (307), /app_iot/driver.html (200), path traversal (403),
+            #    /api/app_status (401 -> 200), POST /api/control (403 viewer -> 200 operator), CORS LAN allow / evil deny
+            cmds_seen = []
+            srv_on = MiniWebServer(
+                "127.0.0.1",
+                0,
+                "minimal_server",
+                ac,
+                audit,
+                vdir,
+                on_control_cmd=lambda cmd: (cmds_seen.append(cmd) or True, "CALIBRATION_STARTED"),
+                enable_live_stream=True,
+                app_iot_dir=app_dir,
+            )
+            port_on = srv_on.start()
+            try:
+                srv_on.update_frame(
+                    1,
+                    np.zeros((120, 160, 3), dtype=np.uint8),
+                    {"vehicle_id": "VEH_PI_01", "driver_state": {"alert_type": "NORMAL"}},
+                    is_stale=False,
+                )
+
+                # GET /driver -> 307 redirect to /app_iot/driver.html
+                c = http.client.HTTPConnection("127.0.0.1", port_on, timeout=2)
+                c.request("GET", "/driver")
+                r_drv = c.getresponse()
+                r_drv.read()
+                self.assertEqual(r_drv.status, 307)
+                self.assertEqual(r_drv.getheader("Location"), "/app_iot/driver.html")
+                c.close()
+
+                # GET /app_iot/driver.html -> 200 OK
+                c = http.client.HTTPConnection("127.0.0.1", port_on, timeout=2)
+                c.request("GET", "/app_iot/driver.html")
+                r_html = c.getresponse()
+                html_body = r_html.read().decode("utf-8")
+                self.assertEqual(r_html.status, 200)
+                self.assertIn("text/html", r_html.getheader("Content-Type") or "")
+                self.assertIn("Driver App", html_body)
+                c.close()
+
+                # Path traversal & disallowed extension -> 403
+                for bad_path in ("/app_iot/../pi_edge/core/config.py", "/app_iot/%2e%2e/pi_edge/core/config.py", "/app_iot/secret.py"):
+                    c = http.client.HTTPConnection("127.0.0.1", port_on, timeout=2)
+                    c.request("GET", bad_path)
+                    r_bad = c.getresponse()
+                    r_bad.read()
+                    self.assertEqual(r_bad.status, 403, f"Expected 403 for {bad_path}")
+                    c.close()
+
+                # GET /api/app_status -> 401 without token, 200 with viewer token
+                c = http.client.HTTPConnection("127.0.0.1", port_on, timeout=2)
+                c.request("GET", "/api/app_status")
+                r_unauth = c.getresponse()
+                r_unauth.read()
+                self.assertEqual(r_unauth.status, 401)
+                c.close()
+
+                c = http.client.HTTPConnection("127.0.0.1", port_on, timeout=2)
+                c.request(
+                    "GET",
+                    "/api/app_status",
+                    headers={"X-Auth-Token": "vwr-standalone-123", "Origin": "http://192.168.1.3:5000"},
+                )
+                r_st = c.getresponse()
+                st_data = json.loads(r_st.read().decode("utf-8"))
+                self.assertEqual(r_st.status, 200)
+                self.assertEqual(r_st.getheader("Access-Control-Allow-Origin"), "http://192.168.1.3:5000")
+                self.assertEqual(r_st.getheader("Vary"), "Origin")
+                self.assertTrue(st_data["ok"])
+                self.assertEqual(st_data["source"], "pi_local")
+                self.assertEqual(st_data["role"], "viewer")
+                self.assertEqual(st_data["state"]["vehicle_id"], "VEH_PI_01")
+                c.close()
+
+                # POST /api/control CALIBRATE -> 403 viewer -> 200 operator
+                c = http.client.HTTPConnection("127.0.0.1", port_on, timeout=2)
+                c.request(
+                    "POST",
+                    "/api/control",
+                    body=b'{"cmd":"CALIBRATE"}',
+                    headers={"Content-Type": "application/json", "X-Auth-Token": "vwr-standalone-123"},
+                )
+                r_vwr = c.getresponse()
+                r_vwr.read()
+                self.assertEqual(r_vwr.status, 403)
+                c.close()
+
+                c = http.client.HTTPConnection("127.0.0.1", port_on, timeout=2)
+                c.request(
+                    "POST",
+                    "/api/control",
+                    body=b'{"cmd":"CALIBRATE"}',
+                    headers={"Content-Type": "application/json", "X-Auth-Token": "opr-standalone-123"},
+                )
+                r_opr = c.getresponse()
+                opr_data = json.loads(r_opr.read().decode("utf-8"))
+                self.assertEqual(r_opr.status, 200)
+                self.assertTrue(opr_data["ok"])
+                self.assertEqual(opr_data["cmd"], "CALIBRATE")
+                self.assertEqual(cmds_seen, ["CALIBRATE"])
+                c.close()
+
+                # CORS preflight OPTIONS: allows LAN origin, rejects evil origin (never '*')
+                c = http.client.HTTPConnection("127.0.0.1", port_on, timeout=2)
+                c.request("OPTIONS", "/api/control", headers={"Origin": "http://192.168.1.3:5000"})
+                r_opt_ok = c.getresponse()
+                r_opt_ok.read()
+                self.assertEqual(r_opt_ok.status, 204)
+                self.assertEqual(r_opt_ok.getheader("Access-Control-Allow-Origin"), "http://192.168.1.3:5000")
+                self.assertIn("OPTIONS", r_opt_ok.getheader("Access-Control-Allow-Methods") or "")
+                self.assertIn("X-Auth-Token", r_opt_ok.getheader("Access-Control-Allow-Headers") or "")
+                self.assertEqual(r_opt_ok.getheader("Vary"), "Origin")
+                c.close()
+
+                c = http.client.HTTPConnection("127.0.0.1", port_on, timeout=2)
+                c.request("OPTIONS", "/api/control", headers={"Origin": "https://evil.example.com"})
+                r_opt_bad = c.getresponse()
+                r_opt_bad.read()
+                self.assertEqual(r_opt_bad.status, 204)
+                self.assertIsNone(r_opt_bad.getheader("Access-Control-Allow-Origin"))
+                c.close()
+            finally:
+                srv_on.close()
+
+            # 3. R3-02: POST /api/control {"cmd":"REST_BREAK_REQUEST"} in main.run -> ok=True, REST_BREAK_ACK,
+            #    sends MUTE (wait_ack=False) and NEVER forwards "REST_BREAK_REQUEST" to ESP32 #1!
+            import os
+            import socket
+            from unittest import mock
+            from pi_edge.app.main import run as run_edge
+
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", 0))
+                rb_port = s.getsockname()[1]
+
+            esp_rb_cmds = []
+
+            class _SpyEspRb:
+                connected = True
+                device_role = "AUDIO_MQ135_NODE"
+                port = "MOCK"
+                baudrate = 115200
+
+                def __init__(self, *a, **kw):
+                    pass
+
+                def start(self):
+                    return True
+
+                def close(self):
+                    pass
+
+                def send_command(self, cmd, wait_ack=True, timeout_s=0.8):
+                    esp_rb_cmds.append(str(cmd))
+                    return mock.Mock(ok=True, ack_line="OK", error="")
+
+                def get_sensor_snapshot(self):
+                    return {"co2_ppm": 400.0, "raw_adc": 0, "gps": {"lat": None, "lon": None, "speed_kmh": 0.0, "satellites": 0, "is_valid": False}}
+
+                def get_esp_status_block(self):
+                    return {"connected": True, "hw_events": []}
+
+                def pop_mute_state_block(self):
+                    return {"newly_triggered": False}
+
+            env_patch = {
+                "RUN_MODE": "local",
+                "ENV_PROFILE": "lab",
+                "WEB_PORT": str(rb_port),
+                "DISABLE_CAMERA": "1",
+                "DISABLE_AI": "1",
+                "ESP_MODE": "MOCK",
+                "ESP_BLE_MODE": "MOCK",
+                "VIOLATION_STORAGE_DIR": str(Path(td) / "v_rb"),
+                "LOGS_DIR": str(Path(td) / "l_rb"),
+                "AUDIT_DIR": str(Path(td) / "a_rb"),
+                "CALIBRATION_DIR": str(Path(td) / "c_rb"),
+                "CAMERA_FPS": "4",
+            }
+            old_env = {k: os.environ.get(k) for k in env_patch}
+            rb_resp = {"json": None}
+
+            def _post_rest_break():
+                deadline = time.monotonic() + 2.5
+                while time.monotonic() < deadline:
+                    try:
+                        req = urllib.request.Request(
+                            f"http://127.0.0.1:{rb_port}/api/control",
+                            data=b'{"cmd":"REST_BREAK_REQUEST"}',
+                            headers={"Content-Type": "application/json", "X-Auth-Token": "lab-pi-admin-token"},
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(req, timeout=1.5) as r:
+                            rb_resp["json"] = json.loads(r.read().decode("utf-8"))
+                            return
+                    except Exception:
+                        time.sleep(0.05)
+
+            try:
+                os.environ.update(env_patch)
+                with mock.patch("pi_edge.comms.esp_client.EspClient", _SpyEspRb):
+                    t = threading.Thread(target=_post_rest_break, daemon=True)
+                    t.start()
+                    rc = run_edge(cli_mode="local", max_ticks=6)
+                    t.join(timeout=2.5)
+                self.assertEqual(rc, 0)
+                self.assertIsNotNone(rb_resp["json"])
+                self.assertTrue(rb_resp["json"]["ok"])
+                self.assertEqual(rb_resp["json"]["detail"], "REST_BREAK_ACK")
+                self.assertIn("MUTE", esp_rb_cmds)
+                self.assertNotIn("REST_BREAK_REQUEST", esp_rb_cmds)
+            finally:
+                for k, v in old_env.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
 
 
 if __name__ == "__main__":

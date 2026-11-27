@@ -288,7 +288,7 @@ class TestCrossSystemContract(unittest.TestCase):
             self.assertRegex(hub_ino, rx)
         for req in (
             "ROLE=COMMS_BLE_GPS_HUB",
-            "FW=PI_AI_3.0",
+            "FW=PI_AI_3.1",
             "HardwareSerial gpsSerial(2);",
             "6E400001-B5A3-F393-E0A9-E50E24DCCA9E",
             "pChar->getData()",
@@ -297,6 +297,8 @@ class TestCrossSystemContract(unittest.TestCase):
             "WiFi.mode(WIFI_OFF)",
             "EVT,BLE_ACTION,MUTE_ALERT",
             "EVT,BLE_ACTION,SOS",
+            "EVT,BLE_ACTION,CALIBRATE_LOCK",
+            "OK:CALIBRATE_LOCK",
             "EVT,ACK,HB",
             "EVT,NACK,CFG_SERVER,INVALID_URL",
             "/api/v1/esp/bridge_telemetry",
@@ -305,6 +307,105 @@ class TestCrossSystemContract(unittest.TestCase):
         # Ensure NVS secrets are never echoed back to Serial
         self.assertNotIn("Serial.println(cfgAuthToken)", hub_ino)
         self.assertNotIn("Serial.println(cfgWifiPass)", hub_ino)
+
+    def test_08_calibrate_command_phone_action_ble_hub_and_calibration_schema(self):
+        from contracts.schema_validator import load_contract
+        from pi_edge.comms.esp_ble_client import EspBleHubClient, classify_ble_hub_line
+        from pi_edge.core.access_control import is_allowed_control_command
+        from server_ai.server_core import bluetooth_hub as srv_bt, commands as srv_cmds
+
+        # 1. Schema ControlCommands aligned with server_ai command whitelist & phone ACTION_TYPES
+        ctrl = load_contract()["schemas"]["ControlCommands"]
+        for exact_cmd in ctrl["server_to_pi_exact"]:
+            self.assertTrue(srv_cmds.validate_command(exact_cmd), f"Server missing command {exact_cmd}")
+        self.assertEqual(set(ctrl["phone_actions"]), set(srv_bt.ACTION_TYPES))
+
+        # 2. ESP32 #2 BLE hub line classifier & callback for CALIBRATE_LOCK + NOTIFY formatting
+        self.assertEqual(classify_ble_hub_line("EVT,BLE_ACTION,CALIBRATE_LOCK"), ("BLE_ACTION", "CALIBRATE_LOCK"))
+        ble_actions = []
+        sent_serial = []
+        hub = EspBleHubClient(mode="MOCK", on_ble_action=lambda act: ble_actions.append(act))
+        hub.start()
+        hub.handle_incoming_line("EVT,BLE_ACTION,CALIBRATE_LOCK")
+        self.assertEqual(ble_actions, ["CALIBRATE_LOCK"])
+        self.assertEqual(hub.get_bluetooth_block()["last_action"], "CALIBRATE_LOCK")
+
+        orig_send = hub.send_command
+        hub.send_command = lambda cmd, wait_ack=True, timeout_s=0.8: (sent_serial.append(cmd) or orig_send(cmd, wait_ack=wait_ack, timeout_s=timeout_s))
+        self.assertTrue(hub.send_notify("CALIB_START|10s"))
+        self.assertTrue(hub.send_notify("ALERT:CALIB_DONE|locked"))
+        self.assertEqual(sent_serial, ["NOTIFY:CALIB_START|10s", "NOTIFY:CALIB_DONE|locked"])
+
+        # 3. Validate optional driver_state.calibration both absent and present
+        executed = []
+        sync = ServerSyncClient(
+            self.pi_cfg,
+            auth_token="lab-device-token",
+            spool=self.spool,
+            on_command=lambda cmd: (executed.append(cmd) or True, "CALIBRATION_STARTED"),
+            session=_TestClientRequestsAdapter(self.tc),
+        )
+        payload = sync.build_telemetry_payload(
+            ai_state={"alert_state": "NORMAL", "alert_type": "NORMAL", "verification_mode": "YOLO_BLAZEFACE_SEQ", "face_detected": True},
+            hw_snap={"temp_c": 62.0, "throttled": "0x0"},
+            fps_snap={},
+            esp_sensor={"co2_ppm": 500.0, "gps": {"speed_kmh": 0.0, "is_valid": False}},
+            esp_status={"connected": True},
+            mute_state={},
+        )
+        ok0, errs0 = validate_telemetry_payload(payload)
+        self.assertTrue(ok0, f"Schema errors without calibration: {errs0}")
+
+        payload_with_cal = json.loads(json.dumps(payload))
+        payload_with_cal["driver_state"]["calibration"] = {
+            "state": "DONE",
+            "mode": "APP_LOCK",
+            "progress_s": 10.0,
+            "duration_s": 10.0,
+            "locked": True,
+            "profile_ts": 1795120005.0,
+            "ear_closed_threshold": 0.19,
+            "glare_mode": True,
+        }
+        ok1, errs1 = validate_telemetry_payload(payload_with_cal)
+        self.assertTrue(ok1, f"Schema errors with calibration: {errs1}")
+
+        bad_cal = json.loads(json.dumps(payload_with_cal))
+        bad_cal["driver_state"]["calibration"]["state"] = "BOGUS_STATE"
+        ok_bad, _ = validate_telemetry_payload(bad_cal)
+        self.assertFalse(ok_bad)
+
+        # 4. Phone HTTP action CALIBRATE_LOCK -> Server queues CALIBRATE -> delivered on /api/v1/telemetry & ACKed
+        otp = self.tc.post("/api/v1/phone/pair_otp", headers=self.op_h, json={"vehicle_id": "XE-CROSS-01"}).json()["pair_code"]
+        ptok = self.tc.post("/api/v1/phone/pair", json={"vehicle_id": "XE-CROSS-01", "pair_code": otp}).json()["driver_phone_token"]
+        act_r = self.tc.post(
+            "/api/v1/phone/action",
+            headers={"Authorization": f"Bearer {ptok}"},
+            json={"vehicle_id": "XE-CROSS-01", "action": "CALIBRATE_LOCK"},
+        )
+        self.assertEqual(act_r.status_code, 200)
+        cmd_id = act_r.json()["command_id"]
+
+        if is_allowed_control_command("CALIBRATE"):
+            sync.send_telemetry_once(payload_with_cal)
+            self.assertEqual(executed, ["CALIBRATE"])
+        else:
+            t_res = self.tc.post(
+                "/api/v1/telemetry",
+                headers={"X-Auth-Token": "lab-device-token"},
+                json=payload_with_cal,
+            ).json()
+            self.assertEqual(t_res["commands"], [{"cmd_uid": cmd_id, "cmd": "CALIBRATE"}])
+            self.tc.post(
+                "/api/v1/commands/ack",
+                headers={"X-Auth-Token": "lab-device-token"},
+                json={"cmd_uid": cmd_id, "vehicle_id": "XE-CROSS-01", "result": "OK", "detail": "CALIBRATION_STARTED"},
+            )
+
+        cmds = self.tc.get("/api/v1/commands?vehicle_id=XE-CROSS-01", headers=self.vwr_h).json()["commands"]
+        matched = [c for c in cmds if c["cmd_uid"] == cmd_id][0]
+        self.assertEqual(matched["status"], "EXECUTED_OK")
+        self.assertEqual(matched["ack_detail"], "CALIBRATION_STARTED")
 
 
 if __name__ == "__main__":

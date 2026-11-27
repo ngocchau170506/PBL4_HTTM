@@ -82,6 +82,7 @@ def _render_live_hud_overlay(frame_bgr, state: dict, overlay: dict):
     ds = state.get("driver_state") or {}
     pi = state.get("pi") or {}
     gps = state.get("gps") or {}
+    cal = ds.get("calibration") or (overlay.get("calibration") if isinstance(overlay, dict) else None)
     at = str(ds.get("alert_type") or "NORMAL")
     bar_color = (20, 30, 180) if at != "NORMAL" else (18, 28, 42)
     cv2.rectangle(img, (0, 0), (w, 30), bar_color, -1)
@@ -90,11 +91,33 @@ def _render_live_hud_overlay(frame_bgr, state: dict, overlay: dict):
         if (gps.get("is_valid") and gps.get("lat") is not None and gps.get("lon") is not None)
         else f"GPS:NO_FIX(sat={gps.get('satellites', 0)})"
     )
+    cal_tag = " | ENGINE:YOLO(MP_OFF)"
+    if isinstance(cal, dict):
+        if cal.get("state") == "RUNNING":
+            cal_tag = f" | ENGINE:MEDIAPIPE({cal.get('progress_s', 0):.1f}s)"
+        elif cal.get("locked"):
+            cal_tag = " | ENGINE:YOLO | CAL:LOCKED"
+        elif cal.get("state") == "DONE":
+            cal_tag = " | ENGINE:YOLO | CAL:OK"
+        elif cal.get("state") == "FAILED":
+            cal_tag = " | ENGINE:YOLO | CAL:NO_FACE"
     hud = (
-        f"{at} | Cam:{pi.get('camera_fps', 0):.1f} AI:{pi.get('ai_fps', 0):.1f}fps | "
+        f"{at}{cal_tag} | Cam:{pi.get('camera_fps', 0):.1f} AI:{pi.get('ai_fps', 0):.1f}fps | "
         f"T:{pi.get('cpu_temp_c', 0) or 0:.1f}C | {gps_txt}"
     )
-    cv2.putText(img, hud[:98], (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (245, 250, 255), 1, cv2.LINE_AA)
+    cv2.putText(img, hud[:108], (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (245, 250, 255), 1, cv2.LINE_AA)
+
+    if isinstance(cal, dict) and cal.get("state") == "RUNNING":
+        prog = max(0.0, float(cal.get("progress_s") or 0.0))
+        dur = max(1.0, float(cal.get("duration_s") or 10.0))
+        ratio = max(0.0, min(1.0, prog / dur))
+        cv2.rectangle(img, (0, 30), (w, 64), (24, 52, 86), -1)
+        fill_w = int(round((w - 16) * ratio))
+        cv2.rectangle(img, (8, 54), (w - 8, 60), (45, 70, 95), -1)
+        if fill_w > 0:
+            cv2.rectangle(img, (8, 54), (8 + fill_w, 60), (40, 210, 255), -1)
+        banner = f"MEDIAPIPE 478 ACTIVE (YOLO TAM TAT): {prog:.1f}s / {dur:.1f}s [{cal.get('mode') or 'BOOT'}]"
+        cv2.putText(img, banner, (10, 49), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (120, 235, 255), 1, cv2.LINE_AA)
     return img
 
 
@@ -149,9 +172,11 @@ def run(cli_mode: Optional[str] = None, max_ticks: Optional[int] = None, live_st
     def _sig(_s, _f):
         stop_flag["stop"] = True
 
-    signal.signal(signal.SIGINT, _sig)
-    if hasattr(signal, "SIGTERM"):
-        signal.signal(signal.SIGTERM, _sig)
+    import threading as _th
+    if _th.current_thread() is _th.main_thread():
+        signal.signal(signal.SIGINT, _sig)
+        if hasattr(signal, "SIGTERM"):
+            signal.signal(signal.SIGTERM, _sig)
 
     try:
         active_alert_ref = {"type": "NORMAL", "last_active_mono": 0.0}
@@ -254,9 +279,40 @@ def run(cli_mode: Optional[str] = None, max_ticks: Optional[int] = None, live_st
         esp.start()
         audio_role_ok = True if cfg.esp_mode.upper() == "MOCK" else _probe_client_whoami(esp, AUDIO_ESP_ROLES)
 
+        def _beep_calib_start() -> None:
+            active_alert_ref["type"] = "NORMAL"
+            if esp is not None:
+                esp.send_command("STOP", wait_ack=False)
+                time.sleep(0.16)
+                esp.send_command("ALERT:1:120", wait_ack=False)
+
         def _exec_cmd(cmd: str):
+            norm_cmd = (cmd or "").strip().upper()
+            if norm_cmd == "CALIBRATE":
+                cam_ready = (not cfg.disable_camera) and (cam is not None) and cam.is_opened()
+                if not cam_ready:
+                    if esp_ble is not None and esp_ble.connected:
+                        esp_ble.send_notify("CALIB_FAIL|NO_CAMERA")
+                    return False, "NO_CAMERA"
+                ok_cal, cal_detail = pipeline.request_calibration(source="CONTROL_CMD", lock=True)
+                if ok_cal:
+                    _beep_calib_start()
+                    if esp_ble is not None and esp_ble.connected:
+                        esp_ble.send_notify("CALIB_START|10s")
+                    return True, "CALIBRATION_STARTED"
+                return False, cal_detail
+
+            if norm_cmd == "REST_BREAK_REQUEST":
+                active_alert_ref["type"] = "NORMAL"
+                if esp is not None:
+                    esp.send_command("MUTE", wait_ack=False)
+                if sync is not None:
+                    sensor = _get_merged_sensor_snapshot()
+                    sync.queue_alert_dismissed("REMOTE_OPERATOR", "REST_BREAK_START", gps=sensor.get("gps"))
+                return True, "REST_BREAK_ACK"
+
             res = esp.send_command(cmd)
-            if res.ok and (cmd or "").strip().upper() == "MUTE" and sync is not None:
+            if res.ok and norm_cmd == "MUTE" and sync is not None:
                 sensor = _get_merged_sensor_snapshot()
                 sync.queue_alert_dismissed("REMOTE_OPERATOR", active_alert_ref["type"], gps=sensor.get("gps"))
             return res.ok, (res.ack_line or res.error)
@@ -278,6 +334,17 @@ def run(cli_mode: Optional[str] = None, max_ticks: Optional[int] = None, live_st
                     esp.send_command("MUTE", wait_ack=False)
                 if sync is not None:
                     sync.queue_alert_dismissed("PHONE_BLE", active_alert_ref["type"], gps=sensor.get("gps"))
+            elif action in ("CALIBRATE", "CALIBRATE_LOCK"):
+                cam_ready = (not cfg.disable_camera) and (cam is not None) and cam.is_opened()
+                if not cam_ready:
+                    if esp_ble is not None and esp_ble.connected:
+                        esp_ble.send_notify("CALIB_FAIL|NO_CAMERA")
+                    return
+                ok_cal, _ = pipeline.request_calibration(source="APP_BLE", lock=True)
+                if ok_cal:
+                    _beep_calib_start()
+                    if esp_ble is not None and esp_ble.connected:
+                        esp_ble.send_notify("CALIB_START|10s")
             elif action == "SOS" and sync is not None:
                 sync.queue_violation_burst(
                     alert_type="SOS",
@@ -365,6 +432,7 @@ def run(cli_mode: Optional[str] = None, max_ticks: Optional[int] = None, live_st
             max_stream_fps=max(15.0, float(cfg.camera_fps)),
             jpeg_quality=82,
             enable_live_stream=cfg.enable_live_stream,
+            app_iot_dir=ROOT / "APP_IOT",
         )
         try:
             actual_port = web.start()
@@ -372,6 +440,11 @@ def run(cli_mode: Optional[str] = None, max_ticks: Optional[int] = None, live_st
                 print(
                     f"[PI_AI LIVE CAM] Open in browser: http://{sync.local_ip}:{actual_port}/ "
                     f"(dang nhap bang WEB_VIEWER_TOKEN hoac /stream?token=<WEB_VIEWER_TOKEN>)",
+                    flush=True,
+                )
+            if cfg.enable_live_stream or cfg.web_mode == "full_local":
+                print(
+                    f"[PI_AI DRIVER APP] Driver App: http://{sync.local_ip}:{actual_port}/driver",
                     flush=True,
                 )
         except OSError as exc:
@@ -427,6 +500,9 @@ def run(cli_mode: Optional[str] = None, max_ticks: Optional[int] = None, live_st
         last_burst_started_by_type: dict = {}
         interrupt_voice = os.environ.get("ESP_INTERRUPT_VOICE", "0").strip().lower() in ("1", "true", "yes")
         last_alert_type = "NORMAL"
+        last_cal_progress_notify_mono = -999.0
+        last_cal_log_state = "IDLE"
+        last_cal_log_mono = -999.0
         tick_count = 0
         target_dt = 1.0 / max(1.0, cfg.camera_fps)
 
@@ -461,8 +537,67 @@ def run(cli_mode: Optional[str] = None, max_ticks: Optional[int] = None, live_st
                     "ai_latency_ms": 0.0,
                     "allow_smoking": cfg.allow_smoking,
                     "allow_phone": cfg.allow_phone,
+                    "calibration": pipeline.get_calibration_status(now_mono=t_loop),
                 }
             ai_state["thermal_level"] = plan.thermal_level
+
+            cal_cur = ai_state.get("calibration")
+            if isinstance(cal_cur, dict):
+                c_st = str(cal_cur.get("state") or "IDLE")
+                if c_st == "RUNNING":
+                    if last_cal_log_state != "RUNNING":
+                        print(
+                            f"[PI_AI MEDIAPIPE] BAT DAU CAN CHINH {cal_cur.get('duration_s', 10.0):.0f}s "
+                            f"(mode={cal_cur.get('mode') or 'BOOT'}) — TAM TAT YOLO",
+                            flush=True,
+                        )
+                        last_cal_log_mono = t_loop
+                    elif (t_loop - last_cal_log_mono) >= 2.0:
+                        print(
+                            f"[PI_AI MEDIAPIPE] Dang chay 478 diem: {cal_cur.get('progress_s', 0.0):.1f}s / "
+                            f"{cal_cur.get('duration_s', 10.0):.0f}s (face={ai_state.get('face_detected')})",
+                            flush=True,
+                        )
+                        last_cal_log_mono = t_loop
+                last_cal_log_state = c_st
+            if (
+                isinstance(cal_cur, dict)
+                and cal_cur.get("state") == "RUNNING"
+                and cal_cur.get("mode") == "APP_LOCK"
+                and esp_ble is not None
+                and esp_ble.connected
+                and (t_loop - last_cal_progress_notify_mono) >= 2.0
+            ):
+                last_cal_progress_notify_mono = t_loop
+                esp_ble.send_notify(f"CALIB_PROGRESS|{int(cal_cur.get('progress_s') or 0)}s")
+
+            while True:
+                cal_evt = pipeline.pop_calibration_event()
+                if cal_evt is None:
+                    break
+                if cal_evt.get("state") == "DONE":
+                    tag = "locked" if cal_evt.get("locked") else "temp"
+                    print(
+                        f"[PI_AI MEDIAPIPE] HOAN TAT 10s (mode={cal_evt.get('mode')}, {tag}, "
+                        f"ear_thresh={cal_evt.get('ear_closed_threshold')}, glare={cal_evt.get('glare_mode')}) "
+                        f"-> TAT MEDIAPIPE, BAT LAI YOLO!",
+                        flush=True,
+                    )
+                    if esp_ble is not None and esp_ble.connected:
+                        esp_ble.send_notify(f"CALIB_DONE|{tag}")
+                    if esp is not None:
+                        esp.send_command("ALERT:1:180", wait_ack=False)
+                elif cal_evt.get("state") == "FAILED":
+                    reason_fail = str(cal_evt.get("reason") or "NO_FACE")
+                    print(
+                        f"[PI_AI MEDIAPIPE] KET THUC 10s CHUA DU MAU (reason={reason_fail}) "
+                        f"-> TAT MEDIAPIPE, CHUYEN SANG YOLO!",
+                        flush=True,
+                    )
+                    if esp_ble is not None and esp_ble.connected:
+                        esp_ble.send_notify(f"CALIB_FAIL|{reason_fail}")
+                    if esp is not None:
+                        esp.send_command("ALERT:1:180", wait_ack=False)
 
             cur_alert = ai_state["alert_type"]
             if cur_alert and cur_alert != "NORMAL":

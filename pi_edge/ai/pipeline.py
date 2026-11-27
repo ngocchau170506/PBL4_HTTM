@@ -18,10 +18,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from pi_edge.ai.calibration_10s import DriverCalibrator10s, FaceMesh478TFLite
 from pi_edge.ai.face_geometry import (
     BlazeFaceGeometry,
     HeadPoseEstimate,
+    apply_clahe_lab,
     evaluate_mouth_yawn_geometry,
+    expand_square_face_roi,
+    inspect_upper_face_glare,
     rotate_roi_replicate,
     unrotate_bbox_in_roi,
 )
@@ -29,15 +33,46 @@ from pi_edge.ai.sensor_fusion import FusionDecision, SensorFusion
 from pi_edge.core.config import EdgeConfig
 from pi_edge.core.telemetry import ThrottlePlan
 
-# Per-class minimum confidence thresholds (fixes F-008 weak conf=0.15 false alarms!)
+# Per-class minimum confidence thresholds (balanced eye thresholds; Normal separated from Eye_Open)
 CLASS_MIN_CONF: Dict[str, float] = {
-    "Eye_Closed": 0.35,
-    "Eye_Open": 0.25,
+    "Eye_Closed": 0.28,
+    "Eye_Open": 0.28,
     "Mouth_Open": 0.35,
     "Distracted Head": 0.35,
     "Normal": 0.25,
 }
 FACE_RELATED_CLASSES = frozenset({"Eye_Closed", "Eye_Open", "Mouth_Open", "Distracted Head", "Normal"})
+
+
+def _bbox_iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> float:
+    ix1 = max(a[0], b[0])
+    iy1 = max(a[1], b[1])
+    ix2 = min(a[2], b[2])
+    iy2 = min(a[3], b[3])
+    iw = max(0, ix2 - ix1)
+    ih = max(0, iy2 - iy1)
+    inter = float(iw * ih)
+    if inter <= 0.0:
+        return 0.0
+    area_a = float(max(1, a[2] - a[0]) * max(1, a[3] - a[1]))
+    area_b = float(max(1, b[2] - b[0]) * max(1, b[3] - b[1]))
+    return inter / max(1.0, area_a + area_b - inter)
+
+
+def _merge_roi_detection(
+    dets: List[Tuple[str, float, Tuple[int, int, int, int]]],
+    new_det: Tuple[str, float, Tuple[int, int, int, int]],
+    same_group: frozenset[str],
+    iou_thr: float = 0.35,
+) -> None:
+    """Merge an ROI eye/mouth box into full-frame `dets` without duplicating the same eye/mouth."""
+    nlbl, nconf, nbox = new_det
+    for idx, (elbl, econf, ebox) in enumerate(dets):
+        if elbl in same_group and _bbox_iou(ebox, nbox) >= iou_thr:
+            if nconf > econf:
+                dets[idx] = new_det
+            return
+    dets.append(new_det)
 
 
 @dataclass
@@ -59,7 +94,13 @@ class InferenceOutput:
 
 
 class EdgeAiPipeline:
-    def __init__(self, cfg: EdgeConfig, yolo_model: Any = None, face_geo: Optional[BlazeFaceGeometry] = None):
+    def __init__(
+        self,
+        cfg: EdgeConfig,
+        yolo_model: Any = None,
+        face_geo: Optional[BlazeFaceGeometry] = None,
+        calibrator: Optional[DriverCalibrator10s] = None,
+    ):
         self.cfg = cfg
         self._perm_lock = threading.Lock()
         self.allow_smoking = cfg.allow_smoking
@@ -104,15 +145,30 @@ class EdgeAiPipeline:
         self.model_loaded = (self._yolo is not None)
 
         self._geo = face_geo if face_geo is not None else BlazeFaceGeometry(cfg.landmarker_path)
+        self._mesh = FaceMesh478TFLite(cfg.landmarker_path)
+        self.calibrator = (
+            calibrator
+            if calibrator is not None
+            else DriverCalibrator10s(
+                calibration_dir=cfg.calibration_dir,
+                face_geo=self._geo,
+                face_mesh=self._mesh,
+                duration_s=10.0,
+                auto_boot=not cfg.disable_ai,
+            )
+        )
+        if self.calibrator.mesh is not None:
+            self._mesh = self.calibrator.mesh
 
         # Event-driven 1-slot async inference worker
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
         self._stop = threading.Event()
-        self._pending_task: Optional[Tuple[np.ndarray, ThrottlePlan]] = None
+        self._pending_task: Optional[Tuple[np.ndarray, ThrottlePlan, float]] = None
         self._latest_infer: Optional[InferenceOutput] = None
         self._last_consumed_infer_ts: float = 0.0
         self._last_submit_mono = 0.0
+        self._zero_eye_streak: int = 0
         self.worker_errors = 0
         self._worker: Optional[threading.Thread] = None
 
@@ -130,6 +186,20 @@ class EdgeAiPipeline:
         if self._worker is not None:
             self._worker.join(timeout=3.0)
             self._worker = None
+
+    def request_calibration(
+        self,
+        source: str = "CONTROL_CMD",
+        lock: bool = True,
+        now_mono: Optional[float] = None,
+    ) -> Tuple[bool, str]:
+        return self.calibrator.request_calibration(source=source, lock=lock, now_mono=now_mono)
+
+    def get_calibration_status(self, now_mono: Optional[float] = None) -> Dict[str, Any]:
+        return self.calibrator.get_status_dict(now_mono=now_mono)
+
+    def pop_calibration_event(self) -> Optional[Dict[str, Any]]:
+        return self.calibrator.pop_event()
 
     def set_behavior_permissions(self, patch: Dict[str, Any]) -> Dict[str, Any]:
         with self._perm_lock:
@@ -158,26 +228,67 @@ class EdgeAiPipeline:
             }
 
     def submit_if_due(self, frame_bgr: np.ndarray, plan: ThrottlePlan, now_mono: float) -> bool:
-        if self.cfg.disable_ai or self._yolo is None:
+        if self.cfg.disable_ai:
             return False
-        if (now_mono - self._last_submit_mono) < plan.ai_min_interval_s:
+        cal_running = self.calibrator.is_running(now_mono) and plan.allow_face_geometry and self.calibrator.available
+        if not cal_running and self._yolo is None:
+            return False
+        min_interval = min(plan.ai_min_interval_s, 0.08) if cal_running else plan.ai_min_interval_s
+        if (now_mono - self._last_submit_mono) < min_interval:
             return False
         with self._cond:
             if self._pending_task is not None:
                 return False
-            self._pending_task = (frame_bgr, plan)
+            self._pending_task = (frame_bgr, plan, float(now_mono))
             self._last_submit_mono = now_mono
             self._cond.notify()
             return True
 
-    def _run_inference(self, frame_bgr: np.ndarray, plan: ThrottlePlan) -> InferenceOutput:
+    def _run_inference(
+        self,
+        frame_bgr: np.ndarray,
+        plan: ThrottlePlan,
+        now_mono: Optional[float] = None,
+    ) -> InferenceOutput:
         t0 = time.perf_counter()
+        now_m = time.monotonic() if now_mono is None else float(now_mono)
+
+        # 10-second MediaPipe 478-Mesh calibration mode: pause YOLO so Pi 4 hits ~10-12 FPS MediaPipe cleanly
+        if self.calibrator.is_running(now_m) and plan.allow_face_geometry and self.calibrator.available:
+            self._zero_eye_streak = 0
+            pose_cal, mesh_s, cal_st = self.calibrator.step_frame(frame_bgr, now_mono=now_m)
+            cal_dets: List[Tuple[str, float, Tuple[int, int, int, int]]] = []
+            if mesh_s is not None and mesh_s.valid:
+                if mesh_s.left_eye_box is not None:
+                    cal_dets.append(("Eye_Open", mesh_s.presence, mesh_s.left_eye_box))
+                if mesh_s.right_eye_box is not None:
+                    cal_dets.append(("Eye_Open", mesh_s.presence, mesh_s.right_eye_box))
+            ver_cal = "YOLO_BLAZEFACE_SEQ" if pose_cal.valid else "SINGLE_MODEL_YOLO"
+            return InferenceOutput(
+                ts_mono=now_m,
+                detected_classes=[d[0] for d in cal_dets],
+                detections=cal_dets,
+                face_detected=bool(pose_cal.valid),
+                pose=pose_cal,
+                eye_closed=False if pose_cal.valid else None,
+                mouth_yawn=False if pose_cal.valid else None,
+                distracted=False if pose_cal.valid else None,
+                smoking=False,
+                phone=False,
+                channel_confidences={"DROWSY": 0.0, "YAWNING": 0.0, "DISTRACTED": 0.0, "SMOKING": 0.0, "PHONE": 0.0},
+                behavior_detail=f"CALIB_{cal_st.get('mode') or 'BOOT'}_{cal_st.get('progress_s', 0.0):.1f}s",
+                latency_ms=round((time.perf_counter() - t0) * 1000.0, 2),
+                verification_mode=ver_cal,
+            )
+
         perms = self.get_behavior_permissions()
         pose: Optional[HeadPoseEstimate] = None
         if plan.allow_face_geometry and self._geo.available:
             pose = self._geo.detect_pose(frame_bgr)
 
         dets: List[Tuple[str, float, Tuple[int, int, int, int]]] = []
+        h_img, w_img = frame_bgr.shape[:2]
+        glare_active = False
         if self._yolo is not None:
             res = self._yolo.predict(
                 frame_bgr,
@@ -205,39 +316,68 @@ class EdgeAiPipeline:
                             continue
                     dets.append((label, conf, (x1, y1, x2, y2)))
 
-            # Bounded Tier-2: MAX 1 roll-compensated pass only when BlazeFace confirms tilted head (>18 deg) and 0 eyes detected
-            has_eye = any(lbl in ("Eye_Closed", "Eye_Open") for lbl, _, _ in dets)
-            if not has_eye and pose is not None and pose.valid and abs(pose.roll_deg) >= 18.0 and pose.face_box:
-                fx1, fy1, fx2, fy2 = pose.face_box
-                roi = frame_bgr[max(0, fy1):max(1, fy2), max(0, fx1):max(1, fx2)]
-                if roi.size > 0 and roi.shape[0] >= 24 and roi.shape[1] >= 24:
-                    # OpenCV positive angle rotates CCW, compensating CW (+roll_deg) head tilt (fixes BUG-11!)
-                    rot = rotate_roi_replicate(roi, +pose.roll_deg)
-                    r2 = self._yolo.predict(rot, imgsz=256, conf=0.25, max_det=4, verbose=False)
-                    if r2 and len(r2) > 0 and r2[0].boxes is not None:
-                        names2 = r2[0].names or {}
-                        roi_h, roi_w = roi.shape[:2]
-                        for b in r2[0].boxes:
-                            lbl2 = str(names2.get(int(b.cls[0]), ""))
-                            c2 = float(b.conf[0])
-                            if c2 < CLASS_MIN_CONF.get(lbl2, 0.30):
-                                continue
-                            if lbl2 in ("Eye_Closed", "Eye_Open"):
-                                dets.append((lbl2, c2, pose.face_box))
-                            elif lbl2 == "Mouth_Open":
-                                # Inverse-rotate mouth box back into unrotated face coordinates (fixes F-017!)
-                                mx1, my1, mx2, my2 = [int(v) for v in b.xyxy[0].tolist()]
-                                ux1, uy1, ux2, uy2 = unrotate_bbox_in_roi((mx1, my1, mx2, my2), roi_w, roi_h, +pose.roll_deg)
-                                dets.append((lbl2, c2, (fx1 + ux1, fy1 + uy1, fx1 + ux2, fy1 + uy2)))
+            # Smart Face-ROI + CLAHE Glare Compensation Pass (only when Pass 1 misses or has low eye confidence, < 80°C)
+            if pose is not None and pose.valid and pose.face_box is not None and plan.thermal_level < 3:
+                eye_dets = [d for d in dets if d[0] in ("Eye_Closed", "Eye_Open")]
+                max_eye_conf = max((d[1] for d in eye_dets), default=0.0)
+                glare_detected, _, _ = inspect_upper_face_glare(frame_bgr, pose.face_box)
+                glare_active = glare_detected or self.calibrator.is_glare_mode()
+
+                if len(eye_dets) < 2 or max_eye_conf < 0.52:
+                    rx1, ry1, rx2, ry2 = expand_square_face_roi(pose.face_box, w_img, h_img, scale_mult=1.30)
+                    roi = frame_bgr[ry1:ry2, rx1:rx2]
+                    if roi.size > 0 and roi.shape[0] >= 24 and roi.shape[1] >= 24:
+                        did_rotate = abs(pose.roll_deg) >= 15.0
+                        roi_proc = rotate_roi_replicate(roi, +pose.roll_deg) if did_rotate else roi
+                        if glare_active:
+                            roi_proc = apply_clahe_lab(roi_proc, clip_limit=2.2, tile_size=4)
+                        roi_imgsz = 256
+                        r2 = self._yolo.predict(roi_proc, imgsz=roi_imgsz, conf=0.20, max_det=6, verbose=False)
+                        if r2 and len(r2) > 0 and r2[0].boxes is not None:
+                            names2 = r2[0].names or {}
+                            roi_h, roi_w = roi.shape[:2]
+                            eye_group = frozenset({"Eye_Closed", "Eye_Open"})
+                            mouth_group = frozenset({"Mouth_Open"})
+                            for b in r2[0].boxes:
+                                lbl2 = str(names2.get(int(b.cls[0]), ""))
+                                if lbl2 not in ("Eye_Closed", "Eye_Open", "Mouth_Open"):
+                                    continue
+                                c2 = float(b.conf[0])
+                                if c2 < CLASS_MIN_CONF.get(lbl2, 0.28):
+                                    continue
+                                bx1, by1, bx2, by2 = [int(round(float(v))) for v in b.xyxy[0].tolist()]
+                                if did_rotate:
+                                    ux1, uy1, ux2, uy2 = unrotate_bbox_in_roi(
+                                        (bx1, by1, bx2, by2), roi_w, roi_h, +pose.roll_deg
+                                    )
+                                else:
+                                    ux1 = max(0, min(roi_w - 1, bx1))
+                                    uy1 = max(0, min(roi_h - 1, by1))
+                                    ux2 = max(ux1 + 1, min(roi_w, bx2))
+                                    uy2 = max(uy1 + 1, min(roi_h, by2))
+                                mapped_box = (rx1 + ux1, ry1 + uy1, rx1 + ux2, ry1 + uy2)
+                                grp = eye_group if lbl2 in eye_group else mouth_group
+                                _merge_roi_detection(dets, (lbl2, c2, mapped_box), grp)
 
         labels = [d[0] for d in dets]
         face_detected = bool((pose and pose.valid) or any(l in FACE_RELATED_CLASSES for l in labels))
 
-        # Conflict resolution by max confidence: weak Eye_Closed must NOT override strong Eye_Open (fixes F-008!)
+        neutral_yaw, neutral_pitch, _ = self.calibrator.get_neutral_pose()
+        yaw_eff = (pose.yaw_deg - neutral_yaw) if (pose and pose.valid) else 0.0
+        pitch_eff = (pose.pitch_deg - neutral_pitch) if (pose and pose.valid) else 0.0
+
+        # Strictly separate "Eye_Open" from full-face "Normal" so "Normal" NEVER suppresses "Eye_Closed"!
         closed_confs = [c for lbl, c, _ in dets if lbl == "Eye_Closed"]
-        open_confs = [c for lbl, c, _ in dets if lbl in ("Eye_Open", "Normal")]
+        open_confs = [c for lbl, c, _ in dets if lbl == "Eye_Open"]
+        normal_confs = [c for lbl, c, _ in dets if lbl == "Normal"]
+        if pose is not None and pose.valid and not closed_confs and not open_confs:
+            self._zero_eye_streak += 1
+        else:
+            self._zero_eye_streak = 0
+
         eye_closed: Optional[bool] = None
         eye_conf = 0.0
+        extra_detail = ""
         if closed_confs and open_confs:
             if max(closed_confs) >= max(open_confs):
                 eye_closed = True
@@ -251,6 +391,39 @@ class EdgeAiPipeline:
         elif open_confs:
             eye_closed = False
             eye_conf = max(open_confs)
+        else:
+            # Hybrid 478-Mesh EAR rescue strictly gated on frontal pose (< 75°C) + sustained 0-eye streak or glare
+            if (
+                pose is not None
+                and pose.valid
+                and pose.face_box is not None
+                and plan.thermal_level <= 1
+                and abs(yaw_eff) < 22.0
+                and abs(pitch_eff) < 20.0
+                and abs(pose.roll_deg) < 20.0
+                and (self._zero_eye_streak >= 2 or glare_active)
+                and self._mesh is not None
+                and self._mesh.available
+            ):
+                ms = self._mesh.infer_ear_mar(frame_bgr, pose.face_box)
+                if ms.valid:
+                    ear_thr = self.calibrator.get_ear_closed_threshold(default=0.18)
+                    if ms.ear <= ear_thr:
+                        eye_closed = True
+                        eye_conf = round(min(0.85, max(0.50, 0.50 + (ear_thr - ms.ear) * 2.0)), 3)
+                        extra_detail = f"MeshEAR({ms.ear:.3f}<={ear_thr:.3f})"
+                        if ms.left_eye_box is not None:
+                            dets.append(("Eye_Closed", eye_conf, ms.left_eye_box))
+                        if ms.right_eye_box is not None:
+                            dets.append(("Eye_Closed", eye_conf, ms.right_eye_box))
+                        labels = [d[0] for d in dets]
+                    elif ms.ear >= ear_thr + 0.04:
+                        eye_closed = False
+                        eye_conf = round(min(0.90, max(0.55, ms.presence)), 3)
+
+            if eye_closed is None and normal_confs:
+                eye_closed = False
+                eye_conf = max(normal_confs)
 
         mouth_yawn: Optional[bool] = None
         mouth_detail = ""
@@ -268,7 +441,7 @@ class EdgeAiPipeline:
             mouth_yawn = False
 
         dist_confs = [c for lbl, c, _ in dets if lbl == "Distracted Head"]
-        pose_dist = bool(pose and pose.valid and (abs(pose.yaw_deg) >= 32.0 or abs(pose.pitch_deg) >= 26.0))
+        pose_dist = bool(pose and pose.valid and (abs(yaw_eff) >= 32.0 or abs(pitch_eff) >= 26.0))
         distracted: Optional[bool] = None
         dist_conf = 0.0
         if dist_confs or pose_dist:
@@ -291,9 +464,10 @@ class EdgeAiPipeline:
             "SMOKING": round(max(smoke_confs), 3) if smoke_confs else 0.0,
             "PHONE": round(max(phone_confs), 3) if phone_confs else 0.0,
         }
+        beh_detail = f"{mouth_detail} {extra_detail}".strip() if (mouth_detail and extra_detail) else (mouth_detail or extra_detail)
 
         return InferenceOutput(
-            ts_mono=time.monotonic(),
+            ts_mono=now_m,
             detected_classes=labels,
             detections=dets,
             face_detected=face_detected,
@@ -304,7 +478,7 @@ class EdgeAiPipeline:
             smoking=smoking,
             phone=phone,
             channel_confidences=ch_confs,
-            behavior_detail=mouth_detail,
+            behavior_detail=beh_detail,
             latency_ms=round((time.perf_counter() - t0) * 1000.0, 2),
             verification_mode=ver_mode,
         )
@@ -319,7 +493,7 @@ class EdgeAiPipeline:
                 task = self._pending_task
                 self._pending_task = None
             if task is not None:
-                frame, plan = task
+                frame, plan, submit_mono = task
                 try:
                     out = self._run_inference(frame, plan)
                     with self._lock:
@@ -333,14 +507,16 @@ class EdgeAiPipeline:
         """Thread-safe snapshot of latest AI boxes/pose for on-demand live camera HUD (0 cost if unused)."""
         with self._lock:
             inf = self._latest_infer
+        cal = self.calibrator.get_status_dict()
         if inf is None:
-            return {"valid": False, "detections": [], "pose": None, "face_detected": False}
+            return {"valid": False, "detections": [], "pose": None, "face_detected": False, "calibration": cal}
         pose = inf.pose
         return {
             "valid": True,
             "ts_mono": float(inf.ts_mono),
             "face_detected": bool(inf.face_detected),
             "detections": list(inf.detections),
+            "calibration": cal,
             "pose": (
                 {
                     "valid": bool(pose.valid),
@@ -364,14 +540,26 @@ class EdgeAiPipeline:
         """Non-blocking 30Hz tick: feeds each InferenceOutput ONCE to SensorFusion (enforces LCK-06 <= 0.8s & 2-hit guard!)."""
         now_m = now_mono if now_mono is not None else time.monotonic()
         if frame_bgr is not None and not is_stale:
+            self.calibrator.notify_real_camera_frame(now_m)
             self.submit_if_due(frame_bgr, plan, now_m)
+        else:
+            self.calibrator.tick_time(now_m)
+
+        cal_status = self.calibrator.get_status_dict(now_m)
         with self._lock:
             inf = self._latest_infer
 
         fresh_display = inf is not None and (now_m - inf.ts_mono) <= self.cfg.blind_hold_max_s
         is_new_infer = fresh_display and (inf.ts_mono > self._last_consumed_infer_ts)
 
-        if is_new_infer:
+        if cal_status["state"] == "RUNNING":
+            # Never emit false violation alerts while running 10s driver calibration
+            for ch in self.fusion.channels.values():
+                ch.reset()
+            if is_new_infer and inf is not None:
+                self._last_consumed_infer_ts = inf.ts_mono
+            obs = {"eye": False, "mouth": False, "distracted": False, "smoking": False, "phone": False}
+        elif is_new_infer and inf is not None:
             self._last_consumed_infer_ts = inf.ts_mono
             obs = {
                 "eye": inf.eye_closed,
@@ -384,7 +572,7 @@ class EdgeAiPipeline:
             # Between real inferences, pass None so ChannelTimer is the SINGLE blind-hold authority (<= 0.8s, no fake hits!)
             obs = {"eye": None, "mouth": None, "distracted": None, "smoking": None, "phone": None}
 
-        if fresh_display:
+        if fresh_display and inf is not None:
             ver_mode = inf.verification_mode
             face_detected = inf.face_detected
             classes = list(inf.detected_classes)
@@ -394,7 +582,7 @@ class EdgeAiPipeline:
             ver_mode = "SINGLE_MODEL_YOLO"
             face_detected = False
             classes = []
-            detail = ""
+            detail = f"CALIB_{cal_status['mode']}_{cal_status['progress_s']:.1f}s" if cal_status["state"] == "RUNNING" else ""
             lat_ms = 0.0
 
         primary, all_dec = self.fusion.update(obs, now_m, verification_mode=ver_mode)
@@ -417,5 +605,6 @@ class EdgeAiPipeline:
             "infer_ts_mono": float(inf.ts_mono) if inf is not None else 0.0,
             "allow_smoking": perms["allow_smoking"],
             "allow_phone": perms["allow_phone"],
+            "calibration": cal_status,
             "channels": {k: {"state": d.alert_state, "dur": d.duration_s} for k, d in all_dec.items()},
         }

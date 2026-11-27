@@ -2,7 +2,7 @@
 
 Features:
   - Strictly decoupled from ESP32 #1 safety speaker path (<5ms never blocked)
-  - Strict ACK/NACK & BLE event classifier (MUTE_ALERT, SOS, ACK_AWAKE, REST_BREAK_*)
+  - Strict ACK/NACK & BLE event classifier (MUTE_ALERT, SOS, ACK_AWAKE, REST_BREAK_*, CALIBRATE_LOCK)
   - Auto role discovery via WHOAMI (prevents /dev/ttyUSB0 vs /dev/ttyUSB1 swap bugs!)
   - Dynamic NVS config sync (CFG_VEHICLE / CFG_SERVER / CFG_TOKEN — never logs secrets)
   - Periodic Pi heartbeat (HB:{...}) to keep ESP32 #2 Wi-Fi OFF while Pi is healthy
@@ -583,7 +583,10 @@ class EspBleHubClient:
     def send_notify(self, text: str) -> bool:
         if not self.connected or self.mode == "DISABLED":
             return False
-        clean = (text or "").replace("\r", " ").replace("\n", " ").strip()[:160]
+        clean = (text or "").replace("\r", " ").replace("\n", " ").strip()
+        if clean.upper().startswith("ALERT:"):
+            clean = clean[6:].strip()
+        clean = clean[:160]
         if not clean:
             return False
         return self.send_command(f"NOTIFY:{clean}", wait_ack=False).ok

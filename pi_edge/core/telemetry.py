@@ -21,9 +21,9 @@ class ThrottlePlan:
 
 
 class ThermalPolicy:
-    """Real thermal governor: ACTUALLY drops imgsz to 256 at L3 & spaces AI interval (fixes dead ThrottlePlan fields)."""
+    """Real thermal governor: ACTUALLY drops imgsz to 256 at L3 (>=80°C) & spaces AI interval."""
 
-    def __init__(self, base_imgsz: int = 320, warm_c: float = 58.0, hot_c: float = 65.0, crit_c: float = 70.0):
+    def __init__(self, base_imgsz: int = 320, warm_c: float = 70.0, hot_c: float = 75.0, crit_c: float = 80.0):
         self.base_imgsz = int(base_imgsz)
         self.warm_c = float(warm_c)
         self.hot_c = float(hot_c)
@@ -44,7 +44,7 @@ class ThermalPolicy:
         if t >= self.hot_c:
             return ThrottlePlan(
                 thermal_level=2,
-                ai_min_interval_s=0.35,
+                ai_min_interval_s=0.25,
                 yolo_imgsz=self.base_imgsz,
                 allow_face_geometry=True,
                 reason="L2_HOT",
@@ -52,14 +52,14 @@ class ThermalPolicy:
         if t >= self.warm_c:
             return ThrottlePlan(
                 thermal_level=1,
-                ai_min_interval_s=0.22,
+                ai_min_interval_s=0.15,
                 yolo_imgsz=self.base_imgsz,
                 allow_face_geometry=True,
                 reason="L1_WARM",
             )
         return ThrottlePlan(
             thermal_level=0,
-            ai_min_interval_s=0.10,
+            ai_min_interval_s=0.08,
             yolo_imgsz=self.base_imgsz,
             allow_face_geometry=True,
             reason="L0_NORMAL",

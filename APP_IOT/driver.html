@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#0f172a" />
-  <title>PI_AI — Driver Cockpit (BLE)</title>
+  <title>PI_AI — Driver Cockpit (3 Nguồn Độc Lập)</title>
   <link rel="icon" type="image/svg+xml" href="./icon.svg" />
   <link rel="manifest" href="./manifest.json" />
   <link rel="stylesheet" href="./driver.css" />
@@ -14,55 +14,134 @@
     <header>
       <div>
         <h1>PI_AI Driver Cockpit</h1>
-        <div id="device-subtitle" style="font-size:12px;color:var(--muted)">ESP32 #2: PI_AI_HUB_* (BLE NUS)</div>
+        <div id="device-subtitle" class="sub">Pi Cục Bộ :8080 · Server :5000 · ESP32 #2 BLE</div>
       </div>
-      <span id="ble-status-badge" class="badge">CHƯA KẾT NỐI</span>
+      <div class="header-badges">
+        <span id="conn-status-badge" class="badge">CHƯA NỐI HTTP</span>
+        <span id="ble-status-badge" class="badge">BLE CHƯA NỐI</span>
+      </div>
     </header>
 
     <div id="compat-banner" class="banner warn" style="display:none"></div>
     <div id="alert-banner" class="banner alert" style="display:none"></div>
 
+    <!-- Card #1: Kết nối Độc Lập (Pi Cục Bộ :8080 / Server :5000) -->
     <div class="card">
+      <div class="card-head">
+        <h2>1. Kết nối Độc Lập (Pi Cục Bộ :8080 / Server :5000)</h2>
+        <span id="http-target-badge" class="badge">CHƯA KIỂM TRA</span>
+      </div>
       <div class="row">
-        <button id="btn-connect" class="btn btn-primary btn-full" onclick="uiConnectBle()">
-          KẾT NỐI BLUETOOTH VỚI XE
-          <small>Tìm thiết bị PI_AI_HUB_* (không cần mã PIN)</small>
-        </button>
+        <input
+          id="conn-base-url"
+          type="url"
+          inputmode="url"
+          placeholder="http://192.168.1.7:8080 hoặc http://192.168.1.10:5000"
+          onkeydown="if(event.key==='Enter')uiProbeEndpoint(true)"
+        />
       </div>
       <div class="row" style="margin-top:8px">
-        <button id="btn-disconnect" class="btn btn-ghost" style="flex:1" onclick="uiDisconnectBle()" disabled>Ngắt kết nối</button>
-        <button id="btn-status" class="btn btn-ghost" style="flex:1" onclick="uiSendBle('STATUS')" disabled>Kiểm tra trạng thái</button>
+        <button id="btn-probe" class="btn btn-primary btn-compact" style="flex:1" onclick="uiProbeEndpoint(true)">
+          Kiểm tra kết nối
+        </button>
+        <button id="btn-use-origin" class="btn btn-ghost" style="flex:1" onclick="uiUseCurrentOrigin()">
+          Dùng địa chỉ trang này
+        </button>
+      </div>
+      <div id="http-target-detail" class="hint-line">
+        Đang tự kiểm tra địa chỉ máy chủ...
+      </div>
+
+      <!-- Khung đăng nhập Pi Cục Bộ (hiện tự động khi phát hiện targetKind === 'pi_local') -->
+      <div id="auth-box-pi" class="auth-box" style="display:none">
+        <div class="auth-title">Đăng nhập Pi Cục Bộ (<code>WEB_OPERATOR_TOKEN</code> / <code>WEB_ADMIN_TOKEN</code>)</div>
+        <div class="row">
+          <input
+            id="pi-token-input"
+            type="password"
+            placeholder="Nhập mã truy cập Pi..."
+            onkeydown="if(event.key==='Enter')uiLoginPiLocal()"
+          />
+          <button class="btn btn-primary btn-compact" onclick="uiLoginPiLocal()">Kết nối Pi</button>
+          <button class="btn btn-ghost" onclick="uiClearPiToken()">Xóa mã</button>
+        </div>
+        <div id="pi-auth-status" class="hint-line">
+          Chưa đăng nhập Pi cục bộ — nhập mã để mở khóa nút điều khiển &amp; cân chỉnh 10s.
+        </div>
+      </div>
+
+      <!-- Khung ghép OTP Server PC (hiện tự động khi targetKind === 'server_http' hoặc mặc định) -->
+      <div id="auth-box-server" class="auth-box">
+        <div class="auth-title">Ghép OTP Server (8 ký tự — dùng khi điều khiển qua Server PC)</div>
+        <div class="row">
+          <input id="pair-vehicle" placeholder="Mã xe (vd XE-01)" value="XE-01" />
+          <input
+            id="pair-otp"
+            placeholder="Mã OTP 8 ký tự"
+            onkeydown="if(event.key==='Enter')uiRedeemOtp()"
+          />
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn btn-primary btn-compact" style="flex:1" onclick="uiRedeemOtp()">Ghép OTP</button>
+          <button class="btn btn-ghost" onclick="uiClearServerToken()">Xóa token cũ</button>
+        </div>
+        <div id="pair-status" class="hint-line">
+          Chưa ghép Server. Nếu vừa đổi sang Server mới, bấm "Xóa token cũ" rồi nhập OTP mới.
+        </div>
       </div>
     </div>
 
+    <!-- Card #2: Chế độ AI trực tiếp (MediaPipe 10s <-> YOLO) -->
     <div class="card">
-      <h2>Thao tác nhanh tài xế</h2>
+      <h2>2. Chế độ AI trực tiếp (MediaPipe 10s ↔ YOLO)</h2>
+      <div id="ai-engine-box" class="ai-engine-box idle">
+        <div id="ai-engine-title" class="ai-engine-title">Chưa có dữ liệu AI trực tiếp</div>
+        <div id="ai-engine-detail" class="ai-engine-detail">
+          Kết nối Pi Cục Bộ hoặc ghép OTP Server để theo dõi MediaPipe 10s ↔ YOLO mỗi 2.5s.
+        </div>
+      </div>
+      <button id="btn-calibrate" class="btn btn-calib btn-full" style="margin-top:10px" data-action="CALIBRATE" onclick="uiStartCalibration()" disabled>
+        <span id="btn-calibrate-label">🎯 Bật MediaPipe 10s (Tạm tắt YOLO &amp; Giữ cấu hình)</span>
+        <small id="btn-calibrate-sub">Ngồi thẳng, mở mắt nhìn đường 10s để khóa ngưỡng cá nhân</small>
+      </button>
+      <div id="calib-status" class="calib-status">
+        Kết nối Pi Cục Bộ, Server OTP hoặc Bluetooth BLE để kích hoạt cân chỉnh 10s.
+      </div>
+    </div>
+
+    <!-- Card #3: Thao tác nhanh tài xế -->
+    <div class="card">
+      <h2>3. Thao tác nhanh tài xế</h2>
       <div class="grid-2">
-        <button class="btn btn-mute ble-action" onclick="uiSendBle('MUTE')" disabled>
+        <button class="btn btn-mute ble-action" data-action="MUTE" onclick="uiSendAction('MUTE')" disabled>
           TẮT CÒI 30s
           <small>MUTE (loa ESP1)</small>
         </button>
-        <button class="btn btn-sos ble-action" onclick="uiSendSos()" disabled>
+        <button class="btn btn-sos ble-action" data-action="SOS" onclick="uiSendSos()" disabled>
           KHẨN CẤP (SOS)
           <small>Báo điều phối ngay</small>
         </button>
-        <button class="btn btn-ack ble-action" onclick="uiSendBle('ACK')" disabled>
+        <button class="btn btn-ack ble-action" data-action="ACK" onclick="uiSendAction('ACK')" disabled>
           TÔI ĐANG TỈNH
           <small>ACK_AWAKE</small>
         </button>
-        <button class="btn btn-rest ble-action" onclick="uiSendBle('REST_START')" disabled>
+        <button class="btn btn-rest ble-action" data-action="REST_START" onclick="uiSendAction('REST_START')" disabled>
           BẮT ĐẦU NGHỈ
           <small>REST_BREAK_START</small>
         </button>
       </div>
-      <button class="btn btn-ghost btn-full ble-action" style="margin-top:10px" onclick="uiSendBle('REST_END')" disabled>
+      <button class="btn btn-ghost btn-full ble-action" style="margin-top:10px" data-action="REST_END" onclick="uiSendAction('REST_END')" disabled>
         KẾT THÚC NGHỈ GIẢI LAO (REST_END)
       </button>
+      <div id="actions-channel-note" class="hint-line">
+        Chưa có kênh điều khiển sẵn sàng (ưu tiên tự động: BLE → Pi cục bộ → Server HTTP).
+      </div>
     </div>
 
+    <!-- Card #4: Định vị GPS & Nhiệt độ Pi -->
     <div class="card">
-      <h2>Định vị GPS trực tiếp từ ESP32 #2</h2>
-      <div class="metrics">
+      <h2>4. Định vị GPS &amp; Nhiệt độ Pi trực tiếp</h2>
+      <div class="metrics metrics-4">
         <div class="metric">
           <div id="gps-speed" class="val">0.0</div>
           <div class="lbl">km/h</div>
@@ -73,10 +152,14 @@
         </div>
         <div class="metric">
           <div id="gps-fix" class="val">NO FIX</div>
-          <div class="lbl">Trạng thái</div>
+          <div class="lbl">GPS</div>
+        </div>
+        <div class="metric">
+          <div id="pi-temp" class="val">--°C</div>
+          <div class="lbl">Nhiệt Pi</div>
         </div>
       </div>
-      <div id="gps-coords" style="margin-top:8px;font-size:12px;color:var(--muted);text-align:center">
+      <div id="gps-coords" class="hint-line" style="text-align:center">
         Tọa độ: chưa có khóa vệ tinh
       </div>
       <div class="row" style="margin-top:10px">
@@ -84,29 +167,34 @@
           Bật chia sẻ GPS thật của điện thoại (dự phòng)
         </button>
       </div>
-      <div id="phone-gps-status" style="margin-top:6px;font-size:12px;color:var(--muted);text-align:center">
+      <div id="phone-gps-status" class="hint-line" style="text-align:center">
         GPS điện thoại đang tắt (chỉ dùng chip GNSS thật khi bật — 0 tọa độ mẫu).
       </div>
     </div>
 
+    <!-- Card #5: Bluetooth ESP32 #2 (Song song) -->
     <div class="card">
-      <h2>Ghép đôi Server dự phòng (Tùy chọn — OTP)</h2>
+      <h2>5. Bluetooth ESP32 #2 (PI_AI_HUB_* — Song song)</h2>
+      <div id="ble-compat-note" class="ble-note" style="display:none"></div>
       <div class="row">
-        <input id="pair-vehicle" placeholder="Mã xe (vd XE-01)" value="XE-01" />
-        <input id="pair-otp" placeholder="Mã OTP 8 ký tự" />
-        <button class="btn btn-ghost" onclick="uiRedeemOtp()">Ghép OTP</button>
+        <button id="btn-connect" class="btn btn-primary btn-full" onclick="uiConnectBle()">
+          KẾT NỐI BLUETOOTH VỚI XE
+          <small>Tìm thiết bị PI_AI_HUB_* (không cần mã PIN)</small>
+        </button>
       </div>
-      <div id="pair-status" style="margin-top:6px;font-size:12px;color:var(--muted)">
-        Chưa ghép Server (BLE vẫn hoạt động độc lập 100% với Pi 4).
+      <div class="row" style="margin-top:8px">
+        <button id="btn-disconnect" class="btn btn-ghost" style="flex:1" onclick="uiDisconnectBle()" disabled>Ngắt BLE</button>
+        <button id="btn-status" class="btn btn-ghost" style="flex:1" data-action="STATUS" onclick="uiSendAction('STATUS')" disabled>Kiểm tra trạng thái</button>
       </div>
     </div>
 
+    <!-- Card #6: Nhật ký -->
     <div class="card">
-      <h2>Nhật ký BLE NUS</h2>
-      <pre id="ble-log">Sẵn sàng kết nối tới PI_AI_HUB_*...</pre>
+      <h2>6. Nhật ký hoạt động (BLE / Pi / Server)</h2>
+      <pre id="ble-log">Sẵn sàng kết nối tới Pi Cục Bộ, Server PC hoặc PI_AI_HUB_*...</pre>
     </div>
   </div>
 
-  <script src="./driver_ble.js?v=5"></script>
+  <script src="./driver_ble.js?v=7"></script>
 </body>
 </html>

@@ -1,9 +1,4 @@
-"""BlazeFace 6-point 1-PASS OpenCV DNN + 3D Yawn & Head-Tilt Geometry.
-
-Fixes the 2x CPU waste in IOTv5 where calibration.py called .forward("classificators")
-and .forward("regressors") in two separate full CNN passes. Uses a single multi-output
-.forward(["classificators", "regressors"]) pass (with automatic fallback if OpenCV build lacks it).
-"""
+"""BlazeFace 6-point Letterbox OpenCV DNN + Roll-Aligned 3D Head-Tilt, Yawn & Glare Geometry."""
 from __future__ import annotations
 
 import math
@@ -24,6 +19,16 @@ class HeadPoseEstimate:
     roll_deg: float
     face_box: Optional[Tuple[int, int, int, int]] = None
     score: float = 0.0
+
+
+def normalize_roll_deg(angle_deg: float) -> float:
+    """Normalize roll angle into [-90, +90] degrees with 0 as upright."""
+    a = float(angle_deg)
+    while a > 90.0:
+        a -= 180.0
+    while a < -90.0:
+        a += 180.0
+    return a
 
 
 def evaluate_mouth_yawn_geometry(
@@ -75,6 +80,66 @@ def unrotate_bbox_in_roi(
     return (nx1, ny1, nx2, ny2)
 
 
+def expand_square_face_roi(
+    face_box: Tuple[int, int, int, int],
+    frame_w: int,
+    frame_h: int,
+    scale_mult: float = 1.30,
+) -> Tuple[int, int, int, int]:
+    """Expand face_box into a clamped square crop (default 1.30x) in frame pixel coordinates."""
+    fx1, fy1, fx2, fy2 = face_box
+    bw = max(16, fx2 - fx1)
+    bh = max(16, fy2 - fy1)
+    side = max(24, int(round(max(bw, bh) * float(scale_mult))))
+    cx = (fx1 + fx2) // 2
+    cy = (fy1 + fy2) // 2
+    rx1 = max(0, cx - side // 2)
+    ry1 = max(0, cy - side // 2)
+    rx2 = min(frame_w, rx1 + side)
+    ry2 = min(frame_h, ry1 + side)
+    rx1 = max(0, rx2 - side)
+    ry1 = max(0, ry2 - side)
+    return (int(rx1), int(ry1), int(rx2), int(ry2))
+
+
+def inspect_upper_face_glare(
+    frame_bgr: np.ndarray,
+    face_box: Tuple[int, int, int, int],
+) -> Tuple[bool, float, float]:
+    """Detect eyeglass reflection / specular glare on the upper half of face_box.
+
+    Returns (glare_detected, p95_luma, hi235_ratio).
+    """
+    h, w = frame_bgr.shape[:2]
+    fx1, fy1, fx2, fy2 = face_box
+    fw = max(1, fx2 - fx1)
+    fh = max(1, fy2 - fy1)
+    trim_x = int(fw * 0.08)
+    ux1 = max(0, min(w - 1, fx1 + trim_x))
+    ux2 = max(ux1 + 1, min(w, fx2 - trim_x))
+    uy1 = max(0, min(h - 1, fy1))
+    uy2 = max(uy1 + 1, min(h, fy1 + max(4, fh // 2)))
+    patch = frame_bgr[uy1:uy2, ux1:ux2]
+    if patch.size == 0:
+        return False, 0.0, 0.0
+    gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY) if patch.ndim == 3 else patch
+    p95 = float(np.percentile(gray, 95))
+    hi_ratio = float(np.mean(gray >= 235))
+    glare = (p95 >= 205.0) or (hi_ratio > 0.015)
+    return glare, round(p95, 1), round(hi_ratio, 4)
+
+
+def apply_clahe_lab(roi_bgr: np.ndarray, clip_limit: float = 2.2, tile_size: int = 4) -> np.ndarray:
+    """Apply gentle local contrast enhancement on LAB L-channel to recover eyelids through lens glare."""
+    if roi_bgr is None or roi_bgr.size == 0:
+        return roi_bgr
+    lab = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2LAB)
+    l_ch, a_ch, b_ch = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=float(clip_limit), tileGridSize=(int(tile_size), int(tile_size)))
+    l_eq = clahe.apply(l_ch)
+    return cv2.cvtColor(cv2.merge((l_eq, a_ch, b_ch)), cv2.COLOR_LAB2BGR)
+
+
 def _build_blazeface_anchors() -> np.ndarray:
     """896 standard MediaPipe BlazeFace short-range (128x128) SSD anchor centers (ax, ay) in [0, 1]."""
     anchors = []
@@ -96,7 +161,6 @@ class BlazeFaceGeometry:
 
     def __init__(self, task_path: str):
         self._net = None
-        self._single_pass_ok = True
         self.available = False
         self.forward_calls = 0
         p = Path(task_path)
@@ -118,27 +182,32 @@ class BlazeFaceGeometry:
         if not self.available or self._net is None or frame_bgr is None or frame_bgr.size == 0:
             return HeadPoseEstimate(valid=False, yaw_deg=0.0, pitch_deg=0.0, roll_deg=0.0)
         h, w = frame_bgr.shape[:2]
-        blob = cv2.dnn.blobFromImage(frame_bgr, 1.0 / 127.5, (128, 128), (127.5, 127.5, 127.5), swapRB=True, crop=False)
+        if h <= 0 or w <= 0:
+            return HeadPoseEstimate(valid=False, yaw_deg=0.0, pitch_deg=0.0, roll_deg=0.0)
+
+        # Aspect-preserving 128x128 letterbox prevents 1.77x horizontal face_box stretch on 16:9 frames
+        scale = min(128.0 / float(w), 128.0 / float(h))
+        nw = max(1, int(round(w * scale)))
+        nh = max(1, int(round(h * scale)))
+        resized = cv2.resize(frame_bgr, (nw, nh), interpolation=cv2.INTER_LINEAR)
+        padded = np.zeros((128, 128, 3), dtype=np.uint8)
+        pad_x = (128 - nw) // 2
+        pad_y = (128 - nh) // 2
+        padded[pad_y : pad_y + nh, pad_x : pad_x + nw] = resized
+
+        blob = cv2.dnn.blobFromImage(
+            padded, 1.0 / 127.5, (128, 128), (127.5, 127.5, 127.5), swapRB=True, crop=False
+        )
         self._net.setInput(blob)
 
+        # OpenCV 5.0 DNN throws C++ assertion on multi-output forward(["classificators", "regressors"]);
+        # call single-tensor forward() cleanly with zero hidden exceptions.
         try:
-            if self._single_pass_ok:
-                # 1-PASS multi-output forward (saves 50% CPU vs calling forward() twice!)
-                outs = self._net.forward(["classificators", "regressors"])
-                self.forward_calls += 1
-                clf, reg = outs[0], outs[1]
-            else:
-                clf = self._net.forward("classificators")
-                reg = self._net.forward("regressors")
-                self.forward_calls += 2
+            clf = self._net.forward("classificators")
+            reg = self._net.forward("regressors")
+            self.forward_calls += 2
         except Exception:
-            self._single_pass_ok = False
-            try:
-                clf = self._net.forward("classificators")
-                reg = self._net.forward("regressors")
-                self.forward_calls += 2
-            except Exception:
-                return HeadPoseEstimate(valid=False, yaw_deg=0.0, pitch_deg=0.0, roll_deg=0.0)
+            return HeadPoseEstimate(valid=False, yaw_deg=0.0, pitch_deg=0.0, roll_deg=0.0)
 
         scores = 1.0 / (1.0 + np.exp(-np.clip(clf.reshape(-1), -20.0, 20.0)))
         best_idx = int(np.argmax(scores))
@@ -151,46 +220,62 @@ class BlazeFaceGeometry:
             return HeadPoseEstimate(valid=False, yaw_deg=0.0, pitch_deg=0.0, roll_deg=0.0, score=best_score)
 
         r = reg_flat[best_idx]
-        # Unscale keypoints from distorted 128x128 blob back to real aspect ratio (fixes 1.78x roll inflation on 16:9!)
-        sx = float(w) / 128.0
-        sy = float(h) / 128.0
-        rx, ry = float(r[4]) * sx, float(r[5]) * sy
-        lx, ly = float(r[6]) * sx, float(r[7]) * sy
-        nx, ny = float(r[8]) * sx, float(r[9]) * sy
-        mx, my = float(r[10]) * sx, float(r[11]) * sy
-
-        dx_eye = lx - rx
-        dy_eye = ly - ry
-        if abs(dx_eye) < 1e-3:
-            roll_deg = 90.0 if dy_eye >= 0 else -90.0
-        else:
-            roll_deg = math.degrees(math.atan2(dy_eye, dx_eye))
-            # Normalize mirrored/inverted horizontal ordering to [-90, 90]
-            if roll_deg > 90.0:
-                roll_deg -= 180.0
-            elif roll_deg < -90.0:
-                roll_deg += 180.0
-        eye_mid_x = 0.5 * (rx + lx)
-        eye_dist = max(1e-3, math.hypot(dx_eye, dy_eye))
-        yaw_deg = max(-60.0, min(60.0, ((nx - eye_mid_x) / eye_dist) * 60.0))
-        eye_mid_y = 0.5 * (ry + ly)
-        face_span = max(1e-3, abs(my - eye_mid_y))
-        pitch_deg = max(-45.0, min(45.0, (((ny - eye_mid_y) / face_span) - 0.5) * 60.0))
-
-        # Decode SSD bounding box relative to its anchor center (fixes top-left corner bias)
         if best_idx < len(_BLAZEFACE_ANCHORS):
             ax, ay = float(_BLAZEFACE_ANCHORS[best_idx, 0]), float(_BLAZEFACE_ANCHORS[best_idx, 1])
         else:
             ax, ay = 0.5, 0.5
-        cx = (float(r[0]) / 128.0 + ax) * w
-        cy = (float(r[1]) / 128.0 + ay) * h
-        bw, bh = abs(float(r[2])) / 128.0 * w, abs(float(r[3])) / 128.0 * h
-        box = (
-            max(0, int(cx - bw * 0.5)),
-            max(0, int(cy - bh * 0.5)),
-            min(w, int(cx + bw * 0.5)),
-            min(h, int(cy + bh * 0.5)),
-        )
+        ax_pad = ax * 128.0
+        ay_pad = ay * 128.0
+
+        # Un-letterbox 6 BlazeFace keypoints back into original frame coordinates
+        rx = ((ax_pad + float(r[4])) - pad_x) / scale
+        ry = ((ay_pad + float(r[5])) - pad_y) / scale
+        lx = ((ax_pad + float(r[6])) - pad_x) / scale
+        ly = ((ay_pad + float(r[7])) - pad_y) / scale
+        nx = ((ax_pad + float(r[8])) - pad_x) / scale
+        ny = ((ay_pad + float(r[9])) - pad_y) / scale
+        mx = ((ax_pad + float(r[10])) - pad_x) / scale
+        my = ((ay_pad + float(r[11])) - pad_y) / scale
+
+        # Ensure left-of-image vs right-of-image consistency for roll axis
+        p1, p2 = ((rx, ry), (lx, ly)) if rx <= lx else ((lx, ly), (rx, ry))
+        dx_eye = p2[0] - p1[0]
+        dy_eye = p2[1] - p1[1]
+        eye_dist = max(1.0, math.hypot(dx_eye, dy_eye))
+        if abs(dx_eye) < 1e-3:
+            roll_deg = 90.0 if dy_eye >= 0 else -90.0
+        else:
+            roll_deg = normalize_roll_deg(math.degrees(math.atan2(dy_eye, dx_eye)))
+
+        # Project nose & mouth vectors onto roll-aligned head axes (ux, uy), (vx, vy)
+        # so tilting the head (roll != 0) never induces fake yaw_deg or pitch_deg!
+        eye_mid_x = 0.5 * (p1[0] + p2[0])
+        eye_mid_y = 0.5 * (p1[1] + p2[1])
+        rad = math.radians(roll_deg)
+        ux, uy = math.cos(rad), math.sin(rad)   # eye-line horizontal axis
+        vx, vy = -uy, ux                         # face-down vertical axis
+
+        dnx, dny = nx - eye_mid_x, ny - eye_mid_y
+        nose_lateral = dnx * ux + dny * uy
+        yaw_deg = max(-65.0, min(65.0, (nose_lateral / (eye_dist * 0.5)) * 32.0))
+
+        dmx, dmy = mx - eye_mid_x, my - eye_mid_y
+        mouth_down = max(1.0, dmx * vx + dmy * vy)
+        nose_down = dnx * vx + dny * vy
+        ratio = nose_down / mouth_down
+        pitch_deg = max(-55.0, min(55.0, (ratio - 0.48) * 95.0))
+
+        # Decode SSD bounding box relative to anchor in padded space and un-letterbox
+        cx = ((ax_pad + float(r[0])) - pad_x) / scale
+        cy = ((ay_pad + float(r[1])) - pad_y) / scale
+        bw = max(4.0, abs(float(r[2]))) / scale
+        bh = max(4.0, abs(float(r[3]))) / scale
+        fx1 = max(0, min(w - 1, int(round(cx - bw * 0.5))))
+        fy1 = max(0, min(h - 1, int(round(cy - bh * 0.5))))
+        fx2 = max(fx1 + 2, min(w, int(round(cx + bw * 0.5))))
+        fy2 = max(fy1 + 2, min(h, int(round(cy + bh * 0.5))))
+        box = (fx1, fy1, fx2, fy2)
+
         return HeadPoseEstimate(
             valid=True,
             yaw_deg=round(yaw_deg, 1),

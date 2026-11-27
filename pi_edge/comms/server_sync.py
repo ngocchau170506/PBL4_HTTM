@@ -134,6 +134,20 @@ class ServerSyncClient:
         air_lv = "DANGER" if co2 >= 1500 else ("WARNING" if co2 >= 1000 else "GOOD")
         gps = esp_sensor.get("gps") or {"lat": None, "lon": None, "speed_kmh": 0.0, "satellites": 0, "is_valid": False}
         stream_url = f"http://{self.local_ip}:{self.cfg.web_port}/stream" if self.cfg.enable_live_stream else None
+        driver_state_blk: Dict[str, Any] = {
+            "alert_state": str(ai_state.get("alert_state", "NORMAL")),
+            "alert_type": str(ai_state.get("alert_type", "NORMAL")),
+            "verification_mode": str(ai_state.get("verification_mode", "SINGLE_MODEL_YOLO")),
+            "alert_reason": str(ai_state.get("alert_reason", "")),
+            "behavior_detail": str(ai_state.get("behavior_detail", "")),
+            "detected_classes": list(ai_state.get("detected_classes") or []),
+            "allow_smoking": bool(ai_state.get("allow_smoking", True)),
+            "allow_phone": bool(ai_state.get("allow_phone", True)),
+        }
+        cal_blk = ai_state.get("calibration")
+        if isinstance(cal_blk, dict):
+            driver_state_blk["calibration"] = dict(cal_blk)
+
         payload = {
             "schema_version": "1.0.0",
             "vehicle_id": self.cfg.vehicle_id,
@@ -190,16 +204,7 @@ class ServerSyncClient:
                 "stream_fps": float(fps_snap.get("stream_fps", 0.0)),
                 "alert_latency_p95_ms": float(fps_snap.get("alert_latency_p95_ms", 0.0)),
             },
-            "driver_state": {
-                "alert_state": str(ai_state.get("alert_state", "NORMAL")),
-                "alert_type": str(ai_state.get("alert_type", "NORMAL")),
-                "verification_mode": str(ai_state.get("verification_mode", "SINGLE_MODEL_YOLO")),
-                "alert_reason": str(ai_state.get("alert_reason", "")),
-                "behavior_detail": str(ai_state.get("behavior_detail", "")),
-                "detected_classes": list(ai_state.get("detected_classes") or []),
-                "allow_smoking": bool(ai_state.get("allow_smoking", True)),
-                "allow_phone": bool(ai_state.get("allow_phone", True)),
-            },
+            "driver_state": driver_state_blk,
             "esp": esp_status,
             "mute_state": mute_state,
         }
