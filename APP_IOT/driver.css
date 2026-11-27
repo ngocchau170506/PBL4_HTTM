@@ -288,3 +288,296 @@ pre#ble-log {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* Dual-Portal Role Switcher (Driver | Admin) */
+.portal-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 6px;
+}
+.portal-tab {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 11px 10px;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.portal-tab.active[data-portal="driver"] {
+  background: rgba(37, 99, 235, 0.24);
+  border-color: #3b82f6;
+  color: #eff6ff;
+}
+.portal-tab.active[data-portal="admin"] {
+  background: rgba(124, 58, 237, 0.26);
+  border-color: #8b5cf6;
+  color: #f5f3ff;
+}
+.portal-pane { display: flex; flex-direction: column; gap: 12px; }
+.portal-pane.hidden { display: none; }
+
+/* Drowsiness 3-Strike Escalation Box */
+.drowsy-box {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #0f172a;
+}
+.drowsy-box.warn { background: rgba(217, 119, 6, 0.18); border-color: var(--amber); }
+.drowsy-box.crit { background: rgba(220, 38, 38, 0.25); border-color: #ef4444; }
+.drowsy-box.prob { background: rgba(14, 165, 233, 0.18); border-color: #38bdf8; }
+
+.strike-dots {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 6px;
+}
+.strike-dot {
+  flex: 1;
+  height: 10px;
+  border-radius: 999px;
+  background: #1e293b;
+  border: 1px solid var(--border);
+}
+.strike-dot.lit-warn { background: #f59e0b; border-color: #fbbf24; }
+.strike-dot.lit-crit { background: #ef4444; border-color: #f87171; }
+
+.btn-dismiss-alarm {
+  background: #991b1b;
+  border: 2px solid #ef4444;
+  min-height: 62px;
+  margin-top: 10px;
+}
+.btn-dismiss-alarm.pulsing {
+  background: #dc2626;
+  animation: pulseAlarm 1.1s infinite;
+}
+@keyframes pulseAlarm {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.65); }
+  50% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+}
+
+/* 3-Mode Presence & Monitoring Grid */
+.mode-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+@media (max-width: 440px) {
+  .mode-grid-3 { grid-template-columns: 1fr; }
+}
+.btn-mode {
+  background: #0f172a;
+  border: 1px solid var(--border);
+  min-height: 76px;
+  padding: 10px 8px;
+  font-size: 13px;
+  text-align: center;
+}
+.btn-mode.active-auto {
+  background: rgba(22, 163, 74, 0.24);
+  border-color: #22c55e;
+  color: #dcfce7;
+}
+.btn-mode.active-pause {
+  background: rgba(217, 119, 6, 0.24);
+  border-color: #f59e0b;
+  color: #fef3c7;
+}
+.btn-mode.active-sleep {
+  background: rgba(59, 130, 246, 0.24);
+  border-color: #60a5fa;
+  color: #dbeafe;
+}
+
+/* Admin Portal Controls */
+.admin-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.admin-grid-5 {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+.cfg-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+@media (max-width: 440px) {
+  .cfg-grid { grid-template-columns: 1fr; }
+  .admin-grid-3 { grid-template-columns: 1fr 1fr; }
+}
+.cfg-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+.cfg-field input[type="number"] {
+  min-width: 0;
+  width: 100%;
+  padding: 8px 10px;
+}
+.cfg-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #e2e8f0;
+  padding: 6px 0;
+}
+.cfg-check input {
+  flex: 0 0 auto;
+  min-width: 0;
+  width: 18px;
+  height: 18px;
+}
+.otp-result {
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(22, 163, 74, 0.16);
+  border: 1px solid var(--green);
+  color: #bbf7d0;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: 1px;
+}
+
+/* Driver Sub-tabs (Buồng lái IoT | Điểm & Khiếu nại) */
+.sub-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.sub-tab {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 10px;
+  font-size: 13px;
+  font-weight: 700;
+  background: #0f172a;
+  color: var(--muted);
+  cursor: pointer;
+}
+.sub-tab.active {
+  background: rgba(14, 165, 233, 0.22);
+  border-color: #38bdf8;
+  color: #e0f2fe;
+}
+.sub-pane { display: flex; flex-direction: column; gap: 12px; }
+.sub-pane.hidden { display: none; }
+
+/* Safety Score Hero (aligned with PBL4_HTTM ScoreScreen) */
+.score-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #0f172a;
+  border: 1px solid var(--border);
+}
+.score-hero.ok { border-color: var(--green); background: rgba(22, 163, 74, 0.14); }
+.score-hero.warn { border-color: var(--amber); background: rgba(217, 119, 6, 0.16); }
+.score-hero.err { border-color: var(--red); background: rgba(220, 38, 38, 0.2); }
+.score-circle {
+  width: 78px;
+  height: 78px;
+  flex: 0 0 78px;
+  border-radius: 50%;
+  border: 4px solid var(--green);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #0b1220;
+}
+.score-circle .score-num { font-size: 24px; font-weight: 900; line-height: 1; }
+.score-circle .score-max { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+/* Violation & Dispute Items */
+.list-stack { display: flex; flex-direction: column; gap: 10px; }
+.v-item {
+  background: #0f172a;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 11px 12px;
+}
+.v-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+.v-title { font-size: 13.5px; font-weight: 700; color: #f8fafc; }
+.v-meta { font-size: 11.5px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+.v-penalty { font-size: 12.5px; font-weight: 800; color: #fca5a5; white-space: nowrap; }
+.v-penalty.refunded { color: #86efac; text-decoration: line-through; }
+.v-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.v-actions .btn { min-height: 36px; padding: 6px 10px; font-size: 12px; border-radius: 8px; }
+
+/* Modal overlay (Dispute 48h & Video Evidence) */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 7, 18, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  z-index: 1000;
+}
+.modal-backdrop.hidden { display: none; }
+.modal-card {
+  width: 100%;
+  max-width: 480px;
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+}
+.reason-grid { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 10px; }
+.reason-btn {
+  text-align: left;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #0f172a;
+  color: #cbd5e1;
+  font-size: 13px;
+  cursor: pointer;
+}
+.reason-btn.active {
+  background: rgba(37, 99, 235, 0.25);
+  border-color: #3b82f6;
+  color: #fff;
+  font-weight: 700;
+}
+textarea {
+  width: 100%;
+  min-height: 82px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #0f172a;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+}

@@ -1,9 +1,9 @@
 // Network-First Core Assets + Offline Fallback Service Worker for PI_AI Driver Cockpit PWA (APP_IOT)
-const CACHE_NAME = "pi-ai-driver-pwa-v3";
+const CACHE_NAME = "pi-ai-driver-pwa-v5";
 const ASSETS = [
   "./driver.html",
   "./driver.css",
-  "./driver_ble.js?v=7",
+  "./driver_ble.js?v=9",
   "./driver_ble.js",
   "./manifest.json",
   "./icon.svg",
