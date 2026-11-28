@@ -97,6 +97,22 @@
             "profile_ts": "float?",
             "ear_closed_threshold": "float?",
             "glare_mode": "bool?"
+          },
+          "drowsy_escalation": {
+            "count": "int?",
+            "limit": "int?",
+            "window_s": "float?",
+            "state": "str? (IDLE|COUNTING|ALARM_LATCHED|PROBATION|CONTINUOUS_RELAPSE)",
+            "alarm_active": "bool?",
+            "probation_remaining_s": "float?"
+          },
+          "monitoring": {
+            "mode": "str? (AUTO|TEMP_PAUSE_30M|REST_SLEEP_OFF)",
+            "presence": "str? (DRIVER_PRESENT|NO_DRIVER)",
+            "pause_remaining_s": "float?",
+            "absence_seconds": "float?",
+            "auto_resume_speed_kmh": "float?",
+            "last_resume_reason": "str?"
           }
         },
         "esp": {
@@ -133,9 +149,37 @@
       "required": ["cmd_uid", "vehicle_id", "result"]
     },
     "ControlCommands": {
-      "server_to_pi_exact": ["STOP", "MUTE", "PING", "WHOAMI", "BT_UNPAIR", "BT_FORCE_RESCAN", "CONFIG_SET", "REST_BREAK_REQUEST", "CALIBRATE"],
-      "server_to_pi_prefixes": ["VOICE:", "ALERT:", "VOL:"],
-      "phone_actions": ["ACK_AWAKE", "MUTE_ALERT", "REST_BREAK_START", "REST_BREAK_END", "SOS", "CALIBRATE_LOCK"]
+      "server_to_pi_exact": [
+        "STOP",
+        "MUTE",
+        "PING",
+        "WHOAMI",
+        "BT_UNPAIR",
+        "BT_FORCE_RESCAN",
+        "CONFIG_SET",
+        "REST_BREAK_REQUEST",
+        "CALIBRATE",
+        "DISMISS_DROWSY_ALARM",
+        "MODE_AUTO",
+        "MODE_PAUSE_30M",
+        "MODE_REST_OFF",
+        "ALARM:ON",
+        "ALARM:CONT",
+        "ALARM:OFF"
+      ],
+      "server_to_pi_prefixes": ["VOICE:", "ALERT:", "VOL:", "ALARM:"],
+      "phone_actions": [
+        "ACK_AWAKE",
+        "MUTE_ALERT",
+        "REST_BREAK_START",
+        "REST_BREAK_END",
+        "SOS",
+        "CALIBRATE_LOCK",
+        "DISMISS_DROWSY_ALARM",
+        "MODE_AUTO",
+        "MODE_PAUSE_30M",
+        "MODE_REST_OFF"
+      ]
     }
   }
 }

@@ -163,6 +163,7 @@ class BlazeFaceGeometry:
         self._net = None
         self.available = False
         self.forward_calls = 0
+        self._single_output_only = False
         p = Path(task_path)
         if not p.exists():
             return
@@ -200,12 +201,29 @@ class BlazeFaceGeometry:
         )
         self._net.setInput(blob)
 
-        # OpenCV 5.0 DNN throws C++ assertion on multi-output forward(["classificators", "regressors"]);
-        # call single-tensor forward() cleanly with zero hidden exceptions.
+        # Try 1-pass multi-output forward(["classificators", "regressors"]) first (2x faster on OpenCV 4.x Pi 4);
+        # automatically latch single-output fallback if OpenCV 5.0 DNN asserts on multi-output.
         try:
-            clf = self._net.forward("classificators")
-            reg = self._net.forward("regressors")
-            self.forward_calls += 2
+            if not self._single_output_only:
+                try:
+                    outs = self._net.forward(["classificators", "regressors"])
+                    if isinstance(outs, (list, tuple)) and len(outs) == 2:
+                        clf, reg = outs[0], outs[1]
+                        self.forward_calls += 1
+                    else:
+                        self._single_output_only = True
+                        clf = self._net.forward("classificators")
+                        reg = self._net.forward("regressors")
+                        self.forward_calls += 2
+                except Exception:
+                    self._single_output_only = True
+                    clf = self._net.forward("classificators")
+                    reg = self._net.forward("regressors")
+                    self.forward_calls += 2
+            else:
+                clf = self._net.forward("classificators")
+                reg = self._net.forward("regressors")
+                self.forward_calls += 2
         except Exception:
             return HeadPoseEstimate(valid=False, yaw_deg=0.0, pitch_deg=0.0, roll_deg=0.0)
 

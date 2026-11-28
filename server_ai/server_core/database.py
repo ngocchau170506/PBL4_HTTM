@@ -259,6 +259,25 @@ CREATE TABLE IF NOT EXISTS phone_pair_otps (
     expires_at REAL NOT NULL,
     used INTEGER DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS disputes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dispute_id TEXT UNIQUE,
+    violation_event_id TEXT NOT NULL,
+    vehicle_id TEXT NOT NULL,
+    driver_id TEXT,
+    driver_name TEXT,
+    reason_code TEXT NOT NULL,
+    reason_label TEXT,
+    explanation TEXT NOT NULL,
+    status TEXT DEFAULT 'OPEN',
+    resolved_by TEXT,
+    response_note TEXT,
+    created_at REAL DEFAULT (strftime('%s','now')),
+    resolved_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_disputes_vehicle ON disputes(vehicle_id);
+CREATE INDEX IF NOT EXISTS idx_disputes_violation ON disputes(violation_event_id);
 """
 
 

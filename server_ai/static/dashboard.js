@@ -325,6 +325,41 @@ function formatCalibrationBadge(cal) {
   return "";
 }
 
+function formatPolicyBadges(ds) {
+  if (!ds || typeof ds !== "object") return "";
+  const parts = [];
+  const mon = ds.monitoring;
+  if (mon && typeof mon === "object" && mon.mode) {
+    const mode = String(mon.mode);
+    const pres = mon.presence === "DRIVER_PRESENT" ? "Thấy người" : "Không thấy người";
+    if (mode === "REST_SLEEP_OFF") {
+      parts.push(`<span style="color:#60a5fa">🌙 Nghỉ/Ngủ (${pres})</span>`);
+    } else if (mode === "TEMP_PAUSE_30M") {
+      const mRem = Math.ceil(Number(mon.pause_remaining_s || 0) / 60);
+      parts.push(`<span style="color:var(--amber)">⏸ Tạm tắt ${mRem}p (${pres})</span>`);
+    } else {
+      parts.push(`<span style="color:var(--green)">🟢 AUTO (${pres})</span>`);
+    }
+  }
+  const escObj = ds.drowsy_escalation;
+  if (escObj && typeof escObj === "object") {
+    const st = String(escObj.state || "IDLE");
+    const cnt = Number(escObj.count || 0);
+    const lim = Number(escObj.limit || 3);
+    if (st === "CONTINUOUS_RELAPSE") {
+      parts.push(`<span style="color:var(--red);font-weight:700">🚨 TÁI PHẠM BUỒN NGỦ — BÁO ĐỘNG LIÊN TỤC</span>`);
+    } else if (st === "ALARM_LATCHED") {
+      parts.push(`<span style="color:var(--red);font-weight:700">🔔 Buồn ngủ ${cnt}/${lim} (Đang báo động)</span>`);
+    } else if (st === "PROBATION") {
+      const rem = Math.ceil(Number(escObj.probation_remaining_s || 0));
+      parts.push(`<span style="color:var(--amber)">⏳ Kiểm tra lại: ${rem}s</span>`);
+    } else if (cnt > 0) {
+      parts.push(`<span style="color:var(--amber)">😴 Buồn ngủ ${cnt}/${lim}</span>`);
+    }
+  }
+  return parts.length ? `<div style="font-size:11px;margin-top:2px">${parts.join(" · ")}</div>` : "";
+}
+
 function renderFleet(vehicles, trips) {
   const tbody = document.querySelector("#fleet-table tbody");
   tbody.innerHTML = vehicles.map((v) => {
@@ -335,11 +370,13 @@ function renderFleet(vehicles, trips) {
     const co2 = mq.co2_ppm ?? mq.ppm ?? "-";
     const pi = raw.pi || raw.hardware || {};
     const temp = pi.cpu_temp_c ?? pi.soc_temp_c ?? pi.temp_c ?? "-";
-    const calHtml = formatCalibrationBadge((raw.driver_state || {}).calibration);
+    const ds = raw.driver_state || {};
+    const calHtml = formatCalibrationBadge(ds.calibration);
+    const policyHtml = formatPolicyBadges(ds);
     const sUrl = safeUrl(v.stream_url);
     return `<tr>
       <td>${esc(v.vehicle_id)}</td>
-      <td>${esc(v.current_driver_name || v.current_driver_id || "-")}${calHtml}</td>
+      <td>${esc(v.current_driver_name || v.current_driver_id || "-")}${policyHtml}${calHtml}</td>
       <td>${badge(v.status)}</td>
       <td>${esc(speed)}</td>
       <td>${esc(co2)}</td>
@@ -792,13 +829,20 @@ async function sendCommand() {
 async function saveRemoteConfig() {
   const vid = document.getElementById("cfg-vehicle").value.trim();
   if (!vid) return toast("Nhập vehicle_id trước!", "crit");
+  const body = {
+    allow_smoking: document.getElementById("cfg-smoking").checked,
+    allow_phone: document.getElementById("cfg-phone").checked,
+  };
+  const winEl = document.getElementById("cfg-drowsy-win");
+  const absEl = document.getElementById("cfg-absence-s");
+  const spdEl = document.getElementById("cfg-resume-spd");
+  if (winEl && winEl.value) body.drowsy_window_s = Number(winEl.value);
+  if (absEl && absEl.value) body.absence_alert_s = Number(absEl.value);
+  if (spdEl && spdEl.value) body.auto_resume_speed_kmh = Number(spdEl.value);
   try {
     await api(`/api/v1/config/${encodeURIComponent(vid)}`, {
       method: "POST",
-      body: JSON.stringify({
-        allow_smoking: document.getElementById("cfg-smoking").checked,
-        allow_phone: document.getElementById("cfg-phone").checked,
-      }),
+      body: JSON.stringify(body),
     });
     toast(`Đã lưu remote config cho ${vid}`);
   } catch (e) {

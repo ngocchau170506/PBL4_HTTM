@@ -273,9 +273,11 @@ class MiniWebServer:
         on_control_cmd: Optional[Callable[[str], Tuple[bool, str]]] = None,
         on_esp_bridge: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
         on_stream_frame_sent: Optional[Callable[[], None]] = None,
+        on_config_get: Optional[Callable[[], Dict[str, Any]]] = None,
+        on_config_update: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
         overlay_fn: Optional[Callable[[np.ndarray, Dict[str, Any]], np.ndarray]] = None,
-        max_stream_fps: float = 30.0,
-        jpeg_quality: int = 82,
+        max_stream_fps: float = 10.0,
+        jpeg_quality: int = 72,
         enable_live_stream: bool = True,
         app_iot_dir: Optional[Path] = None,
     ):
@@ -292,6 +294,8 @@ class MiniWebServer:
         self.on_control_cmd = on_control_cmd
         self.on_esp_bridge = on_esp_bridge
         self.on_stream_frame_sent = on_stream_frame_sent
+        self.on_config_get = on_config_get
+        self.on_config_update = on_config_update
         self.overlay_fn = overlay_fn
         self.min_stream_interval_s = 1.0 / max(1.0, float(max_stream_fps))
         self.jpeg_quality = max(50, min(95, int(jpeg_quality)))
@@ -313,6 +317,9 @@ class MiniWebServer:
     def has_stream_clients(self) -> bool:
         with self._stream_lock:
             return self._stream_clients > 0
+
+    def set_max_stream_fps(self, max_fps: float) -> None:
+        self.min_stream_interval_s = 1.0 / max(1.0, min(20.0, float(max_fps)))
 
     def update_frame(self, frame_id: int, frame_bgr: Optional[np.ndarray], state: Dict[str, Any], is_stale: bool = False) -> None:
         with self._cond:
@@ -546,6 +553,7 @@ class MiniWebServer:
                         return
                     with parent._cond:
                         st = dict(parent._state)
+                    cfg_blk = parent.on_config_get() if parent.on_config_get else {}
                     self._send_json(
                         200,
                         {
@@ -554,9 +562,20 @@ class MiniWebServer:
                             "role": dec.role,
                             "web_mode": parent.web_mode,
                             "enable_live_stream": parent.enable_live_stream,
+                            "config": cfg_blk,
                             "state": st,
                         },
                     )
+                    return
+
+                if path == "/api/config":
+                    if not app_enabled:
+                        self._send_json(404, {"ok": False, "error": "ROUTE_DISABLED_IN_SERVER_MODE"})
+                        return
+                    if self._auth("operator", q) is None:
+                        return
+                    cfg_blk = parent.on_config_get() if parent.on_config_get else {}
+                    self._send_json(200, {"ok": True, "config": cfg_blk})
                     return
 
                 if path in ("/", "/preview"):
@@ -777,6 +796,20 @@ class MiniWebServer:
                         return
                     ok, detail = parent.on_control_cmd(cmd) if parent.on_control_cmd else (True, "NO_ESP")
                     self._send_json(200, {"ok": ok, "cmd": cmd, "detail": detail})
+                    return
+
+                if path == "/api/config":
+                    if not (parent.web_mode == "full_local" or parent.enable_live_stream):
+                        self._send_json(404, {"ok": False, "error": "ROUTE_DISABLED_IN_SERVER_MODE"})
+                        return
+                    dec = self._auth("operator", q, required_audit=True)
+                    if dec is None:
+                        return
+                    data = self._read_bounded_json()
+                    if data is None:
+                        return
+                    updated = parent.on_config_update(data) if parent.on_config_update else {}
+                    self._send_json(200, {"ok": True, "config": updated})
                     return
 
                 if parent.web_mode != "full_local":

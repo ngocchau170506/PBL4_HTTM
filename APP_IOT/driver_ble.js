@@ -14,11 +14,27 @@
     CHAR_RX_UUID: "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
     CHAR_TX_UUID: "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
     DEVICE_PREFIX: "PI_AI_HUB_",
-    ALLOWED_CMDS: new Set(["MUTE", "SOS", "ACK", "REST_START", "REST_END", "CALIBRATE", "STATUS"]),
+    ALLOWED_CMDS: new Set([
+      "MUTE",
+      "DISMISS_ALARM",
+      "MODE_AUTO",
+      "MODE_PAUSE",
+      "MODE_SLEEP",
+      "SOS",
+      "ACK",
+      "REST_START",
+      "REST_END",
+      "CALIBRATE",
+      "STATUS",
+    ]),
   });
 
   const PI_LOCAL_ACTION_MAP = Object.freeze({
     MUTE: "MUTE",
+    DISMISS_ALARM: "DISMISS_DROWSY_ALARM",
+    MODE_AUTO: "MODE_AUTO",
+    MODE_PAUSE: "MODE_PAUSE_30M",
+    MODE_SLEEP: "MODE_REST_OFF",
     CALIBRATE: "CALIBRATE",
     REST_START: "REST_BREAK_REQUEST",
     STATUS: "PING",
@@ -29,6 +45,10 @@
 
   const SERVER_HTTP_ACTION_MAP = Object.freeze({
     MUTE: "MUTE_ALERT",
+    DISMISS_ALARM: "DISMISS_DROWSY_ALARM",
+    MODE_AUTO: "MODE_AUTO",
+    MODE_PAUSE: "MODE_PAUSE_30M",
+    MODE_SLEEP: "MODE_REST_OFF",
     SOS: "SOS",
     ACK: "ACK_AWAKE",
     REST_START: "REST_BREAK_START",
@@ -549,12 +569,198 @@
     return ts != null && ts !== baselineProfileTs;
   }
 
+  function formatDrowsyEscalationStatus(escObj) {
+    const e = escObj && typeof escObj === "object" ? escObj : {};
+    const state = String(e.state || "IDLE").toUpperCase();
+    const count = Math.max(0, Number(e.count || 0));
+    const limit = Math.max(2, Number(e.limit || 3));
+    const winMin = Math.round(Number(e.window_s || 180) / 60);
+    const probSec = Math.max(0, Math.ceil(Number(e.probation_remaining_s || 0)));
+    const mm = String(Math.floor(probSec / 60)).padStart(1, "0");
+    const ss = String(probSec % 60).padStart(2, "0");
+
+    if (state === "CONTINUOUS_RELAPSE") {
+      return {
+        state,
+        count,
+        limit,
+        alarmActive: true,
+        badgeText: "TÁI PHẠM — BÁO ĐỘNG LIÊN TỤC!",
+        badgeClass: "badge err",
+        boxClass: "drowsy-box crit",
+        title: "🚨 TÁI PHẠM BUỒN NGỦ — BÁO ĐỘNG LIÊN TỤC!",
+        detail: "Bạn vừa ngủ gục lại trong thời gian kiểm tra! Hãy dừng xe nghỉ ngơi ngay lập tức.",
+      };
+    }
+    if (state === "ALARM_LATCHED") {
+      return {
+        state,
+        count,
+        limit,
+        alarmActive: true,
+        badgeText: `BÁO ĐỘNG LẦN ${count}/${limit}`,
+        badgeClass: "badge err",
+        boxClass: "drowsy-box crit",
+        title: `🔔 BÁO ĐỘNG BUỒN NGỦ LẦN ${count}/${limit} ĐANG KÊU!`,
+        detail: `Bấm nút đỏ bên dưới để tắt loa ESP32 #1 — Pi sẽ kiểm tra lại trong ${winMin} phút tới.`,
+      };
+    }
+    if (state === "PROBATION") {
+      return {
+        state,
+        count,
+        limit,
+        alarmActive: false,
+        badgeText: `KIỂM TRA LẠI ${mm}:${ss}`,
+        badgeClass: "badge warn",
+        boxClass: "drowsy-box prob",
+        title: `⏳ Đang kiểm tra lại độ tỉnh táo (${mm}:${ss})`,
+        detail: "Nếu bạn ngủ gục lại trước khi hết giờ kiểm tra, loa sẽ phát cảnh báo liên tục!",
+      };
+    }
+    if (count > 0) {
+      return {
+        state,
+        count,
+        limit,
+        alarmActive: false,
+        badgeText: `BUỒN NGỦ ${count}/${limit}`,
+        badgeClass: "badge warn",
+        boxClass: "drowsy-box warn",
+        title: `⚠️ Đã ghi nhận buồn ngủ lần ${count}/${limit} (trong ${winMin} phút)`,
+        detail: `Nếu đạt đủ ${limit} lần liên tiếp trong ${winMin} phút, ESP32 #1 sẽ bật báo động khóa liên tục.`,
+      };
+    }
+    return {
+      state: "IDLE",
+      count: 0,
+      limit,
+      alarmActive: false,
+      badgeText: `TỈNH TÁO 0/${limit}`,
+      badgeClass: "badge ok",
+      boxClass: "drowsy-box",
+      title: "Trạng thái: Đang theo dõi tỉnh táo",
+      detail: `Lần 1–2 nhắc loa ESP32 #1; đủ ${limit} lần liên tiếp trong ${winMin} phút sẽ bật báo động khóa.`,
+    };
+  }
+
+  function formatMonitoringModeStatus(monObj, faceDetected) {
+    const m = monObj && typeof monObj === "object" ? monObj : {};
+    const mode = String(m.mode || "AUTO").toUpperCase();
+    const hasPerson = m.presence ? m.presence === "DRIVER_PRESENT" : Boolean(faceDetected);
+    const pauseSec = Math.max(0, Math.ceil(Number(m.pause_remaining_s || 0)));
+    const pMin = Math.floor(pauseSec / 60);
+    const pSec = String(pauseSec % 60).padStart(2, "0");
+    const resumeSpd = Number(m.auto_resume_speed_kmh || 15);
+
+    const presenceText = hasPerson ? "🟢 CAM THẤY NGƯỜI" : "🟡 CAM KHÔNG THẤY NGƯỜI";
+    const presenceClass = hasPerson ? "badge ok" : "badge warn";
+
+    if (mode === "REST_SLEEP_OFF") {
+      return {
+        mode,
+        hasPerson,
+        presenceText,
+        presenceClass,
+        detail: `Chế độ 3 (Nghỉ / Ngủ trên xe): Camera vẫn giám sát, tắt toàn bộ loa cảnh báo. Hệ thống tự bật lại AUTO khi xe chạy ≥ ${resumeSpd} km/h hoặc khi Pi khởi động lại.`,
+      };
+    }
+    if (mode === "TEMP_PAUSE_30M") {
+      return {
+        mode,
+        hasPerson,
+        presenceText,
+        presenceClass,
+        detail: `Chế độ 2 (Tạm tắt vắng mặt — còn ${pMin}:${pSec}): Đang tắt cảnh báo không thấy người. Nếu cam vẫn thấy tài xế, mọi cảnh báo vi phạm vẫn kêu bình thường!`,
+      };
+    }
+    return {
+      mode: "AUTO",
+      hasPerson,
+      presenceText,
+      presenceClass,
+      detail: "Chế độ 1 (AUTO — mặc định khi bật Pi): Tự xác định thấy/không thấy người; vắng mặt quá 15–30s sẽ báo App/Server rồi tự tạm tắt vắng mặt 30p.",
+    };
+  }
+
+  function canAccessAdminActions(targetKindVal, piAuthedVal, piRoleVal, srvAdminAuthedVal, srvAdminRoleVal) {
+    const pr = String(piRoleVal || "").toLowerCase();
+    const sr = String(srvAdminRoleVal || "").toLowerCase();
+    if (targetKindVal === "pi_local") {
+      return Boolean(piAuthedVal && (pr === "admin" || pr === "operator"));
+    }
+    if (targetKindVal === "server_http") {
+      return Boolean(srvAdminAuthedVal && (sr === "admin" || sr === "operator"));
+    }
+    return false;
+  }
+
+  const DISPUTE_REASONS = Object.freeze({
+    FALSE_DETECTION: "AI nhận diện nhầm hành vi",
+    SENSOR_ERROR: "Nhiễu cảm biến MQ-135 / GPS",
+    NOT_ME: "Đã đổi tài nhưng chưa kịp cập nhật",
+    OTHER: "Lý do khác",
+  });
+
+  function classifySafetyScoreTier(scoreVal) {
+    const score = Number.isFinite(Number(scoreVal)) ? Math.max(0, Math.min(100, Number(scoreVal))) : 100;
+    if (score <= 20) {
+      return {
+        score: Math.round(score),
+        tier: "RED_LOCKED",
+        badgeText: "BÁO ĐỘNG ĐỎ",
+        badgeClass: "badge err",
+        heroClass: "score-hero err",
+        circleColor: "#dc2626",
+        description: "Điểm ≤ 20: Tài khoản tạm khóa nhận ca mới. Liên hệ Quản trị viên hoặc gửi khiếu nại vi phạm sai.",
+      };
+    }
+    if (score <= 65) {
+      return {
+        score: Math.round(score),
+        tier: "YELLOW_WARN",
+        badgeText: "CẢNH CÁO VÀNG",
+        badgeClass: "badge warn",
+        heroClass: "score-hero warn",
+        circleColor: "#d97706",
+        description: "Điểm ≤ 65: Giảm 30% tần suất gợi ý ca đêm. Nếu giảm xuống ≤ 20 điểm sẽ bị khóa nhận ca.",
+      };
+    }
+    return {
+      score: Math.round(score),
+      tier: "GREEN_GOOD",
+      badgeText: "HOẠT ĐỘNG TỐT",
+      badgeClass: "badge ok",
+      heroClass: "score-hero ok",
+      circleColor: "#16a34a",
+      description: "Điểm > 65: Tài xế đạt chuẩn an toàn cao. Đủ điều kiện nhận ca đêm và hành trình dài.",
+    };
+  }
+
+  function validateDisputeSubmission(violationEventId, reasonCode, explanation) {
+    const eid = String(violationEventId || "").trim();
+    const code = String(reasonCode || "").trim().toUpperCase();
+    const text = String(explanation || "").trim();
+    if (!eid) return { ok: false, error: "Thiếu mã vi phạm cần khiếu nại." };
+    if (!Object.prototype.hasOwnProperty.call(DISPUTE_REASONS, code)) {
+      return { ok: false, error: "Lý do khiếu nại không hợp lệ." };
+    }
+    if (text.length < 5) return { ok: false, error: "Vui lòng nhập giải trình ít nhất 5 ký tự." };
+    return { ok: true, violation_event_id: eid, reason_code: code, explanation: text.slice(0, 500) };
+  }
+
   // Export pure helpers for Node.js automated tests (APP_IOT/test_driver_ble.mjs)
   const exportsObj = {
     BLE_NUS,
+    DISPUTE_REASONS,
     normalizeBaseUrl,
     detectTargetKind,
     formatAiEngineStatus,
+    formatDrowsyEscalationStatus,
+    formatMonitoringModeStatus,
+    canAccessAdminActions,
+    classifySafetyScoreTier,
+    validateDisputeSubmission,
     mapActionForTransport,
     shouldFinishHttpCalibration,
     BleLineFramingParser,
@@ -586,6 +792,13 @@
   let phoneToken = localStorage.getItem("pi_ai_driver_phone_token") || "";
   let pairedVehicle = localStorage.getItem("pi_ai_driver_vehicle_id") || "XE-01";
   let serverPaired = false;
+
+  // Admin portal state (supports Server Admin/Operator OR Pi Local Admin/Operator)
+  let activePortal = localStorage.getItem("pi_ai_active_portal") === "admin" ? "admin" : "driver";
+  let serverAdminToken = sessionStorage.getItem("pi_ai_admin_token") || "";
+  let serverAdminRole = (sessionStorage.getItem("pi_ai_admin_role") || "").toLowerCase();
+  let serverAdminAuthed = false;
+  let adminConfigHydrated = false;
 
   let statusPollTimer = null;
   let pollInFlight = false;
@@ -711,8 +924,625 @@
     }
 
     syncCalibrateButtonState();
+    syncAdminControls();
     syncStatusPolling();
   }
+
+  function isAdminReady() {
+    return canAccessAdminActions(targetKind, piAuthed, piLocalRole, serverAdminAuthed, serverAdminRole);
+  }
+
+  function syncAdminControls() {
+    const ready = isAdminReady();
+    const badge = document.getElementById("admin-auth-badge");
+    if (badge) {
+      if (ready) {
+        const rName = targetKind === "pi_local" ? piLocalRole : serverAdminRole;
+        badge.textContent = `ĐÃ ĐĂNG NHẬP (${String(rName).toUpperCase()})`;
+        badge.className = "badge ok";
+      } else {
+        badge.textContent = "CHƯA ĐĂNG NHẬP";
+        badge.className = "badge warn";
+      }
+    }
+    document.querySelectorAll(".admin-ctrl").forEach((el) => {
+      el.disabled = !ready;
+    });
+    const mintBtn = document.getElementById("btn-admin-mint-otp");
+    if (mintBtn) {
+      mintBtn.disabled = !(targetKind === "server_http" && serverAdminAuthed);
+    }
+    const otpCard = document.getElementById("admin-otp-card");
+    if (otpCard) {
+      otpCard.style.display = targetKind === "pi_local" ? "none" : "block";
+    }
+    const dashLink = document.getElementById("admin-open-dashboard-link");
+    if (dashLink && activeBaseUrl) {
+      dashLink.href = `${activeBaseUrl}/`;
+    }
+  }
+
+  function renderDrowsyEscalationBox(escObj) {
+    const info = formatDrowsyEscalationStatus(escObj);
+    const badge = document.getElementById("drowsy-state-badge");
+    const box = document.getElementById("drowsy-meter-box");
+    const titleEl = document.getElementById("drowsy-meter-title");
+    const detailEl = document.getElementById("drowsy-meter-detail");
+    const dismissBtn = document.getElementById("btn-dismiss-alarm");
+
+    if (badge) { badge.textContent = info.badgeText; badge.className = info.badgeClass; }
+    if (box) box.className = info.boxClass;
+    if (titleEl) titleEl.textContent = info.title;
+    if (detailEl) detailEl.textContent = info.detail;
+
+    for (let i = 1; i <= 3; i++) {
+      const dot = document.getElementById(`drowsy-dot-${i}`);
+      if (!dot) continue;
+      if (info.alarmActive || info.count >= info.limit) {
+        dot.className = "strike-dot lit-crit";
+      } else if (i <= info.count) {
+        dot.className = "strike-dot lit-warn";
+      } else {
+        dot.className = "strike-dot";
+      }
+    }
+    if (dismissBtn) {
+      dismissBtn.classList.toggle("pulsing", Boolean(info.alarmActive));
+    }
+  }
+
+  function renderMonitoringModeBox(monObj, faceDetected) {
+    const info = formatMonitoringModeStatus(monObj, faceDetected);
+    const pBadge = document.getElementById("presence-badge");
+    const detailEl = document.getElementById("monitoring-detail");
+    const bAuto = document.getElementById("btn-mode-auto");
+    const bPause = document.getElementById("btn-mode-pause");
+    const bSleep = document.getElementById("btn-mode-sleep");
+
+    if (pBadge) { pBadge.textContent = info.presenceText; pBadge.className = info.presenceClass; }
+    if (detailEl) detailEl.textContent = info.detail;
+    if (bAuto) bAuto.className = "btn btn-mode" + (info.mode === "AUTO" ? " active-auto" : "");
+    if (bPause) bPause.className = "btn btn-mode" + (info.mode === "TEMP_PAUSE_30M" ? " active-pause" : "");
+    if (bSleep) bSleep.className = "btn btn-mode" + (info.mode === "REST_SLEEP_OFF" ? " active-sleep" : "");
+  }
+
+  function hydrateAdminConfigFields(cfg) {
+    if (!cfg || typeof cfg !== "object" || adminConfigHydrated) return;
+    adminConfigHydrated = true;
+    const setCheck = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.checked = Boolean(val); };
+    const setNum = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.value = String(val); };
+    setCheck("adm-cfg-smoking", cfg.allow_smoking);
+    setCheck("adm-cfg-phone", cfg.allow_phone);
+    setNum("adm-cfg-drowsy-win", cfg.drowsy_window_s);
+    setNum("adm-cfg-drowsy-lim", cfg.drowsy_escalation_limit);
+    setNum("adm-cfg-absence-s", cfg.absence_alert_s);
+    setNum("adm-cfg-pause-min", cfg.pause_duration_min);
+    setNum("adm-cfg-resume-spd", cfg.auto_resume_speed_kmh);
+    setNum("adm-cfg-smoke-conf", cfg.smoking_conf_threshold);
+  }
+
+  root.uiSwitchPortal = function (portal) {
+    activePortal = portal === "admin" ? "admin" : "driver";
+    localStorage.setItem("pi_ai_active_portal", activePortal);
+    const pDrv = document.getElementById("portal-driver");
+    const pAdm = document.getElementById("portal-admin");
+    const tDrv = document.getElementById("tab-btn-driver");
+    const tAdm = document.getElementById("tab-btn-admin");
+    if (pDrv) pDrv.classList.toggle("hidden", activePortal !== "driver");
+    if (pAdm) pAdm.classList.toggle("hidden", activePortal !== "admin");
+    if (tDrv) tDrv.classList.toggle("active", activePortal === "driver");
+    if (tAdm) tAdm.classList.toggle("active", activePortal === "admin");
+    syncAdminControls();
+    if (activePortal === "admin" && targetKind === "server_http" && serverAdminAuthed) {
+      root.uiAdminRefreshDisputes();
+    }
+  };
+
+  function escHtml(v) {
+    return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  let activeDriverSubTab = "cockpit";
+  let pendingDisputeViolation = null;
+  let selectedDisputeReason = "FALSE_DETECTION";
+  let latestDriverViolations = [];
+
+  root.uiSwitchDriverSubTab = function (sub) {
+    activeDriverSubTab = sub === "score" ? "score" : "cockpit";
+    const pCockpit = document.getElementById("driver-pane-cockpit");
+    const pScore = document.getElementById("driver-pane-score");
+    const bCockpit = document.getElementById("drv-sub-cockpit");
+    const bScore = document.getElementById("drv-sub-score");
+    if (pCockpit) pCockpit.classList.toggle("hidden", activeDriverSubTab !== "cockpit");
+    if (pScore) pScore.classList.toggle("hidden", activeDriverSubTab !== "score");
+    if (bCockpit) bCockpit.classList.toggle("active", activeDriverSubTab === "cockpit");
+    if (bScore) bScore.classList.toggle("active", activeDriverSubTab === "score");
+    if (activeDriverSubTab === "score") {
+      root.uiRefreshDriverScoreAndViolations();
+    }
+  };
+
+  function resolveEvidenceFullUrl(relOrAbs, tok) {
+    if (!relOrAbs) return "";
+    const s = String(relOrAbs).trim();
+    const full = s.startsWith("http://") || s.startsWith("https://")
+      ? s
+      : (activeBaseUrl ? `${activeBaseUrl}${s.startsWith("/") ? "" : "/"}${s}` : s);
+    if (!tok || full.includes("token=")) return full;
+    return `${full}${full.includes("?") ? "&" : "?"}token=${encodeURIComponent(tok)}`;
+  }
+
+  root.uiOpenEvidenceModal = function (title, videoUrl, imageUrl, tok) {
+    const modal = document.getElementById("evidence-modal");
+    const tEl = document.getElementById("evidence-modal-title");
+    const vidEl = document.getElementById("evidence-video");
+    const imgEl = document.getElementById("evidence-img");
+    const noteEl = document.getElementById("evidence-modal-note");
+    if (tEl) tEl.textContent = title || "🎬 Bằng chứng Vi phạm";
+    if (vidEl) { vidEl.pause(); vidEl.src = ""; vidEl.style.display = "none"; }
+    if (imgEl) { imgEl.src = ""; imgEl.style.display = "none"; }
+
+    const vFull = resolveEvidenceFullUrl(videoUrl, tok);
+    const iFull = resolveEvidenceFullUrl(imageUrl, tok);
+    if (vFull && vidEl) {
+      vidEl.src = vFull;
+      vidEl.style.display = "block";
+      if (noteEl) noteEl.textContent = "Video 10s ghép từ ảnh keyframe sạch của Pi 4.";
+    } else if (iFull && imgEl) {
+      imgEl.src = iFull;
+      imgEl.style.display = "block";
+      if (noteEl) noteEl.textContent = "Ảnh keyframe bằng chứng tại thời điểm phát hiện vi phạm.";
+    } else if (noteEl) {
+      noteEl.textContent = "Sự kiện này không có video/ảnh đính kèm.";
+    }
+    if (modal) modal.classList.remove("hidden");
+  };
+
+  root.uiCloseEvidenceModal = function () {
+    const modal = document.getElementById("evidence-modal");
+    const vidEl = document.getElementById("evidence-video");
+    if (vidEl) { vidEl.pause(); vidEl.src = ""; }
+    if (modal) modal.classList.add("hidden");
+  };
+
+  root.uiSelectDisputeReason = function (code) {
+    selectedDisputeReason = Object.prototype.hasOwnProperty.call(DISPUTE_REASONS, code) ? code : "FALSE_DETECTION";
+    document.querySelectorAll("#dispute-reason-list .reason-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.getAttribute("data-reason") === selectedDisputeReason);
+    });
+  };
+
+  root.uiOpenDisputeModal = function (eventId) {
+    const v = latestDriverViolations.find((x) => x.event_id === eventId);
+    if (!v) return;
+    pendingDisputeViolation = v;
+    const modal = document.getElementById("dispute-modal");
+    const titleEl = document.getElementById("dispute-modal-title");
+    const subEl = document.getElementById("dispute-modal-sub");
+    const txtEl = document.getElementById("dispute-explanation");
+    const errEl = document.getElementById("dispute-modal-err");
+    if (titleEl) titleEl.textContent = `⚖️ Khiếu nại Vi phạm ${v.event_id}`;
+    if (subEl) subEl.textContent = `Lỗi: ${v.alert_type} (-${v.penalty_points || 0} điểm) • Quyền khiếu nại 1 lần trong 48 giờ (Four-Eyes Check).`;
+    if (txtEl) txtEl.value = "";
+    if (errEl) errEl.textContent = "";
+    root.uiSelectDisputeReason("FALSE_DETECTION");
+    if (modal) modal.classList.remove("hidden");
+  };
+
+  root.uiCloseDisputeModal = function () {
+    pendingDisputeViolation = null;
+    const modal = document.getElementById("dispute-modal");
+    if (modal) modal.classList.add("hidden");
+  };
+
+  root.uiSubmitDispute = async function () {
+    const errEl = document.getElementById("dispute-modal-err");
+    const txtEl = document.getElementById("dispute-explanation");
+    if (errEl) errEl.textContent = "";
+    if (!pendingDisputeViolation || !isServerReady()) {
+      if (errEl) errEl.textContent = "Cần ghép OTP Server PC để gửi đơn khiếu nại.";
+      return;
+    }
+    const check = validateDisputeSubmission(pendingDisputeViolation.event_id, selectedDisputeReason, txtEl ? txtEl.value : "");
+    if (!check.ok) {
+      if (errEl) errEl.textContent = check.error;
+      return;
+    }
+    try {
+      const r = await fetch(`${activeBaseUrl}/api/v1/phone/disputes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${phoneToken}` },
+        body: JSON.stringify({
+          vehicle_id: pairedVehicle,
+          violation_event_id: check.violation_event_id,
+          reason_code: check.reason_code,
+          explanation: check.explanation,
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+      root.uiCloseDisputeModal();
+      showTopStatus(`✅ Đã gửi đơn khiếu nại ${data.dispute_id} thành công! Chờ Quản trị viên kiểm duyệt.`, false);
+      logLine(`Đã gửi đơn khiếu nại ${data.dispute_id} cho vi phạm ${check.violation_event_id}`);
+      root.uiRefreshDriverScoreAndViolations();
+    } catch (err) {
+      if (errEl) errEl.textContent = `Gửi khiếu nại thất bại: ${err.message}`;
+    }
+  };
+
+  root.uiRefreshDriverScoreAndViolations = async function () {
+    const violHost = document.getElementById("driver-violations-list");
+    const tripsHost = document.getElementById("driver-trips-list");
+    const cntBadge = document.getElementById("driver-viol-count");
+    if (!isServerReady()) {
+      if (violHost) {
+        violHost.innerHTML = `<div class="hint-line">Cần kết nối &amp; ghép OTP <strong>Server PC (:5000)</strong> ở tab Buồng lái để xem điểm uy tín, lịch sử vi phạm và gửi khiếu nại 48h.</div>`;
+      }
+      return;
+    }
+    try {
+      const r = await fetch(
+        `${activeBaseUrl}/api/v1/phone/score_summary?vehicle_id=${encodeURIComponent(pairedVehicle)}`,
+        { headers: { Authorization: `Bearer ${phoneToken}` } }
+      );
+      if (r.status === 401) {
+        clearServerTokenOn401();
+        return;
+      }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      const tier = classifySafetyScoreTier(d.current_score);
+      const hero = document.getElementById("score-hero-box");
+      const circle = document.getElementById("score-circle");
+      const numEl = document.getElementById("driver-score-num");
+      const badgeEl = document.getElementById("driver-score-badge");
+      const nameEl = document.getElementById("driver-score-name");
+      const descEl = document.getElementById("driver-score-desc");
+      if (hero) hero.className = tier.heroClass;
+      if (circle) circle.style.borderColor = tier.circleColor;
+      if (numEl) { numEl.textContent = String(tier.score); numEl.style.color = tier.circleColor; }
+      if (badgeEl) { badgeEl.textContent = tier.badgeText; badgeEl.className = tier.badgeClass; }
+      if (nameEl) nameEl.textContent = `${d.driver_name || "Tài xế"} · Xe ${d.vehicle_id || pairedVehicle}`;
+      if (descEl) descEl.textContent = tier.description;
+
+      if (tripsHost) {
+        const trips = Array.isArray(d.trips) ? d.trips.slice(0, 5) : [];
+        tripsHost.innerHTML = trips.length
+          ? trips.map((t) => {
+              const dt = t.started_at ? new Date(Number(t.started_at) * 1000).toLocaleString("vi-VN") : "-";
+              return `<div class="v-item">
+                <div class="v-head">
+                  <div class="v-title">Chuyến ${escHtml(t.trip_id)} (${escHtml(t.status || "ACTIVE")})</div>
+                  <span class="badge ${Number(t.safety_score) <= 65 ? "warn" : "ok"}">${Math.round(Number(t.safety_score ?? 100))} đ</span>
+                </div>
+                <div class="v-meta">Bắt đầu: ${escHtml(dt)} · Quãng đường: ${Number(t.distance_km || 0).toFixed(1)} km · Vi phạm: ${escHtml(t.violation_count || 0)} · Tắt còi: ${escHtml(t.mute_count || 0)}</div>
+              </div>`;
+            }).join("")
+          : `<div class="hint-line">Chưa có lịch sử chuyến đi nào được ghi nhận.</div>`;
+      }
+
+      const viols = Array.isArray(d.violations) ? d.violations : [];
+      latestDriverViolations = viols;
+      if (cntBadge) cntBadge.textContent = `${viols.length} vi phạm`;
+      if (violHost) {
+        if (!viols.length) {
+          violHost.innerHTML = `<div class="v-item"><div class="v-title">Chưa có vi phạm nào</div><div class="v-meta">Lịch sử lái xe của bạn hiện đang an toàn.</div></div>`;
+        } else {
+          violHost.innerHTML = viols.map((v) => {
+            const dt = v.created_at ? new Date(Number(v.created_at) * 1000).toLocaleString("vi-VN") : "-";
+            const isRefunded = v.human_review_status === "HUMAN_FALSE_POSITIVE" || v.dispute_status === "APPROVED";
+            const penPts = Number(v.penalty_points || 0);
+            const penHtml = penPts > 0
+              ? `<span class="v-penalty ${isRefunded ? "refunded" : ""}">-${penPts} đ</span>${isRefunded ? `<div style="font-size:11px;color:#86efac;font-weight:700">Đã hoàn điểm</div>` : ""}`
+              : `<span class="badge">0đ (Cảnh báo)</span>`;
+            let dspBadge = "";
+            if (v.dispute_status === "OPEN") dspBadge = `<span class="badge warn">⏳ Đang chờ duyệt khiếu nại</span>`;
+            else if (v.dispute_status === "APPROVED") dspBadge = `<span class="badge ok">✅ Khiếu nại ĐƯỢC CHẤP NHẬN</span>`;
+            else if (v.dispute_status === "REJECTED") dspBadge = `<span class="badge err">❌ Khiếu nại bị từ chối</span>`;
+
+            const hasMedia = Boolean(v.video_url || v.image_url);
+            return `<div class="v-item">
+              <div class="v-head">
+                <div>
+                  <div class="v-title">${escHtml(v.alert_type)} · ${escHtml(v.event_id)}</div>
+                  <div class="v-meta">${escHtml(dt)}${v.behavior_detail ? " · " + escHtml(v.behavior_detail) : ""}</div>
+                </div>
+                <div style="text-align:right">${penHtml}</div>
+              </div>
+              ${dspBadge ? `<div style="margin-top:6px">${dspBadge}${v.dispute_response_note ? `<div class="v-meta">Phản hồi Admin: ${escHtml(v.dispute_response_note)}</div>` : ""}</div>` : ""}
+              <div class="v-actions">
+                ${hasMedia ? `<button class="btn btn-ghost" onclick="uiOpenEvidenceModal('${escHtml(v.alert_type + " - " + v.event_id)}','${escHtml(v.video_url || "")}','${escHtml(v.image_url || "")}','${escHtml(phoneToken)}')">🎬 Xem bằng chứng</button>` : ""}
+                ${v.can_dispute ? `<button class="btn btn-primary" onclick="uiOpenDisputeModal('${escHtml(v.event_id)}')">⚖️ Khiếu nại (48h)</button>` : ""}
+              </div>
+            </div>`;
+          }).join("");
+        }
+      }
+    } catch (err) {
+      if (violHost) violHost.innerHTML = `<div class="hint-line err">Chưa tải được điểm &amp; vi phạm: ${escHtml(err.message)}</div>`;
+    }
+  };
+
+  root.uiAdminRefreshDisputes = async function () {
+    const host = document.getElementById("admin-disputes-list");
+    if (!host) return;
+    if (targetKind !== "server_http" || !serverAdminAuthed) {
+      host.innerHTML = `<div class="hint-line">Đăng nhập Quản trị Server PC để tải và duyệt đơn khiếu nại từ tài xế.</div>`;
+      return;
+    }
+    try {
+      const vid = (document.getElementById("admin-vehicle-id")?.value || "").trim();
+      const q = vid ? `?vehicle_id=${encodeURIComponent(vid)}` : "";
+      const r = await fetch(`${activeBaseUrl}/api/v1/disputes${q}`, {
+        headers: { "X-Dashboard-Token": serverAdminToken },
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+      const rows = Array.isArray(data.disputes) ? data.disputes : [];
+      if (!rows.length) {
+        host.innerHTML = `<div class="hint-line ok">Hiện không có đơn khiếu nại nào cần xử lý.</div>`;
+        return;
+      }
+      host.innerHTML = rows.map((d) => {
+        const isOpen = d.status === "OPEN";
+        const stBadge = d.status === "APPROVED"
+          ? `<span class="badge ok">ĐÃ HOÀN ĐIỂM</span>`
+          : d.status === "REJECTED"
+          ? `<span class="badge err">TỪ CHỐI</span>`
+          : `<span class="badge warn">CHỜ DUYỆT</span>`;
+        const hasMedia = Boolean(d.video_url || d.image_url);
+        return `<div class="v-item">
+          <div class="v-head">
+            <div>
+              <div class="v-title">${escHtml(d.dispute_id)} · ${escHtml(d.alert_type || "VIOLATION")} (-${escHtml(d.penalty_points || 0)}đ)</div>
+              <div class="v-meta">Xe ${escHtml(d.vehicle_id)} · Lý do: <strong>${escHtml(d.reason_label || d.reason_code)}</strong></div>
+            </div>
+            ${stBadge}
+          </div>
+          <div class="v-meta" style="color:#e2e8f0;margin-top:6px">Giải trình: "${escHtml(d.explanation)}"</div>
+          ${d.response_note ? `<div class="v-meta">Phản hồi (${escHtml(d.resolved_by || "admin")}): ${escHtml(d.response_note)}</div>` : ""}
+          <div class="v-actions">
+            ${hasMedia ? `<button class="btn btn-ghost" onclick="uiOpenEvidenceModal('${escHtml(d.dispute_id)}','${escHtml(d.video_url || "")}','${escHtml(d.image_url || "")}','${escHtml(serverAdminToken)}')">🎬 Xem video</button>` : ""}
+            ${isOpen ? `
+              <input id="dsp-note-${escHtml(d.dispute_id)}" placeholder="Nhập lý do duyệt / từ chối..." style="flex:1;min-width:160px;padding:7px 9px;font-size:12px" />
+              <button class="btn btn-ack" onclick="uiAdminResolveDispute('${escHtml(d.dispute_id)}','APPROVED')">✅ Hoàn điểm</button>
+              <button class="btn btn-sos" onclick="uiAdminResolveDispute('${escHtml(d.dispute_id)}','REJECTED')">❌ Từ chối</button>
+            ` : ""}
+          </div>
+        </div>`;
+      }).join("");
+    } catch (err) {
+      host.innerHTML = `<div class="hint-line err">Lỗi tải đơn khiếu nại: ${escHtml(err.message)}</div>`;
+    }
+  };
+
+  root.uiAdminResolveDispute = async function (disputeId, decision) {
+    const noteEl = document.getElementById(`dsp-note-${disputeId}`);
+    const note = (noteEl ? noteEl.value : "").trim();
+    if (!note) {
+      showTopStatus("Bắt buộc nhập nội dung phản hồi cho tài xế trước khi duyệt!", true);
+      return;
+    }
+    try {
+      const r = await fetch(`${activeBaseUrl}/api/v1/disputes/${encodeURIComponent(disputeId)}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Dashboard-Token": serverAdminToken },
+        body: JSON.stringify({ decision, response_note: note }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+      showTopStatus(`Đã xử lý đơn ${disputeId}: ${decision}${data.refunded ? " (Đã hoàn điểm an toàn)" : ""}`, false);
+      logLine(`Admin xử lý khiếu nại ${disputeId} -> ${decision}`);
+      root.uiAdminRefreshDisputes();
+    } catch (err) {
+      showTopStatus(`Duyệt khiếu nại lỗi: ${err.message}`, true);
+    }
+  };
+
+  root.uiDismissDrowsyAlarm = async function () {
+    try {
+      await dispatchAction("DISMISS_ALARM");
+      const ab = document.getElementById("alert-banner");
+      if (ab) ab.style.display = "none";
+      const dismissBtn = document.getElementById("btn-dismiss-alarm");
+      if (dismissBtn) dismissBtn.classList.remove("pulsing");
+      speakCalmInfo("Đã tắt loa cảnh báo buồn ngủ, hệ thống đang kiểm tra lại trong vài phút tới");
+      setTimeout(() => { pollLiveStatus(); }, 700);
+    } catch (err) {
+      logLine(`Tắt loa báo động thất bại: ${err.message}`);
+    }
+  };
+
+  root.uiSetMonitoringMode = async function (cmd) {
+    try {
+      await dispatchAction(cmd);
+      const mapLocal = { MODE_AUTO: "AUTO", MODE_PAUSE: "TEMP_PAUSE_30M", MODE_SLEEP: "REST_SLEEP_OFF" };
+      renderMonitoringModeBox({ mode: mapLocal[cmd] || "AUTO" }, true);
+      setTimeout(() => { pollLiveStatus(); }, 700);
+    } catch (err) {
+      logLine(`Đổi chế độ giám sát thất bại (${cmd}): ${err.message}`);
+    }
+  };
+
+  root.uiLoginAdmin = async function () {
+    const inp = document.getElementById("admin-token-input");
+    const tok = (inp ? inp.value : "").trim();
+    if (!activeBaseUrl) {
+      setHint("admin-auth-status", "Hãy kiểm tra địa chỉ Pi hoặc Server ở tab Tài xế trước.", "warn");
+      return;
+    }
+    if (!tok) {
+      setHint("admin-auth-status", "Vui lòng nhập token Admin hoặc Operator.", "warn");
+      return;
+    }
+    try {
+      if (targetKind === "pi_local") {
+        const r = await fetch(`${activeBaseUrl}/api/web_login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: tok }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || data.detail || `HTTP ${r.status}`);
+        const role = String(data.role || "").toLowerCase();
+        if (role !== "admin" && role !== "operator") {
+          throw new Error(`Token này chỉ có quyền '${role}', cần operator hoặc admin`);
+        }
+        piLocalToken = tok;
+        piLocalUrl = activeBaseUrl;
+        piLocalRole = role;
+        piAuthed = true;
+        localStorage.setItem("pi_ai_pi_local_token", tok);
+        localStorage.setItem("pi_ai_pi_local_url", activeBaseUrl);
+        localStorage.setItem("pi_ai_pi_local_role", role);
+        if (inp) inp.value = "";
+        setHint("admin-auth-status", `Đã đăng nhập Quản trị Pi Cục Bộ (vai trò: ${role}).`, "ok");
+        logLine(`Admin đăng nhập Pi Cục Bộ thành công (${role}).`);
+        adminConfigHydrated = false;
+        syncTopBadgesAndControls();
+        pollLiveStatus();
+        return;
+      }
+
+      // Server PC login (validates via /api/v1/auth/me)
+      const r = await fetch(`${activeBaseUrl}/api/v1/auth/me`, {
+        headers: { "X-Dashboard-Token": tok },
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+      const role = String(data.role || "").toLowerCase();
+      if (role !== "admin" && role !== "operator") {
+        throw new Error(`Token này chỉ có quyền '${role}', cần operator hoặc admin`);
+      }
+      serverAdminToken = tok;
+      serverAdminRole = role;
+      serverAdminAuthed = true;
+      sessionStorage.setItem("pi_ai_admin_token", tok);
+      sessionStorage.setItem("pi_ai_admin_role", role);
+      if (inp) inp.value = "";
+      setHint("admin-auth-status", `Đã đăng nhập Quản trị Server PC (vai trò: ${role}).`, "ok");
+      logLine(`Admin đăng nhập Server PC thành công (${role}).`);
+      adminConfigHydrated = false;
+      syncTopBadgesAndControls();
+      // Fetch current remote_config for selected vehicle
+      const vid = (document.getElementById("admin-vehicle-id")?.value || pairedVehicle || "XE-01").trim();
+      const rc = await fetch(`${activeBaseUrl}/api/v1/config/${encodeURIComponent(vid)}`, {
+        headers: { "X-Dashboard-Token": serverAdminToken },
+      });
+      if (rc.ok) hydrateAdminConfigFields(await rc.json());
+      root.uiAdminRefreshDisputes();
+    } catch (err) {
+      setHint("admin-auth-status", `Đăng nhập Quản trị thất bại: ${err.message}`, "err");
+      logLine(`Admin đăng nhập lỗi: ${err.message}`);
+    }
+  };
+
+  root.uiLogoutAdmin = function () {
+    serverAdminToken = "";
+    serverAdminRole = "";
+    serverAdminAuthed = false;
+    sessionStorage.removeItem("pi_ai_admin_token");
+    sessionStorage.removeItem("pi_ai_admin_role");
+    if (targetKind === "pi_local") {
+      root.uiClearPiToken();
+    }
+    setHint("admin-auth-status", "Đã đăng xuất phiên Quản trị.", "");
+    syncAdminControls();
+  };
+
+  root.uiAdminMintOtp = async function () {
+    if (targetKind !== "server_http" || !serverAdminAuthed) return;
+    const vid = (document.getElementById("admin-vehicle-id")?.value || pairedVehicle || "XE-01").trim() || "XE-01";
+    const drv = (document.getElementById("admin-otp-driver")?.value || "").trim();
+    const out = document.getElementById("admin-otp-result");
+    try {
+      const r = await fetch(`${activeBaseUrl}/api/v1/phone/pair_otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Dashboard-Token": serverAdminToken },
+        body: JSON.stringify({ vehicle_id: vid, driver_id: drv || undefined }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+      if (out) {
+        out.style.display = "block";
+        out.textContent = `MÃ OTP XE ${vid}: ${data.pair_code} (hết hạn sau 5 phút)`;
+      }
+      logLine(`Admin đã tạo OTP cho xe ${vid}: ${data.pair_code}`);
+    } catch (err) {
+      logLine(`Tạo OTP lỗi: ${err.message}`);
+      showTopStatus(`Tạo OTP thất bại: ${err.message}`, true);
+    }
+  };
+
+  root.uiAdminSendCmd = async function (cmd) {
+    if (!isAdminReady()) {
+      setHint("admin-auth-status", "Hãy đăng nhập Quản trị trước khi gửi lệnh.", "warn");
+      return;
+    }
+    try {
+      if (targetKind === "pi_local") {
+        const res = await sendViaPiLocal(cmd);
+        logLine(`Admin (Pi Cục Bộ) -> ${cmd} (${res.detail || "OK"})`);
+        showTopStatus(`Đã gửi lệnh ${cmd} tới Pi (${res.detail || "OK"})`, false);
+      } else {
+        const vid = (document.getElementById("admin-vehicle-id")?.value || pairedVehicle || "XE-01").trim() || "XE-01";
+        const r = await fetch(`${activeBaseUrl}/api/v1/server/command`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Dashboard-Token": serverAdminToken },
+          body: JSON.stringify({ vehicle_id: vid, cmd }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+        logLine(`Admin (Server) -> ${cmd} tới xe ${vid} (${data.cmd_uid || "PENDING"})`);
+        showTopStatus(`Đã xếp hàng lệnh ${cmd} xuống xe ${vid}`, false);
+      }
+      setTimeout(() => { pollLiveStatus(); }, 800);
+    } catch (err) {
+      logLine(`Admin gửi lệnh ${cmd} lỗi: ${err.message}`);
+      showTopStatus(`Gửi lệnh ${cmd} lỗi: ${err.message}`, true);
+    }
+  };
+
+  root.uiAdminSaveConfig = async function () {
+    if (!isAdminReady()) return;
+    const patch = {
+      allow_smoking: Boolean(document.getElementById("adm-cfg-smoking")?.checked),
+      allow_phone: Boolean(document.getElementById("adm-cfg-phone")?.checked),
+      drowsy_window_s: Number(document.getElementById("adm-cfg-drowsy-win")?.value || 180),
+      drowsy_escalation_limit: Number(document.getElementById("adm-cfg-drowsy-lim")?.value || 3),
+      absence_alert_s: Number(document.getElementById("adm-cfg-absence-s")?.value || 20),
+      pause_duration_min: Number(document.getElementById("adm-cfg-pause-min")?.value || 30),
+      auto_resume_speed_kmh: Number(document.getElementById("adm-cfg-resume-spd")?.value || 15),
+      smoking_conf_threshold: Number(document.getElementById("adm-cfg-smoke-conf")?.value || 0.4),
+    };
+    try {
+      if (targetKind === "pi_local") {
+        const r = await fetch(`${activeBaseUrl}/api/config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Auth-Token": piLocalToken },
+          body: JSON.stringify(patch),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || data.detail || `HTTP ${r.status}`);
+        setHint("admin-cfg-status", "Đã lưu & áp dụng cấu hình trực tiếp lên Pi 4!", "ok");
+        logLine("Admin đã cập nhật cấu hình trực tiếp trên Pi 4.");
+      } else {
+        const vid = (document.getElementById("admin-vehicle-id")?.value || pairedVehicle || "XE-01").trim() || "XE-01";
+        const r = await fetch(`${activeBaseUrl}/api/v1/config/${encodeURIComponent(vid)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Dashboard-Token": serverAdminToken },
+          body: JSON.stringify(patch),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+        setHint("admin-cfg-status", `Đã lưu Remote Config cho xe ${vid} (Pi tự đồng bộ trong 1.5s)!`, "ok");
+        logLine(`Admin đã lưu Remote Config cho xe ${vid}.`);
+      }
+    } catch (err) {
+      setHint("admin-cfg-status", `Lưu cấu hình thất bại: ${err.message}`, "err");
+      logLine(`Admin lưu cấu hình lỗi: ${err.message}`);
+    }
+  };
 
   function syncCalibrateButtonState() {
     const btn = document.getElementById("btn-calibrate");
@@ -883,8 +1713,22 @@
       {};
     const gps = (data && data.gps) || rootObj.gps || {};
     const pi = (data && data.pi) || rootObj.pi || {};
+    const cam = (data && data.camera) || rootObj.camera || {};
+    const esp = (data && data.esp) || rootObj.esp || {};
+    const dEsc = (data && data.drowsy_escalation) || ds.drowsy_escalation || {};
+    const mon = (data && data.monitoring) || ds.monitoring || {};
 
     renderAiEngineBox(ds, cal);
+    renderDrowsyEscalationBox(dEsc);
+    renderMonitoringModeBox(mon, Boolean(cam.face_detected));
+
+    const volBadge = document.getElementById("admin-esp-vol-badge");
+    if (volBadge && esp && esp.vol != null) {
+      volBadge.textContent = `VOL: ${esp.vol}%${esp.alarm_mode ? " · ALARM!" : ""}`;
+      volBadge.className = "badge " + (esp.alarm_mode ? "err" : "ok");
+    }
+    const liveCfg = (data && (data.config || data.remote_config)) || null;
+    if (liveCfg) hydrateAdminConfigFields(liveCfg);
 
     // Update Pi temperature metric
     const tempEl = document.getElementById("pi-temp");
@@ -1363,6 +2207,29 @@
       return;
     }
     if (msg.kind === "ALERT") {
+      const aType = String(msg.alertType || "").toUpperCase();
+      if (aType === "MODE_AUTO") {
+        showTopStatus(`🟢 ${msg.detail || "Đã tự động bật lại chế độ giám sát AUTO"}`, false);
+        renderMonitoringModeBox({ mode: "AUTO" }, true);
+        speakCalmInfo("Hệ thống đã tự động bật lại chế độ giám sát");
+        logLine(`MODE_AUTO -> ${msg.raw}`);
+        return;
+      }
+      if (aType === "DRIVER_ABSENT") {
+        showTopStatus(`🟡 ${msg.detail || "Camera không thấy tài xế — tạm tắt vắng mặt 30 phút"}`, false);
+        renderMonitoringModeBox({ mode: "TEMP_PAUSE_30M", presence: "NO_DRIVER", pause_remaining_s: 1800 }, false);
+        logLine(`DRIVER_ABSENT -> ${msg.raw}`);
+        return;
+      }
+      if (aType === "DROWSY_LEVEL3" || aType === "DROWSY_RELAPSE") {
+        const isRelapse = aType === "DROWSY_RELAPSE";
+        renderDrowsyEscalationBox({
+          state: isRelapse ? "CONTINUOUS_RELAPSE" : "ALARM_LATCHED",
+          count: isRelapse ? 4 : 3,
+          limit: 3,
+          alarm_active: true,
+        });
+      }
       const ab = document.getElementById("alert-banner");
       if (ab) {
         ab.style.display = "block";
@@ -1598,6 +2465,12 @@
 
     const inpVid = document.getElementById("pair-vehicle");
     if (inpVid) inpVid.value = pairedVehicle;
+    const admVid = document.getElementById("admin-vehicle-id");
+    if (admVid) admVid.value = pairedVehicle;
+    if (serverAdminToken && (serverAdminRole === "admin" || serverAdminRole === "operator")) {
+      serverAdminAuthed = true;
+    }
+    root.uiSwitchPortal(activePortal);
 
     syncTopBadgesAndControls();
     if (initialUrl) {

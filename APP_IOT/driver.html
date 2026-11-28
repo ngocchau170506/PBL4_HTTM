@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#0f172a" />
-  <title>PI_AI — Driver Cockpit (3 Nguồn Độc Lập)</title>
+  <title>PI_AI — Ứng dụng Tài xế &amp; Quản trị</title>
   <link rel="icon" type="image/svg+xml" href="./icon.svg" />
   <link rel="manifest" href="./manifest.json" />
   <link rel="stylesheet" href="./driver.css" />
@@ -13,7 +13,7 @@
   <div class="wrap">
     <header>
       <div>
-        <h1>PI_AI Driver Cockpit</h1>
+        <h1>PI_AI Cockpit</h1>
         <div id="device-subtitle" class="sub">Pi Cục Bộ :8080 · Server :5000 · ESP32 #2 BLE</div>
       </div>
       <div class="header-badges">
@@ -22,179 +22,435 @@
       </div>
     </header>
 
+    <!-- Chuyển đổi 2 phân hệ tách biệt: Tài xế (Driver) | Quản trị (Admin) -->
+    <div class="portal-tabs" role="tablist">
+      <button id="tab-btn-driver" class="portal-tab active" data-portal="driver" onclick="uiSwitchPortal('driver')">
+        🚗 Tài xế (Driver)
+      </button>
+      <button id="tab-btn-admin" class="portal-tab" data-portal="admin" onclick="uiSwitchPortal('admin')">
+        🛡️ Quản trị (Admin)
+      </button>
+    </div>
+
     <div id="compat-banner" class="banner warn" style="display:none"></div>
     <div id="alert-banner" class="banner alert" style="display:none"></div>
 
-    <!-- Card #1: Kết nối Độc Lập (Pi Cục Bộ :8080 / Server :5000) -->
-    <div class="card">
-      <div class="card-head">
-        <h2>1. Kết nối Độc Lập (Pi Cục Bộ :8080 / Server :5000)</h2>
-        <span id="http-target-badge" class="badge">CHƯA KIỂM TRA</span>
-      </div>
-      <div class="row">
-        <input
-          id="conn-base-url"
-          type="url"
-          inputmode="url"
-          placeholder="http://192.168.1.7:8080 hoặc http://192.168.1.10:5000"
-          onkeydown="if(event.key==='Enter')uiProbeEndpoint(true)"
-        />
-      </div>
-      <div class="row" style="margin-top:8px">
-        <button id="btn-probe" class="btn btn-primary btn-compact" style="flex:1" onclick="uiProbeEndpoint(true)">
-          Kiểm tra kết nối
+    <!-- =================================================================== -->
+    <!-- PHÂN HỆ 1: BÊN TÀI XẾ (DRIVER)                                      -->
+    <!-- =================================================================== -->
+    <div id="portal-driver" class="portal-pane">
+
+      <!-- Tab con bên Tài xế: Buồng lái IoT | Điểm Uy Tín & Khiếu nại 48h -->
+      <div class="sub-tabs" role="tablist">
+        <button id="drv-sub-cockpit" class="sub-tab active" onclick="uiSwitchDriverSubTab('cockpit')">
+          🎛️ Buồng lái IoT
         </button>
-        <button id="btn-use-origin" class="btn btn-ghost" style="flex:1" onclick="uiUseCurrentOrigin()">
-          Dùng địa chỉ trang này
+        <button id="drv-sub-score" class="sub-tab" onclick="uiSwitchDriverSubTab('score')">
+          🏆 Điểm &amp; Khiếu nại (48h)
         </button>
       </div>
-      <div id="http-target-detail" class="hint-line">
-        Đang tự kiểm tra địa chỉ máy chủ...
+
+      <div id="driver-pane-cockpit" class="sub-pane">
+
+      <!-- Card D1: Cảnh báo Buồn ngủ 3 Lần & Nút Tắt Loa Báo Động -->
+      <div class="card">
+        <div class="card-head">
+          <h2>1. Cảnh báo Buồn ngủ (3 lần / 2–4 phút)</h2>
+          <span id="drowsy-state-badge" class="badge ok">TỈNH TÁO 0/3</span>
+        </div>
+        <div id="drowsy-meter-box" class="drowsy-box">
+          <div id="drowsy-meter-title" class="ai-engine-title">Trạng thái: Đang theo dõi tỉnh táo</div>
+          <div class="strike-dots">
+            <div id="drowsy-dot-1" class="strike-dot"></div>
+            <div id="drowsy-dot-2" class="strike-dot"></div>
+            <div id="drowsy-dot-3" class="strike-dot"></div>
+          </div>
+          <div id="drowsy-meter-detail" class="ai-engine-detail">
+            Lần 1 &amp; 2 nhắc loa ESP32 #1; lần 3 liên tiếp trong 3 phút sẽ bật báo động khóa chờ tài xế tắt trên App.
+          </div>
+        </div>
+        <button id="btn-dismiss-alarm" class="btn btn-dismiss-alarm btn-full" data-action="DISMISS_ALARM" onclick="uiDismissDrowsyAlarm()" disabled>
+          🔇 TẮT LOA CẢNH BÁO BUỒN NGỦ (LẦN 3)
+          <small>Tắt loa ngay &amp; Pi kiểm tra lại trong 2–4p (tái phạm sẽ báo động liên tục)</small>
+        </button>
       </div>
 
-      <!-- Khung đăng nhập Pi Cục Bộ (hiện tự động khi phát hiện targetKind === 'pi_local') -->
-      <div id="auth-box-pi" class="auth-box" style="display:none">
-        <div class="auth-title">Đăng nhập Pi Cục Bộ (<code>WEB_OPERATOR_TOKEN</code> / <code>WEB_ADMIN_TOKEN</code>)</div>
-        <div class="row">
-          <input
-            id="pi-token-input"
-            type="password"
-            placeholder="Nhập mã truy cập Pi..."
-            onkeydown="if(event.key==='Enter')uiLoginPiLocal()"
-          />
-          <button class="btn btn-primary btn-compact" onclick="uiLoginPiLocal()">Kết nối Pi</button>
-          <button class="btn btn-ghost" onclick="uiClearPiToken()">Xóa mã</button>
+      <!-- Card D2: 3 Chế độ Giám sát Hiện diện (Cam thấy người / Không thấy người) -->
+      <div class="card">
+        <div class="card-head">
+          <h2>2. Chế độ Giám sát Camera (3 Trạng thái)</h2>
+          <span id="presence-badge" class="badge">CHỜ CAMERA</span>
         </div>
-        <div id="pi-auth-status" class="hint-line">
-          Chưa đăng nhập Pi cục bộ — nhập mã để mở khóa nút điều khiển &amp; cân chỉnh 10s.
+        <div class="mode-grid-3">
+          <button id="btn-mode-auto" class="btn btn-mode active-auto" data-action="MODE_AUTO" onclick="uiSetMonitoringMode('MODE_AUTO')" disabled>
+            🟢 Tự động
+            <small>Mặc định khi bật Pi</small>
+          </button>
+          <button id="btn-mode-pause" class="btn btn-mode" data-action="MODE_PAUSE" onclick="uiSetMonitoringMode('MODE_PAUSE')" disabled>
+            🟡 Tạm tắt 30p
+            <small>Tắt báo vắng mặt (thấy người vẫn báo)</small>
+          </button>
+          <button id="btn-mode-sleep" class="btn btn-mode" data-action="MODE_SLEEP" onclick="uiSetMonitoringMode('MODE_SLEEP')" disabled>
+            🌙 Nghỉ / Ngủ
+            <small>Ngủ trên xe (tự bật lại ≥15km/h)</small>
+          </button>
+        </div>
+        <div id="monitoring-detail" class="hint-line">
+          Chế độ 1 (AUTO): Pi tự nhận diện thấy/không thấy người; mất mặt quá 20s tự báo App/Server và tạm tắt vắng mặt 30p. Pi khởi động lại luôn về AUTO.
         </div>
       </div>
 
-      <!-- Khung ghép OTP Server PC (hiện tự động khi targetKind === 'server_http' hoặc mặc định) -->
-      <div id="auth-box-server" class="auth-box">
-        <div class="auth-title">Ghép OTP Server (8 ký tự — dùng khi điều khiển qua Server PC)</div>
+      <!-- Card D3: Chế độ AI trực tiếp & Cân chỉnh MediaPipe 10s -->
+      <div class="card">
+        <h2>3. AI Trực tiếp &amp; Cân chỉnh MediaPipe 10s</h2>
+        <div id="ai-engine-box" class="ai-engine-box idle">
+          <div id="ai-engine-title" class="ai-engine-title">Chưa có dữ liệu AI trực tiếp</div>
+          <div id="ai-engine-detail" class="ai-engine-detail">
+            Kết nối Pi Cục Bộ hoặc ghép OTP Server để theo dõi trực tiếp mỗi 2.5s.
+          </div>
+        </div>
+        <button id="btn-calibrate" class="btn btn-calib btn-full" style="margin-top:10px" data-action="CALIBRATE" onclick="uiStartCalibration()" disabled>
+          <span id="btn-calibrate-label">🎯 Bật MediaPipe 10s (Tạm tắt YOLO &amp; Giữ cấu hình)</span>
+          <small id="btn-calibrate-sub">Ngồi thẳng, mở mắt nhìn đường 10s để khóa ngưỡng cá nhân</small>
+        </button>
+        <div id="calib-status" class="calib-status">
+          Kết nối Pi Cục Bộ, Server OTP hoặc Bluetooth BLE để kích hoạt cân chỉnh 10s.
+        </div>
+      </div>
+
+      <!-- Card D4: Thao tác nhanh tài xế -->
+      <div class="card">
+        <h2>4. Thao tác nhanh tài xế</h2>
+        <div class="grid-2">
+          <button class="btn btn-mute ble-action" data-action="MUTE" onclick="uiSendAction('MUTE')" disabled>
+            TẮT CÒI 30s
+            <small>MUTE (loa ESP1)</small>
+          </button>
+          <button class="btn btn-sos ble-action" data-action="SOS" onclick="uiSendSos()" disabled>
+            KHẨN CẤP (SOS)
+            <small>Báo điều phối ngay</small>
+          </button>
+          <button class="btn btn-ack ble-action" data-action="ACK" onclick="uiSendAction('ACK')" disabled>
+            TÔI ĐANG TỈNH
+            <small>ACK_AWAKE</small>
+          </button>
+          <button class="btn btn-rest ble-action" data-action="REST_START" onclick="uiSendAction('REST_START')" disabled>
+            BẮT ĐẦU NGHỈ
+            <small>REST_BREAK_START</small>
+          </button>
+        </div>
+        <button class="btn btn-ghost btn-full ble-action" style="margin-top:10px" data-action="REST_END" onclick="uiSendAction('REST_END')" disabled>
+          KẾT THÚC NGHỈ GIẢI LAO (REST_END)
+        </button>
+        <div id="actions-channel-note" class="hint-line">
+          Chưa có kênh điều khiển sẵn sàng (ưu tiên tự động: BLE → Pi cục bộ → Server HTTP).
+        </div>
+      </div>
+
+      <!-- Card D5: Định vị GPS & Nhiệt độ Pi -->
+      <div class="card">
+        <h2>5. Định vị GPS &amp; Nhiệt độ Pi trực tiếp</h2>
+        <div class="metrics metrics-4">
+          <div class="metric">
+            <div id="gps-speed" class="val">0.0</div>
+            <div class="lbl">km/h</div>
+          </div>
+          <div class="metric">
+            <div id="gps-sats" class="val">0</div>
+            <div class="lbl">Vệ tinh</div>
+          </div>
+          <div class="metric">
+            <div id="gps-fix" class="val">NO FIX</div>
+            <div class="lbl">GPS</div>
+          </div>
+          <div class="metric">
+            <div id="pi-temp" class="val">--°C</div>
+            <div class="lbl">Nhiệt Pi</div>
+          </div>
+        </div>
+        <div id="gps-coords" class="hint-line" style="text-align:center">
+          Tọa độ: chưa có khóa vệ tinh
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button id="btn-phone-gps" class="btn btn-ghost btn-full" onclick="uiTogglePhoneGps()">
+            Bật chia sẻ GPS thật của điện thoại (dự phòng)
+          </button>
+        </div>
+        <div id="phone-gps-status" class="hint-line" style="text-align:center">
+          GPS điện thoại đang tắt (chỉ dùng chip GNSS thật khi bật — 0 tọa độ mẫu).
+        </div>
+      </div>
+
+      <!-- Card D6: Kết nối Tài xế (Bluetooth BLE & Ghép OTP Server) -->
+      <div class="card">
+        <div class="card-head">
+          <h2>6. Kết nối Xe (Bluetooth BLE / Server OTP / Pi)</h2>
+          <span id="http-target-badge" class="badge">CHƯA KIỂM TRA</span>
+        </div>
+        <div id="ble-compat-note" class="ble-note" style="display:none"></div>
         <div class="row">
-          <input id="pair-vehicle" placeholder="Mã xe (vd XE-01)" value="XE-01" />
-          <input
-            id="pair-otp"
-            placeholder="Mã OTP 8 ký tự"
-            onkeydown="if(event.key==='Enter')uiRedeemOtp()"
-          />
+          <button id="btn-connect" class="btn btn-primary btn-compact btn-full" onclick="uiConnectBle()">
+            🔵 KẾT NỐI BLUETOOTH ESP32 #2 (PI_AI_HUB_*)
+          </button>
         </div>
         <div class="row" style="margin-top:8px">
-          <button class="btn btn-primary btn-compact" style="flex:1" onclick="uiRedeemOtp()">Ghép OTP</button>
-          <button class="btn btn-ghost" onclick="uiClearServerToken()">Xóa token cũ</button>
+          <button id="btn-disconnect" class="btn btn-ghost" style="flex:1" onclick="uiDisconnectBle()" disabled>Ngắt BLE</button>
+          <button id="btn-status" class="btn btn-ghost" style="flex:1" data-action="STATUS" onclick="uiSendAction('STATUS')" disabled>Trạng thái Hub</button>
         </div>
-        <div id="pair-status" class="hint-line">
-          Chưa ghép Server. Nếu vừa đổi sang Server mới, bấm "Xóa token cũ" rồi nhập OTP mới.
+
+        <div class="auth-box">
+          <div class="auth-title">Địa chỉ Máy chủ (Pi Cục Bộ :8080 hoặc Server :5000)</div>
+          <div class="row">
+            <input
+              id="conn-base-url"
+              type="url"
+              inputmode="url"
+              placeholder="http://192.168.1.7:8080 hoặc http://192.168.1.10:5000"
+              onkeydown="if(event.key==='Enter')uiProbeEndpoint(true)"
+            />
+          </div>
+          <div class="row" style="margin-top:8px">
+            <button id="btn-probe" class="btn btn-primary btn-compact" style="flex:1" onclick="uiProbeEndpoint(true)">Kiểm tra kết nối</button>
+            <button id="btn-use-origin" class="btn btn-ghost" style="flex:1" onclick="uiUseCurrentOrigin()">Dùng địa chỉ này</button>
+          </div>
+          <div id="http-target-detail" class="hint-line">Đang tự kiểm tra địa chỉ máy chủ...</div>
+        </div>
+
+        <!-- Khung ghép OTP Server cho Tài xế -->
+        <div id="auth-box-server" class="auth-box">
+          <div class="auth-title">Ghép OTP Server (8 ký tự do Admin cấp)</div>
+          <div class="row">
+            <input id="pair-vehicle" placeholder="Mã xe (vd XE-01)" value="XE-01" />
+            <input id="pair-otp" placeholder="Mã OTP 8 ký tự" onkeydown="if(event.key==='Enter')uiRedeemOtp()" />
+          </div>
+          <div class="row" style="margin-top:8px">
+            <button class="btn btn-primary btn-compact" style="flex:1" onclick="uiRedeemOtp()">Ghép OTP</button>
+            <button class="btn btn-ghost" onclick="uiClearServerToken()">Xóa token cũ</button>
+          </div>
+          <div id="pair-status" class="hint-line">Chưa ghép Server. Xin mã OTP từ tab Quản trị (Admin).</div>
+        </div>
+
+        <!-- Khung nhập mã Pi Cục Bộ (hiện khi nối trực tiếp Pi :8080) -->
+        <div id="auth-box-pi" class="auth-box" style="display:none">
+          <div class="auth-title">Đăng nhập Pi Cục Bộ (<code>WEB_OPERATOR_TOKEN</code> / <code>WEB_ADMIN_TOKEN</code>)</div>
+          <div class="row">
+            <input id="pi-token-input" type="password" placeholder="Nhập mã truy cập Pi..." onkeydown="if(event.key==='Enter')uiLoginPiLocal()" />
+            <button class="btn btn-primary btn-compact" onclick="uiLoginPiLocal()">Kết nối Pi</button>
+            <button class="btn btn-ghost" onclick="uiClearPiToken()">Xóa mã</button>
+          </div>
+          <div id="pi-auth-status" class="hint-line">Chưa đăng nhập Pi cục bộ — nhập mã để mở khóa nút điều khiển.</div>
+        </div>
+      </div>
+      </div><!-- /driver-pane-cockpit -->
+
+      <!-- TAB CON 2 BÊN TÀI XẾ: ĐIỂM UY TÍN, LỊCH SỬ CHUYẾN & KHIẾU NẠI 48H (CHUẨN PBL4_HTTM) -->
+      <div id="driver-pane-score" class="sub-pane hidden">
+        <div class="card">
+          <div class="card-head">
+            <h2>🏆 Điểm Uy Tín &amp; An Toàn Lái Xe</h2>
+            <button class="btn btn-ghost btn-compact" style="min-height:34px;padding:6px 10px" onclick="uiRefreshDriverScoreAndViolations()">↻ Làm mới</button>
+          </div>
+          <div id="score-hero-box" class="score-hero ok">
+            <div id="score-circle" class="score-circle">
+              <div id="driver-score-num" class="score-num">100</div>
+              <div class="score-max">/100 điểm</div>
+            </div>
+            <div style="flex:1">
+              <span id="driver-score-badge" class="badge ok">HOẠT ĐỘNG TỐT</span>
+              <div id="driver-score-name" class="ai-engine-title" style="margin-top:4px">Hồ sơ Uy tín Tài xế</div>
+              <div id="driver-score-desc" class="ai-engine-detail">
+                Điểm &gt; 65: Đạt chuẩn an toàn cao. ≤ 65: Cảnh cáo vàng. ≤ 20: Báo động đỏ (tạm khóa nhận ca mới).
+              </div>
+            </div>
+          </div>
+          <div id="driver-trips-list" class="list-stack" style="margin-top:10px"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>📋 Lịch sử Vi phạm AI &amp; Khiếu nại (48h)</h2>
+            <span id="driver-viol-count" class="badge">0 vi phạm</span>
+          </div>
+          <div class="hint-line" style="margin-top:0;margin-bottom:10px">
+            Các vi phạm bị trừ điểm trong vòng 48 giờ được quyền gửi <strong>Khiếu nại 1 lần</strong> (áp dụng kiểm duyệt Four-Eyes Check).
+          </div>
+          <div id="driver-violations-list" class="list-stack">
+            <div class="hint-line">Ghép OTP Server PC ở tab Buồng lái để xem điểm an toàn, video vi phạm và gửi đơn khiếu nại.</div>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Card #2: Chế độ AI trực tiếp (MediaPipe 10s <-> YOLO) -->
-    <div class="card">
-      <h2>2. Chế độ AI trực tiếp (MediaPipe 10s ↔ YOLO)</h2>
-      <div id="ai-engine-box" class="ai-engine-box idle">
-        <div id="ai-engine-title" class="ai-engine-title">Chưa có dữ liệu AI trực tiếp</div>
-        <div id="ai-engine-detail" class="ai-engine-detail">
-          Kết nối Pi Cục Bộ hoặc ghép OTP Server để theo dõi MediaPipe 10s ↔ YOLO mỗi 2.5s.
-        </div>
-      </div>
-      <button id="btn-calibrate" class="btn btn-calib btn-full" style="margin-top:10px" data-action="CALIBRATE" onclick="uiStartCalibration()" disabled>
-        <span id="btn-calibrate-label">🎯 Bật MediaPipe 10s (Tạm tắt YOLO &amp; Giữ cấu hình)</span>
-        <small id="btn-calibrate-sub">Ngồi thẳng, mở mắt nhìn đường 10s để khóa ngưỡng cá nhân</small>
-      </button>
-      <div id="calib-status" class="calib-status">
-        Kết nối Pi Cục Bộ, Server OTP hoặc Bluetooth BLE để kích hoạt cân chỉnh 10s.
-      </div>
-    </div>
+    <!-- =================================================================== -->
+    <!-- PHÂN HỆ 2: BÊN QUẢN TRỊ (ADMIN / OPERATOR)                          -->
+    <!-- =================================================================== -->
+    <div id="portal-admin" class="portal-pane hidden">
 
-    <!-- Card #3: Thao tác nhanh tài xế -->
-    <div class="card">
-      <h2>3. Thao tác nhanh tài xế</h2>
-      <div class="grid-2">
-        <button class="btn btn-mute ble-action" data-action="MUTE" onclick="uiSendAction('MUTE')" disabled>
-          TẮT CÒI 30s
-          <small>MUTE (loa ESP1)</small>
-        </button>
-        <button class="btn btn-sos ble-action" data-action="SOS" onclick="uiSendSos()" disabled>
-          KHẨN CẤP (SOS)
-          <small>Báo điều phối ngay</small>
-        </button>
-        <button class="btn btn-ack ble-action" data-action="ACK" onclick="uiSendAction('ACK')" disabled>
-          TÔI ĐANG TỈNH
-          <small>ACK_AWAKE</small>
-        </button>
-        <button class="btn btn-rest ble-action" data-action="REST_START" onclick="uiSendAction('REST_START')" disabled>
-          BẮT ĐẦU NGHỈ
-          <small>REST_BREAK_START</small>
-        </button>
+      <!-- Card A1: Đăng nhập Quản trị (Server Admin/Operator hoặc Pi Cục Bộ) -->
+      <div class="card">
+        <div class="card-head">
+          <h2>1. Xác thực Quản trị viên (Admin / Operator)</h2>
+          <span id="admin-auth-badge" class="badge warn">CHƯA ĐĂNG NHẬP</span>
+        </div>
+        <div class="row">
+          <input id="admin-vehicle-id" placeholder="Mã xe (vd XE-01)" value="XE-01" style="max-width:130px" />
+          <input id="admin-token-input" type="password" placeholder="Token Admin / Operator (Server hoặc Pi)..." onkeydown="if(event.key==='Enter')uiLoginAdmin()" />
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn btn-primary btn-compact" style="flex:1" onclick="uiLoginAdmin()">🔐 Đăng nhập Quản trị</button>
+          <button class="btn btn-ghost" onclick="uiLogoutAdmin()">Đăng xuất</button>
+        </div>
+        <div id="admin-auth-status" class="hint-line">
+          Nhập token <code>admin</code> / <code>operator</code> (của Server PC hoặc Pi :8080) để mở khóa toàn bộ chức năng cấu hình và điều khiển từ xa.
+        </div>
       </div>
-      <button class="btn btn-ghost btn-full ble-action" style="margin-top:10px" data-action="REST_END" onclick="uiSendAction('REST_END')" disabled>
-        KẾT THÚC NGHỈ GIẢI LAO (REST_END)
-      </button>
-      <div id="actions-channel-note" class="hint-line">
-        Chưa có kênh điều khiển sẵn sàng (ưu tiên tự động: BLE → Pi cục bộ → Server HTTP).
-      </div>
-    </div>
 
-    <!-- Card #4: Định vị GPS & Nhiệt độ Pi -->
-    <div class="card">
-      <h2>4. Định vị GPS &amp; Nhiệt độ Pi trực tiếp</h2>
-      <div class="metrics metrics-4">
-        <div class="metric">
-          <div id="gps-speed" class="val">0.0</div>
-          <div class="lbl">km/h</div>
+      <!-- Card A2: Cấp mã OTP cho Tài xế (khi nối Server PC) -->
+      <div id="admin-otp-card" class="card">
+        <h2>2. Cấp mã OTP 8 ký tự cho Tài xế</h2>
+        <div class="row">
+          <input id="admin-otp-driver" placeholder="Tên / Mã tài xế (tùy chọn)" />
+          <button id="btn-admin-mint-otp" class="btn btn-ack btn-compact" onclick="uiAdminMintOtp()" disabled>🎟️ Tạo mã OTP (5p)</button>
         </div>
-        <div class="metric">
-          <div id="gps-sats" class="val">0</div>
-          <div class="lbl">Vệ tinh</div>
-        </div>
-        <div class="metric">
-          <div id="gps-fix" class="val">NO FIX</div>
-          <div class="lbl">GPS</div>
-        </div>
-        <div class="metric">
-          <div id="pi-temp" class="val">--°C</div>
-          <div class="lbl">Nhiệt Pi</div>
-        </div>
+        <div id="admin-otp-result" class="otp-result" style="display:none"></div>
+        <div class="hint-line">Tài xế nhập mã OTP này ở tab <strong>Tài xế (Driver)</strong> để ghép cặp an toàn với xe.</div>
       </div>
-      <div id="gps-coords" class="hint-line" style="text-align:center">
-        Tọa độ: chưa có khóa vệ tinh
-      </div>
-      <div class="row" style="margin-top:10px">
-        <button id="btn-phone-gps" class="btn btn-ghost btn-full" onclick="uiTogglePhoneGps()">
-          Bật chia sẻ GPS thật của điện thoại (dự phòng)
-        </button>
-      </div>
-      <div id="phone-gps-status" class="hint-line" style="text-align:center">
-        GPS điện thoại đang tắt (chỉ dùng chip GNSS thật khi bật — 0 tọa độ mẫu).
-      </div>
-    </div>
 
-    <!-- Card #5: Bluetooth ESP32 #2 (Song song) -->
-    <div class="card">
-      <h2>5. Bluetooth ESP32 #2 (PI_AI_HUB_* — Song song)</h2>
-      <div id="ble-compat-note" class="ble-note" style="display:none"></div>
-      <div class="row">
-        <button id="btn-connect" class="btn btn-primary btn-full" onclick="uiConnectBle()">
-          KẾT NỐI BLUETOOTH VỚI XE
-          <small>Tìm thiết bị PI_AI_HUB_* (không cần mã PIN)</small>
-        </button>
+      <!-- Card A3: Điều khiển Loa ESP32 #1 (Âm lượng & 7 Giọng nói) -->
+      <div class="card">
+        <div class="card-head">
+          <h2>3. Điều khiển Loa ESP32 #1 (MAX98357A)</h2>
+          <span id="admin-esp-vol-badge" class="badge">VOL: --%</span>
+        </div>
+        <div class="auth-title" style="margin-top:0">Âm lượng loa (mặc định mới: 80% — dùng nguồn Buck 5V/3A)</div>
+        <div class="admin-grid-5">
+          <button class="btn btn-ghost btn-compact admin-ctrl" onclick="uiAdminSendCmd('VOL:50')" disabled>50%</button>
+          <button class="btn btn-ghost btn-compact admin-ctrl" onclick="uiAdminSendCmd('VOL:65')" disabled>65%</button>
+          <button class="btn btn-primary btn-compact admin-ctrl" onclick="uiAdminSendCmd('VOL:80')" disabled>80%</button>
+          <button class="btn btn-ghost btn-compact admin-ctrl" onclick="uiAdminSendCmd('VOL:90')" disabled>90%</button>
+          <button class="btn btn-ghost btn-compact admin-ctrl" onclick="uiAdminSendCmd('VOL:100')" disabled>100%</button>
+        </div>
+        <div class="auth-title" style="margin-top:12px">Thử nghiệm âm thanh &amp; Báo động liên tục</div>
+        <div class="admin-grid-3">
+          <button class="btn btn-ghost btn-compact admin-ctrl" onclick="uiAdminSendCmd('VOICE:1')" disabled>😴 Buồn ngủ (V1)</button>
+          <button class="btn btn-ghost btn-compact admin-ctrl" onclick="uiAdminSendCmd('VOICE:2')" disabled>🥱 Ngáp dài (V2)</button>
+          <button class="btn btn-ghost btn-compact admin-ctrl" onclick="uiAdminSendCmd('VOICE:3')" disabled>👀 Mất tập trung (V3)</button>
+          <button class="btn btn-ghost btn-compact admin-ctrl" onclick="uiAdminSendCmd('VOICE:6')" disabled>📱 Điện thoại (V6)</button>
+          <button class="btn btn-ghost btn-compact admin-ctrl" onclick="uiAdminSendCmd('VOICE:7')" disabled>🚬 Hút thuốc (V7)</button>
+          <button class="btn btn-ghost btn-compact admin-ctrl" onclick="uiAdminSendCmd('VOICE:5')" disabled>🌫️ CO2 Cao (V5)</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn btn-sos btn-compact admin-ctrl" style="flex:1" onclick="uiAdminSendCmd('ALARM:ON')" disabled>🚨 Thử Báo động Lần 3</button>
+          <button class="btn btn-ack btn-compact admin-ctrl" style="flex:1" onclick="uiAdminSendCmd('ALARM:OFF')" disabled>🔇 Tắt Báo động / STOP</button>
+        </div>
       </div>
-      <div class="row" style="margin-top:8px">
-        <button id="btn-disconnect" class="btn btn-ghost" style="flex:1" onclick="uiDisconnectBle()" disabled>Ngắt BLE</button>
-        <button id="btn-status" class="btn btn-ghost" style="flex:1" data-action="STATUS" onclick="uiSendAction('STATUS')" disabled>Kiểm tra trạng thái</button>
-      </div>
-    </div>
 
-    <!-- Card #6: Nhật ký -->
-    <div class="card">
-      <h2>6. Nhật ký hoạt động (BLE / Pi / Server)</h2>
-      <pre id="ble-log">Sẵn sàng kết nối tới Pi Cục Bộ, Server PC hoặc PI_AI_HUB_*...</pre>
+      <!-- Card A4: Cấu hình Tham số AI, Đếm Buồn Ngủ & 3 Chế độ Giám Sát -->
+      <div class="card">
+        <h2>4. Cấu hình Tham số AI &amp; Chính sách Giám sát</h2>
+        <label class="cfg-check"><input type="checkbox" id="adm-cfg-smoking" checked /> Bật cảnh báo Hút thuốc (YOLO + MQ-135)</label>
+        <label class="cfg-check"><input type="checkbox" id="adm-cfg-phone" checked /> Bật cảnh báo Sử dụng Điện thoại</label>
+        <div class="cfg-grid">
+          <label class="cfg-field">Cửa sổ đếm buồn ngủ (120–240 giây)
+            <input id="adm-cfg-drowsy-win" type="number" min="120" max="240" value="180" />
+          </label>
+          <label class="cfg-field">Số lần buồn ngủ kích hoạt báo động (2–5)
+            <input id="adm-cfg-drowsy-lim" type="number" min="2" max="5" value="3" />
+          </label>
+          <label class="cfg-field">Ngưỡng báo vắng mặt ở AUTO (15–30s)
+            <input id="adm-cfg-absence-s" type="number" min="15" max="30" value="20" />
+          </label>
+          <label class="cfg-field">Thời gian Tạm tắt (5–60 phút)
+            <input id="adm-cfg-pause-min" type="number" min="5" max="60" value="30" />
+          </label>
+          <label class="cfg-field">Vận tốc tự bật lại từ Ngủ nghỉ (km/h)
+            <input id="adm-cfg-resume-spd" type="number" min="5" max="40" value="15" />
+          </label>
+          <label class="cfg-field">Ngưỡng tin cậy Hút thuốc (0.2–0.9)
+            <input id="adm-cfg-smoke-conf" type="number" min="0.2" max="0.9" step="0.05" value="0.40" />
+          </label>
+        </div>
+        <button id="btn-admin-save-cfg" class="btn btn-primary btn-compact btn-full admin-ctrl" style="margin-top:10px" onclick="uiAdminSaveConfig()" disabled>
+          💾 Lưu &amp; Đẩy cấu hình xuống Raspberry Pi
+        </button>
+        <div id="admin-cfg-status" class="hint-line">Thay đổi sẽ được áp dụng trực tiếp lên Pi mà không cần khởi động lại.</div>
+      </div>
+
+      <!-- Card A5: Duyệt Đơn Khiếu nại từ Tài xế (Four-Eyes Check — chuẩn PBL4_HTTM) -->
+      <div id="admin-disputes-card" class="card">
+        <div class="card-head">
+          <h2>5. Duyệt Khiếu nại Tài xế (Four-Eyes Check)</h2>
+          <button class="btn btn-ghost btn-compact admin-ctrl" style="min-height:34px;padding:6px 10px" onclick="uiAdminRefreshDisputes()" disabled>↻ Tải đơn</button>
+        </div>
+        <div class="hint-line" style="margin-top:0;margin-bottom:10px">
+          Nguyên tắc Four-Eyes: Người duyệt phạt ban đầu (operator) không được tự xử lý đơn khiếu nại; Chấp nhận sẽ tự động hoàn điểm an toàn cho tài xế.
+        </div>
+        <div id="admin-disputes-list" class="list-stack">
+          <div class="hint-line">Đăng nhập Quản trị Server PC để xem và xử lý đơn khiếu nại từ tài xế.</div>
+        </div>
+      </div>
+
+      <!-- Card A6: Ghi đè Chế độ xe từ xa & Liên kết Dashboard -->
+      <div class="card">
+        <h2>6. Ghi đè Chế độ &amp; Truy cập nhanh</h2>
+        <div class="admin-grid-3">
+          <button class="btn btn-ack btn-compact admin-ctrl" onclick="uiAdminSendCmd('MODE_AUTO')" disabled>🟢 Ép AUTO</button>
+          <button class="btn btn-mute btn-compact admin-ctrl" onclick="uiAdminSendCmd('MODE_PAUSE_30M')" disabled>🟡 Tạm tắt 30p</button>
+          <button class="btn btn-rest btn-compact admin-ctrl" onclick="uiAdminSendCmd('MODE_REST_OFF')" disabled>🌙 Nghỉ/Ngủ</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <a id="admin-open-dashboard-link" href="/" target="_blank" rel="noopener" class="btn btn-ghost btn-compact" style="flex:1;text-decoration:none">
+            📊 Mở Fleet Dashboard / Live Cam (/)
+          </a>
+        </div>
+      </div>
+
+      <!-- Card A7: Nhật ký kỹ thuật (BLE / Pi / Server) -->
+      <div class="card">
+        <h2>7. Nhật ký hoạt động (BLE / Pi / Server)</h2>
+        <pre id="ble-log">Sẵn sàng kết nối tới Pi Cục Bộ, Server PC hoặc PI_AI_HUB_*...</pre>
+      </div>
     </div>
   </div>
 
-  <script src="./driver_ble.js?v=7"></script>
+  <!-- MODAL GỬI KHIẾU NẠI 48H (Tài xế) -->
+  <div id="dispute-modal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <div class="card-head">
+        <h2 id="dispute-modal-title" style="color:#f8fafc">⚖️ Khiếu nại Vi phạm</h2>
+        <button class="btn btn-ghost btn-compact" style="min-height:34px;padding:4px 10px" onclick="uiCloseDisputeModal()">✕</button>
+      </div>
+      <div id="dispute-modal-sub" class="hint-line" style="margin-top:0"></div>
+      <div class="auth-title" style="margin-top:10px">Chọn lý do khiếu nại *</div>
+      <div id="dispute-reason-list" class="reason-grid">
+        <button class="reason-btn active" data-reason="FALSE_DETECTION" onclick="uiSelectDisputeReason('FALSE_DETECTION')">AI nhận diện nhầm hành vi</button>
+        <button class="reason-btn" data-reason="SENSOR_ERROR" onclick="uiSelectDisputeReason('SENSOR_ERROR')">Nhiễu cảm biến MQ-135 / GPS</button>
+        <button class="reason-btn" data-reason="NOT_ME" onclick="uiSelectDisputeReason('NOT_ME')">Đã đổi tài nhưng chưa kịp cập nhật</button>
+        <button class="reason-btn" data-reason="OTHER" onclick="uiSelectDisputeReason('OTHER')">Lý do khác</button>
+      </div>
+      <div class="auth-title">Nội dung giải trình chi tiết *</div>
+      <textarea id="dispute-explanation" placeholder="Mô tả cụ thể tình huống lúc xảy ra cảnh báo..."></textarea>
+      <div id="dispute-modal-err" class="hint-line err"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn btn-ghost btn-compact" style="flex:1" onclick="uiCloseDisputeModal()">Hủy</button>
+        <button id="btn-submit-dispute" class="btn btn-primary btn-compact" style="flex:2" onclick="uiSubmitDispute()">📨 Gửi đơn Khiếu nại</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL XEM VIDEO / ẢNH BẰNG CHỨNG -->
+  <div id="evidence-modal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <div class="card-head">
+        <h2 id="evidence-modal-title" style="color:#f8fafc">🎬 Bằng chứng Vi phạm</h2>
+        <button class="btn btn-ghost btn-compact" style="min-height:34px;padding:4px 10px" onclick="uiCloseEvidenceModal()">✕</button>
+      </div>
+      <video id="evidence-video" controls playsinline style="width:100%;max-height:320px;border-radius:10px;background:#000;display:none"></video>
+      <img id="evidence-img" alt="Bằng chứng vi phạm" style="width:100%;max-height:320px;object-fit:contain;border-radius:10px;background:#000;display:none" />
+      <div id="evidence-modal-note" class="hint-line"></div>
+    </div>
+  </div>
+
+  <script src="./driver_ble.js?v=9"></script>
 </body>
 </html>

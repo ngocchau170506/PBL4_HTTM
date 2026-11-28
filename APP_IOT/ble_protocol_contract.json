@@ -14,6 +14,10 @@
   },
   "commands_phone_to_esp2": [
     {"cmd": "MUTE", "aliases": ["MUTE_ALERT", "M"], "effect": "Silences ESP32 #1 speaker for 30s and logs alert_dismissed on Server"},
+    {"cmd": "DISMISS_ALARM", "aliases": ["ALARM_OFF", "STOP_ALARM", "DISMISS_DROWSY_ALARM"], "effect": "Stops Level-3 drowsy latched alarm on ESP32 #1 and starts 2-4 min relapse probation window on Pi 4"},
+    {"cmd": "MODE_AUTO", "aliases": ["AUTO"], "effect": "Sets monitoring mode to AUTO (default on boot; auto-detects presence & absence)"},
+    {"cmd": "MODE_PAUSE", "aliases": ["MODE_PAUSE_30M"], "effect": "Sets monitoring mode to TEMP_PAUSE_30M (suppresses absence alert 30 min; keeps violation alerts if driver is visible)"},
+    {"cmd": "MODE_SLEEP", "aliases": ["MODE_REST_OFF", "REST_OFF"], "effect": "Sets monitoring mode to REST_SLEEP_OFF (camera monitors silently for sleeping/eating; auto-resumes AUTO at >=15 km/h or Pi reboot)"},
     {"cmd": "SOS", "aliases": ["HELP"], "effect": "Raises CRITICAL SOS_PRESSED incident on Server (0 driver Safety Score penalty!)"},
     {"cmd": "ACK", "aliases": ["ACK_AWAKE", "OK"], "effect": "Logs driver awake confirmation event"},
     {"cmd": "REST_START", "aliases": ["REST_BREAK_START"], "effect": "Marks driver rest break started"},
@@ -22,7 +26,7 @@
     {"cmd": "STATUS", "aliases": ["?"], "effect": "Requests immediate STATUS:{...} JSON snapshot from ESP32 #2"}
   ],
   "notifications_esp2_to_phone": [
-    {"prefix": "ALERT:", "example": "ALERT:DROWSY|Eye_Closed 2.1s", "meaning": "Real-time safety alert from Pi 4 -> ESP2 -> Phone; NOTE: ALERT:CALIB_START|10s, ALERT:CALIB_PROGRESS|<n>s, ALERT:CALIB_DONE|locked, ALERT:CALIB_FAIL|<reason>, and ALERT:INFO|... are informational calibration notices (MUST NOT trigger danger siren/red banner!)"},
+    {"prefix": "ALERT:", "example": "ALERT:DROWSY|Eye_Closed 2.1s", "meaning": "Real-time safety alert from Pi 4 -> ESP2 -> Phone; includes DROWSY_LEVEL3, DROWSY_RELAPSE, DRIVER_ABSENT, MODE_AUTO; NOTE: ALERT:CALIB_START|10s, ALERT:CALIB_PROGRESS|<n>s, ALERT:CALIB_DONE|locked, ALERT:CALIB_FAIL|<reason>, and ALERT:INFO|... are informational notices (MUST NOT trigger danger siren/red banner!)"},
     {"prefix": "GPS:", "example": "GPS:{\"fix\":true,\"lat\":16.061234,\"lon\":108.212345,\"spd\":32.5,\"sats\":8}", "meaning": "Live UART2 hardware GPS pushed every 2s while BLE connected"},
     {"prefix": "STATUS:", "example": "STATUS:{\"role\":\"COMMS_BLE_GPS_HUB\",\"fw\":\"PI_AI_3.1\",\"pi_alive\":true,...}", "meaning": "Full ESP2 hub status JSON on STATUS command"},
     {"prefix": "OK:", "example": "OK:MUTE_ALERT", "meaning": "Command accepted by ESP2 and forwarded over USB UART to Pi 4"},
@@ -33,8 +37,13 @@
     "pair_otp_issue_operator": "POST /api/v1/phone/pair_otp (alias /api/v1/phone/pair/otp also supported; requires operator token; returns 5-min single-use pair_code)",
     "pair_phone_redeem": "POST /api/v1/phone/pair (no prior login needed on /driver; rate-limited; body: {vehicle_id, pair_code, driver_id}; returns driver_phone_token)",
     "phone_telemetry_fallback": "POST /api/v1/phone/telemetry (Bearer driver_phone_token; sends phone_gps fallback when hardware GPS indoors)",
-    "phone_action_direct": "POST /api/v1/phone/action (Bearer driver_phone_token; action in MUTE_ALERT|SOS|ACK_AWAKE|REST_BREAK_START|REST_BREAK_END|CALIBRATE_LOCK)",
-    "phone_notifications_pull": "GET /api/v1/phone/notifications?vehicle_id=XE-01 (Bearer driver_phone_token)"
+    "phone_action_direct": "POST /api/v1/phone/action (Bearer driver_phone_token; action in MUTE_ALERT|DISMISS_DROWSY_ALARM|MODE_AUTO|MODE_PAUSE_30M|MODE_REST_OFF|SOS|ACK_AWAKE|REST_BREAK_START|REST_BREAK_END|CALIBRATE_LOCK)",
+    "phone_notifications_pull": "GET /api/v1/phone/notifications?vehicle_id=XE-01 (Bearer driver_phone_token)",
+    "phone_status_live": "GET /api/v1/phone/status?vehicle_id=XE-01 (Bearer driver_phone_token; returns driver_state, calibration, drowsy_escalation, monitoring, esp, gps, pi)",
+    "phone_score_and_violations": "GET /api/v1/phone/score_summary?vehicle_id=XE-01 (Bearer driver_phone_token; returns current_score /100, score_tier GREEN_GOOD|YELLOW_WARN|RED_LOCKED, trips, violations with can_dispute & dispute_status)",
+    "phone_dispute_submit": "POST /api/v1/phone/disputes (Bearer driver_phone_token; body: {vehicle_id, violation_event_id, reason_code: FALSE_DETECTION|SENSOR_ERROR|NOT_ME|OTHER, explanation}; 48h window, 1 per violation)",
+    "admin_disputes_list": "GET /api/v1/disputes?vehicle_id=XE-01 (Admin/Operator/Viewer token)",
+    "admin_dispute_resolve": "POST /api/v1/disputes/{dispute_id}/resolve (Operator/Admin token; Four-Eyes Check; body: {decision: APPROVED|REJECTED, response_note})"
   },
   "web_bluetooth_constraints": [
     "Chrome/Edge Android requires HTTPS (use Cloudflare Tunnel or localhost) — plain http://192.168.x.x is blocked by browser security policy.",

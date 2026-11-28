@@ -8,8 +8,17 @@ from typing import Optional
 from server_ai.server_core import config, database
 from server_ai.server_core.sse_broker import broker
 
-# Positive driver status actions (via BLE/App) are NOT alarm mutes and MUST NOT trigger MUTE_ABUSE!
-NON_MUTE_DRIVER_ACTIONS = frozenset({"ACK_AWAKE", "REST_BREAK_START", "REST_BREAK_END"})
+# Positive driver status & mode actions (via BLE/App) are NOT alarm mutes and MUST NOT trigger MUTE_ABUSE!
+NON_MUTE_DRIVER_ACTIONS = frozenset({
+    "ACK_AWAKE",
+    "REST_BREAK_START",
+    "REST_BREAK_END",
+    "MODE_AUTO",
+    "MODE_TEMP_PAUSE_30M",
+    "MODE_REST_SLEEP_OFF",
+    "MODE_PAUSE_30M",
+    "MODE_REST_OFF",
+})
 
 
 def _grade_reaction(reaction_time_ms: Optional[int]) -> Optional[str]:

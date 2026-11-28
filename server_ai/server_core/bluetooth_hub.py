@@ -14,7 +14,18 @@ from fastapi import HTTPException
 from server_ai.server_core import database, geo_engine
 from server_ai.server_core.sse_broker import broker
 
-ACTION_TYPES = {"ACK_AWAKE", "MUTE_ALERT", "REST_BREAK_START", "REST_BREAK_END", "SOS", "CALIBRATE_LOCK"}
+ACTION_TYPES = {
+    "ACK_AWAKE",
+    "MUTE_ALERT",
+    "REST_BREAK_START",
+    "REST_BREAK_END",
+    "SOS",
+    "CALIBRATE_LOCK",
+    "DISMISS_DROWSY_ALARM",
+    "MODE_AUTO",
+    "MODE_PAUSE_30M",
+    "MODE_REST_OFF",
+}
 OTP_TTL_S = 300.0
 
 
@@ -269,6 +280,44 @@ def phone_action(
                     vehicle_id,
                     time.time(),
                     "PHONE_CALIBRATE_LOCK",
+                    database.dumps({**detail, "command_id": command_id}),
+                ),
+            )
+    elif action == "DISMISS_DROWSY_ALARM":
+        from server_ai.server_core import commands
+        from server_ai.server_core.mute_tracker import record_dismissal
+
+        record_dismissal(
+            vehicle_id=vehicle_id,
+            dismiss_source="PHONE_BLE",
+            dismissed_alert_type="DROWSY_LEVEL3_DISMISSED",
+            driver_id=detail.get("driver_id"),
+            gps=detail.get("gps"),
+        )
+        queued = commands.enqueue_command(
+            vehicle_id,
+            "DISMISS_DROWSY_ALARM",
+            source="PHONE_HTTP",
+            actor_role=actor_role or "driver_phone",
+        )
+        command_id = queued["cmd_uid"]
+    elif action in ("MODE_AUTO", "MODE_PAUSE_30M", "MODE_REST_OFF"):
+        from server_ai.server_core import commands
+
+        queued = commands.enqueue_command(
+            vehicle_id,
+            action,
+            source="PHONE_HTTP",
+            actor_role=actor_role or "driver_phone",
+        )
+        command_id = queued["cmd_uid"]
+        with database.tx() as conn:
+            conn.execute(
+                "INSERT INTO cabin_sensor_events (vehicle_id, ts, sensor_type, payload_json) VALUES (?,?,?,?)",
+                (
+                    vehicle_id,
+                    time.time(),
+                    f"PHONE_{action}",
                     database.dumps({**detail, "command_id": command_id}),
                 ),
             )

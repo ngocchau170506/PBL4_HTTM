@@ -44,7 +44,8 @@
 #define MQ_PIN             34
 #define LED_PIN            2
 
-#define DEFAULT_VOL_PCT    65     // USB-safe default; raise to 85-95 via VOL:90 on dedicated 5V/3A Buck
+#define DEFAULT_VOL_PCT    80     // Raised to 80% for clear cabin alerts (use dedicated 5V/3A Buck for MAX98357A)
+#define VOL_NVS_SCHEMA_VER 2      // One-time NVS upgrade from legacy 65% -> 80%
 #define VOICE_GAIN_PCT     100
 #define CO2_WARN_PPM       1000.0f
 #define CO2_CRIT_PPM       1500.0f
@@ -57,11 +58,13 @@ Preferences prefs;
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
 static i2s_chan_handle_t i2sTxChan = NULL;
 #endif
-static bool          isI2sReady      = false;
-static int           audioVolumePct  = DEFAULT_VOL_PCT;
-static bool          isPlayingVoice  = false;
-static bool          stopRequested   = false;
-static int           pendingVoice    = 0;
+static bool          isI2sReady           = false;
+static int           audioVolumePct       = DEFAULT_VOL_PCT;
+static bool          isPlayingVoice       = false;
+static bool          stopRequested        = false;
+static int           pendingVoice         = 0;
+static int           continuousAlarmMode  = 0;   // 0=OFF, 1=LEVEL3_ALARM (ALARM:ON), 2=RELAPSE_CONT (ALARM:CONT)
+static unsigned long nextAlarmCycleMs     = 0;
 
 static float         ppmFiltered     = 400.0f;
 static int           adcRaw          = 0;
@@ -221,12 +224,31 @@ static bool pollDuringAudio(int currentClip) {
     if (cmd == "STOP") {
       cmdUntilMs = 0;
       pendingVoice = 0;
+      continuousAlarmMode = 0;
       Serial.println("EVT,ACK,STOP_INTERRUPT");
       return true;
     } else if (cmd == "MUTE") {
       muteUntilMs = millis() + MUTE_DURATION_MS;
       pendingVoice = 0;
+      continuousAlarmMode = 0;
       Serial.println("EVT,ACK,MUTE_INTERRUPT");
+      return true;
+    } else if (cmd == "ALARM:OFF") {
+      cmdUntilMs = 0;
+      pendingVoice = 0;
+      continuousAlarmMode = 0;
+      Serial.println("EVT,ACK,ALARM,OFF");
+      return true;
+    } else if (cmd == "ALARM:ON") {
+      continuousAlarmMode = 1;
+      nextAlarmCycleMs = 0;
+      Serial.println("EVT,ACK,ALARM,ON");
+      return true;
+    } else if (cmd == "ALARM:CONT") {
+      muteUntilMs = 0;  // Relapse emergency alarm overrides any earlier 30s software mute
+      continuousAlarmMode = 2;
+      nextAlarmCycleMs = 0;
+      Serial.println("EVT,ACK,ALARM,CONT");
       return true;
     } else if (cmd == "PING") {
       Serial.println("PONG");
@@ -263,18 +285,21 @@ static bool pollDuringAudio(int currentClip) {
   return false;
 }
 
-static void playBeepTone(int freqHz, int durationMs) {
+static bool playBeepSegment(int freqHz, int durationMs, bool bypassMute) {
   unsigned long now = millis();
-  if (!isI2sReady || isBeforeDeadline(now, muteUntilMs)) return;
+  if (!isI2sReady || (!bypassMute && isBeforeDeadline(now, muteUntilMs))) return false;
   int samples = (I2S_SAMPLE_RATE * durationMs) / 1000;
   int16_t buf[128];
   int idx = 0;
-  const int32_t amp = (28000L * audioVolumePct) / 100;
+  const int32_t amp = (29000L * audioVolumePct) / 100;
 
   stopRequested = false;
   for (int i = 0; i < samples; i++) {
-    if (stopRequested || isBeforeDeadline(millis(), muteUntilMs)) break;
-    int16_t sample = (int16_t)(sin(2.0 * PI * freqHz * i / I2S_SAMPLE_RATE) * amp);
+    if (stopRequested || (!bypassMute && isBeforeDeadline(millis(), muteUntilMs))) break;
+    // Slight 3rd-harmonic blend makes cabin wake-up pip-pip cut clearly through road noise
+    double ph = 2.0 * PI * freqHz * i / I2S_SAMPLE_RATE;
+    double wave = 0.85 * sin(ph) + 0.15 * sin(3.0 * ph);
+    int16_t sample = (int16_t)(wave * amp);
     buf[idx++] = sample;
     buf[idx++] = sample;
     if (idx >= 128) {
@@ -286,16 +311,50 @@ static void playBeepTone(int freqHz, int durationMs) {
       }
     }
   }
-  if (!stopRequested && !isBeforeDeadline(millis(), muteUntilMs) && idx > 0) {
+  if (!stopRequested && (bypassMute || !isBeforeDeadline(millis(), muteUntilMs)) && idx > 0) {
     i2sWriteBlock(buf, (size_t)idx * sizeof(int16_t), 100);
   }
-  i2sFlushSilence();
+  bool interrupted = stopRequested || (!bypassMute && isBeforeDeadline(millis(), muteUntilMs));
   stopRequested = false;
+  return !interrupted;
 }
 
-static void playVoiceClip(int clipId) {
+static bool playSilenceGapMs(int gapMs, bool bypassMute) {
+  if (!isI2sReady || gapMs <= 0) return true;
+  int16_t zero[128];
+  memset(zero, 0, sizeof(zero));
+  int blocks = (I2S_SAMPLE_RATE * gapMs) / (1000 * 64);
+  for (int i = 0; i < blocks; i++) {
+    if (!bypassMute && isBeforeDeadline(millis(), muteUntilMs)) return false;
+    i2sWriteBlock(zero, sizeof(zero), 50);
+    if (pollDuringAudio(0)) return false;
+  }
+  return true;
+}
+
+static bool playWakeupPipSequence(int pulses, int freqA, int freqB, int toneMs, int gapMs, bool bypassMute) {
+  for (int p = 0; p < pulses; p++) {
+    int f = (p % 2 == 0) ? freqA : freqB;
+    if (!playBeepSegment(f, toneMs, bypassMute)) {
+      i2sFlushSilence();
+      return false;
+    }
+    if (!playSilenceGapMs(gapMs, bypassMute)) {
+      i2sFlushSilence();
+      return false;
+    }
+  }
+  return true;
+}
+
+static void playBeepTone(int freqHz, int durationMs) {
+  playBeepSegment(freqHz, durationMs, false);
+  i2sFlushSilence();
+}
+
+static void playVoiceClip(int clipId, bool withLeadChime = true, bool bypassMute = false) {
   unsigned long now = millis();
-  if (!isI2sReady || isBeforeDeadline(now, muteUntilMs)) return;
+  if (!isI2sReady || (!bypassMute && isBeforeDeadline(now, muteUntilMs))) return;
   if (clipId < 1 || clipId > VOICE_CLIP_COUNT) return;
 
   const uint8_t *data = VOICE_CLIPS[clipId - 1];
@@ -306,10 +365,30 @@ static void playVoiceClip(int clipId) {
   isPlayingVoice = true;
   digitalWrite(LED_PIN, HIGH);
 
+  if (withLeadChime) {
+    bool chimeOk = true;
+    if (clipId == 1) {
+      // DROWSY: 2 crisp alternating wake-up pip-pip tones before speech
+      chimeOk = playWakeupPipSequence(2, 2000, 2500, 95, 65, bypassMute);
+    } else if (clipId == 6) {
+      // PHONE: 1 crisp attention chime
+      chimeOk = playWakeupPipSequence(1, 1750, 1750, 100, 60, bypassMute);
+    } else if (clipId == 7) {
+      // SMOKING: 2 short attention beeps
+      chimeOk = playWakeupPipSequence(2, 1600, 2100, 80, 60, bypassMute);
+    }
+    if (!chimeOk) {
+      isPlayingVoice = false;
+      stopRequested = false;
+      digitalWrite(LED_PIN, LOW);
+      return;
+    }
+  }
+
   int16_t buf[128];
   int bufIdx = 0;
   for (uint32_t i = 0; i < len; i++) {
-    if (stopRequested || isBeforeDeadline(millis(), muteUntilMs)) break;
+    if (stopRequested || (!bypassMute && isBeforeDeadline(millis(), muteUntilMs))) break;
     int16_t sample = applyVolume(ulawDecode(pgm_read_byte(&data[i])));
     buf[bufIdx++] = sample;
     buf[bufIdx++] = sample;
@@ -322,7 +401,7 @@ static void playVoiceClip(int clipId) {
       }
     }
   }
-  if (!stopRequested && !isBeforeDeadline(millis(), muteUntilMs) && bufIdx > 0) {
+  if (!stopRequested && (bypassMute || !isBeforeDeadline(millis(), muteUntilMs)) && bufIdx > 0) {
     i2sWriteBlock(buf, (size_t)bufIdx * sizeof(int16_t), 100);
   }
   i2sFlushSilence();
@@ -340,13 +419,30 @@ static void handleCommand(const String &cmd) {
   } else if (cmd == "STOP") {
     cmdUntilMs = 0;
     pendingVoice = 0;
+    continuousAlarmMode = 0;
     stopRequested = true;
     Serial.println("EVT,ACK,STOP");
   } else if (cmd == "MUTE") {
     muteUntilMs = millis() + MUTE_DURATION_MS;
     pendingVoice = 0;
+    continuousAlarmMode = 0;
     stopRequested = true;
     Serial.println("EVT,ACK,MUTE");
+  } else if (cmd == "ALARM:ON") {
+    continuousAlarmMode = 1;
+    nextAlarmCycleMs = 0;
+    Serial.println("EVT,ACK,ALARM,ON");
+  } else if (cmd == "ALARM:CONT") {
+    muteUntilMs = 0;
+    continuousAlarmMode = 2;
+    nextAlarmCycleMs = 0;
+    Serial.println("EVT,ACK,ALARM,CONT");
+  } else if (cmd == "ALARM:OFF") {
+    cmdUntilMs = 0;
+    pendingVoice = 0;
+    continuousAlarmMode = 0;
+    stopRequested = true;
+    Serial.println("EVT,ACK,ALARM,OFF");
   } else if (cmd.startsWith("VOL:")) {
     int v = cmd.substring(4).toInt();
     if (v >= 10 && v <= 100) {
@@ -394,12 +490,12 @@ static void publishTelemetryIfDue(unsigned long now) {
 
   bool warmingUp = (now - bootMs) < MQ_WARMUP_MS;
   bool muted = isBeforeDeadline(now, muteUntilMs);
-  char buf[220];
+  char buf[240];
   snprintf(
     buf,
     sizeof(buf),
     "{\"seq\":%lu,\"role\":\"AUDIO_MQ135_NODE\",\"co2_ppm\":%.1f,\"raw_adc\":%d,"
-    "\"co2_level\":%d,\"warmup\":%s,\"muted\":%s,\"vol\":%d,\"free_heap\":%lu}",
+    "\"co2_level\":%d,\"warmup\":%s,\"muted\":%s,\"vol\":%d,\"alarm_mode\":%d,\"free_heap\":%lu}",
     seqCounter,
     ppmFiltered,
     adcRaw,
@@ -407,6 +503,7 @@ static void publishTelemetryIfDue(unsigned long now) {
     warmingUp ? "true" : "false",
     muted ? "true" : "false",
     audioVolumePct,
+    continuousAlarmMode,
     (unsigned long)ESP.getFreeHeap()
   );
   Serial.print("FDESP:");
@@ -426,8 +523,15 @@ void setup() {
   pinMode(MQ_PIN, INPUT);
   digitalWrite(LED_PIN, LOW);
 
-  prefs.begin("pi_ai_esp1", true);
-  audioVolumePct = constrain(prefs.getInt("vol", DEFAULT_VOL_PCT), 10, 100);
+  prefs.begin("pi_ai_esp1", false);
+  int savedVer = prefs.getInt("vol_v", 0);
+  int savedVol = prefs.getInt("vol", DEFAULT_VOL_PCT);
+  if (savedVer < VOL_NVS_SCHEMA_VER) {
+    if (savedVol <= 65) savedVol = DEFAULT_VOL_PCT;
+    prefs.putInt("vol", savedVol);
+    prefs.putInt("vol_v", VOL_NVS_SCHEMA_VER);
+  }
+  audioVolumePct = constrain(savedVol, 10, 100);
   prefs.end();
 
   initI2S();
@@ -455,6 +559,30 @@ void loop() {
     int cid = pendingVoice;
     pendingVoice = 0;
     playVoiceClip(cid);
+  }
+
+  // Continuous Level-3 / Relapse Drowsy Alarm loop (instantly interruptible via ALARM:OFF / STOP / MUTE)
+  unsigned long nowAlarm = millis();
+  if (continuousAlarmMode > 0 && nowAlarm >= nextAlarmCycleMs) {
+    bool isRelapse = (continuousAlarmMode >= 2);
+    if (isRelapse || !isBeforeDeadline(nowAlarm, muteUntilMs)) {
+      bool okPip = playWakeupPipSequence(
+        isRelapse ? 4 : 3,
+        isRelapse ? 2200 : 2000,
+        isRelapse ? 2800 : 2600,
+        isRelapse ? 90 : 105,
+        isRelapse ? 55 : 65,
+        isRelapse
+      );
+      if (okPip && continuousAlarmMode > 0) {
+        playVoiceClip(1, false, isRelapse);
+      }
+      if (continuousAlarmMode > 0) {
+        nextAlarmCycleMs = millis() + (isRelapse ? 350UL : 1000UL);
+      }
+    } else {
+      nextAlarmCycleMs = nowAlarm + 250UL;
+    }
   }
 
   unsigned long now = millis();

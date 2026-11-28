@@ -44,7 +44,7 @@
         </table>
       </div>
       <div class="panel">
-        <h3>Giám sát Nguồn, Nhiệt (ngưỡng 70°C) & 2 Bo ESP32</h3>
+        <h3>Giám sát Nguồn, Nhiệt (ngưỡng 80°C) & 2 Bo ESP32</h3>
         <table id="hw-power-table">
           <thead><tr><th>Xe</th><th>Nhiệt Pi</th><th>Áp Core (V)</th><th>Throttled / Sụt áp</th><th>Cam / AI FPS</th><th>ESP #1 (Audio MAX98357A / MQ-135)</th><th>ESP #2 (BLE / GPS / Wi-Fi Survival / Heap)</th></tr></thead>
           <tbody></tbody>
@@ -144,17 +144,27 @@
         <div class="row">
           <input id="cmd-vehicle" placeholder="vehicle_id (vd XE-01)">
           <select id="cmd-select">
-            <option value="VOICE:1">VOICE:1 (Ngủ gật)</option>
-            <option value="VOICE:2">VOICE:2 (Ngáp)</option>
+            <option value="VOICE:1">VOICE:1 (Píp-píp + Buồn ngủ)</option>
+            <option value="VOICE:2">VOICE:2 (Ngáp dài)</option>
             <option value="VOICE:3">VOICE:3 (Mất tập trung)</option>
             <option value="VOICE:4">VOICE:4 (CO2 cảnh báo)</option>
             <option value="VOICE:5">VOICE:5 (CO2 nguy hiểm)</option>
+            <option value="VOICE:6">VOICE:6 (Sử dụng điện thoại)</option>
+            <option value="VOICE:7">VOICE:7 (Hút thuốc trên xe)</option>
+            <option value="ALARM:ON">ALARM:ON (Bật báo động buồn ngủ liên tục)</option>
+            <option value="ALARM:OFF">ALARM:OFF (Tắt báo động liên tục)</option>
+            <option value="DISMISS_DROWSY_ALARM">DISMISS_DROWSY_ALARM (Tắt loa lần 3 & kiểm tra lại 2-4p)</option>
+            <option value="MODE_AUTO">MODE_AUTO (Chế độ 1: Tự động giám sát)</option>
+            <option value="MODE_PAUSE_30M">MODE_PAUSE_30M (Chế độ 2: Tạm tắt vắng mặt 30p)</option>
+            <option value="MODE_REST_OFF">MODE_REST_OFF (Chế độ 3: Nghỉ / Ngủ trên xe)</option>
             <option value="VOL:50">VOL:50 (Âm lượng loa 50%)</option>
-            <option value="VOL:65">VOL:65 (Âm lượng loa 65% — USB)</option>
-            <option value="VOL:85">VOL:85 (Âm lượng loa 85% — Buck)</option>
+            <option value="VOL:65">VOL:65 (Âm lượng loa 65%)</option>
+            <option value="VOL:80">VOL:80 (Âm lượng loa 80% — Mặc định mới)</option>
+            <option value="VOL:90">VOL:90 (Âm lượng loa 90% — Buck 5V/3A)</option>
             <option value="VOL:100">VOL:100 (Âm lượng loa 100%)</option>
-            <option value="STOP">STOP (Tắt loa)</option>
+            <option value="STOP">STOP (Tắt loa ngay)</option>
             <option value="MUTE">MUTE (Tạm im 30s)</option>
+            <option value="CALIBRATE">CALIBRATE (Cân chỉnh MediaPipe 10s)</option>
             <option value="WHOAMI">WHOAMI (Kiểm tra vai trò ESP)</option>
             <option value="PING">PING</option>
           </select>
@@ -167,10 +177,13 @@
       </div>
       <div class="panel">
         <h3>Cấu hình từ xa (Remote Config -> Pi)</h3>
-        <div class="row">
+        <div class="row" style="flex-wrap:wrap;gap:10px">
           <input id="cfg-vehicle" placeholder="vehicle_id (vd XE-01)">
-          <label><input type="checkbox" id="cfg-smoking" checked> Cho phép cảnh báo Smoking</label>
-          <label><input type="checkbox" id="cfg-phone" checked> Cho phép cảnh báo Phone</label>
+          <label><input type="checkbox" id="cfg-smoking" checked> Cảnh báo Hút thuốc</label>
+          <label><input type="checkbox" id="cfg-phone" checked> Cảnh báo Điện thoại</label>
+          <label>Cửa sổ buồn ngủ (120–240s): <input id="cfg-drowsy-win" type="number" min="120" max="240" value="180" style="width:76px"></label>
+          <label>Vắng mặt (15–30s): <input id="cfg-absence-s" type="number" min="15" max="30" value="20" style="width:68px"></label>
+          <label>Tự bật lại (km/h): <input id="cfg-resume-spd" type="number" min="5" max="40" value="15" style="width:68px"></label>
           <button class="action" onclick="saveRemoteConfig()">Lưu Config</button>
         </div>
       </div>

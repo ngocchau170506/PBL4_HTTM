@@ -119,6 +119,46 @@ def set_remote_config(vehicle_id: str, patch: dict) -> dict:
             if not math.isfinite(fv) or not (0.5 <= fv <= 10.0):
                 raise HTTPException(status_code=400, detail=f"{k} phai nam trong [0.5, 10.0]")
             cfg[k] = fv
+        elif k == "drowsy_window_s":
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="drowsy_window_s khong hop le")
+            if not math.isfinite(fv) or not (120.0 <= fv <= 240.0):
+                raise HTTPException(status_code=400, detail="drowsy_window_s phai nam trong [120, 240] giay (2-4 phut)")
+            cfg[k] = fv
+        elif k == "drowsy_escalation_limit":
+            try:
+                iv = int(v)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="drowsy_escalation_limit khong hop le")
+            if not (2 <= iv <= 5):
+                raise HTTPException(status_code=400, detail="drowsy_escalation_limit phai nam trong [2, 5]")
+            cfg[k] = iv
+        elif k == "absence_alert_s":
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="absence_alert_s khong hop le")
+            if not math.isfinite(fv) or not (15.0 <= fv <= 30.0):
+                raise HTTPException(status_code=400, detail="absence_alert_s phai nam trong [15, 30] giay")
+            cfg[k] = fv
+        elif k == "pause_duration_min":
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="pause_duration_min khong hop le")
+            if not math.isfinite(fv) or not (5.0 <= fv <= 60.0):
+                raise HTTPException(status_code=400, detail="pause_duration_min phai nam trong [5, 60] phut")
+            cfg[k] = fv
+        elif k == "auto_resume_speed_kmh":
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="auto_resume_speed_kmh khong hop le")
+            if not math.isfinite(fv) or not (5.0 <= fv <= 40.0):
+                raise HTTPException(status_code=400, detail="auto_resume_speed_kmh phai nam trong [5, 40] km/h")
+            cfg[k] = fv
     with database.tx() as conn:
         conn.execute(
             """INSERT INTO remote_configs (vehicle_id, config_json, updated_at)

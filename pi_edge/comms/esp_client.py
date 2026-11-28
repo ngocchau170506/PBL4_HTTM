@@ -329,6 +329,7 @@ class EspClient:
                 "warmup": bool(data.get("warmup", False)),
                 "muted": bool(data.get("muted", False)),
                 "vol": data.get("vol"),
+                "alarm_mode": int(data.get("alarm_mode") or 0),
                 "free_heap": data.get("free_heap"),
                 "co2_level": data.get("co2_level"),
             }

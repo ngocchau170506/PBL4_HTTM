@@ -623,6 +623,46 @@ def _process_violation_burst_sync(ct: str, raw_body: bytes, header_idem: Optiona
                 {"event_id": event_id, "gps": payload.get("gps") or {}, "detail": payload.get("behavior_detail", "")},
                 bypass_cooldown=True,
             )
+        elif alert_up == "DROWSY_LEVEL3_ALARM":
+            analytics.raise_incident(
+                vehicle_id,
+                "CRITICAL",
+                "DROWSY_LEVEL3_ALARM",
+                f"Tai xe xe {vehicle_id} buon ngu 3 lan lien tiep — da bat bao dong khoa tren ESP32 #1",
+                {"event_id": event_id, "gps": payload.get("gps") or {}, "detail": payload.get("behavior_detail", "")},
+                bypass_cooldown=True,
+            )
+            bluetooth_hub.push_notification(vehicle_id, payload.get("behavior_detail") or "Canh bao buon ngu lan 3/3!", level="CRITICAL")
+        elif alert_up == "DROWSY_RELAPSE_CONTINUOUS":
+            analytics.raise_incident(
+                vehicle_id,
+                "CRITICAL",
+                "DROWSY_RELAPSE_CONTINUOUS",
+                f"Tai xe xe {vehicle_id} TAI PHAM BUON NGU sau khi tat loa — dang phat bao dong lien tuc!",
+                {"event_id": event_id, "gps": payload.get("gps") or {}, "detail": payload.get("behavior_detail", "")},
+                bypass_cooldown=True,
+            )
+            bluetooth_hub.push_notification(vehicle_id, payload.get("behavior_detail") or "TAI PHAM BUON NGU - BAO DONG LIEN TUC!", level="CRITICAL")
+        elif alert_up == "DRIVER_ABSENT":
+            analytics.raise_incident(
+                vehicle_id,
+                "MEDIUM",
+                "DRIVER_ABSENT",
+                f"Camera xe {vehicle_id} khong thay tai xe — da tam tat canh bao vang mat 30 phut",
+                {"event_id": event_id, "gps": payload.get("gps") or {}, "detail": payload.get("behavior_detail", "")},
+                bypass_cooldown=False,
+            )
+            bluetooth_hub.push_notification(vehicle_id, payload.get("behavior_detail") or "Camera khong thay tai xe — tam tat vang mat 30 phut", level="WARN")
+        elif alert_up == "MONITORING_AUTO_RESUMED_BY_SPEED":
+            analytics.raise_incident(
+                vehicle_id,
+                "MEDIUM",
+                "MONITORING_AUTO_RESUMED_BY_SPEED",
+                f"Xe {vehicle_id} di chuyen >= 15 km/h — he thong tu dong bat lai giam sat AUTO",
+                {"event_id": event_id, "gps": payload.get("gps") or {}, "detail": payload.get("behavior_detail", "")},
+                bypass_cooldown=True,
+            )
+            bluetooth_hub.push_notification(vehicle_id, payload.get("behavior_detail") or "Da tu dong bat lai che do giam sat AUTO do xe di chuyen >= 15 km/h", level="INFO")
         broker.publish(
             "violation",
             {
@@ -1015,8 +1055,243 @@ def phone_status(request: Request, vehicle_id: str, role: str = Depends(auth.req
         "camera": t.get("camera") or {},
         "driver_state": ds,
         "calibration": ds.get("calibration") or {},
+        "drowsy_escalation": ds.get("drowsy_escalation") or {},
+        "monitoring": ds.get("monitoring") or {},
+        "esp": t.get("esp") or {},
         "gps": t.get("gps") or {},
         "pi": t.get("pi") or {},
+        "remote_config": cmds.get_remote_config(vehicle_id),
+    }
+
+
+DISPUTE_REASON_LABELS = {
+    "FALSE_DETECTION": "AI nhận diện nhầm hành vi",
+    "SENSOR_ERROR": "Nhiễu cảm biến MQ-135 / GPS",
+    "NOT_ME": "Đã đổi tài nhưng chưa kịp cập nhật",
+    "OTHER": "Lý do khác",
+}
+DISPUTE_WINDOW_SECONDS = 48 * 3600
+
+
+@app.get("/api/v1/phone/score_summary")
+def phone_score_summary(request: Request, vehicle_id: str, role: str = Depends(auth.require_role("driver_phone"))):
+    """Driver Safety Score, 3-tier status (>65 / <=65 / <=20), trip score history & recent violations with disputes."""
+    if role == "driver_phone":
+        bluetooth_hub.verify_driver_phone_binding(getattr(request.state, "token", ""), vehicle_id)
+    conn = database.get_conn()
+    v = database.get_vehicle(vehicle_id) or {}
+    trips = database.rows_to_list(
+        conn.execute(
+            "SELECT trip_id, driver_id, driver_name, started_at, ended_at, distance_km, safety_score, "
+            "violation_count, mute_count, status FROM trips WHERE vehicle_id=? ORDER BY started_at DESC LIMIT 20",
+            (vehicle_id,),
+        ).fetchall()
+    )
+    violations = database.rows_to_list(
+        conn.execute(
+            "SELECT v.event_id, v.vehicle_id, v.trip_id, v.alert_type, v.behavior_detail, v.duration_seconds, "
+            "v.cnn_status, v.penalty_applied, v.human_review_status, v.human_reviewed_by, v.human_review_note, "
+            "v.image_url, v.video_url, v.created_at, "
+            "d.dispute_id, d.status AS dispute_status, d.reason_code AS dispute_reason_code, "
+            "d.explanation AS dispute_explanation, d.response_note AS dispute_response_note "
+            "FROM violations v LEFT JOIN disputes d ON d.violation_event_id = v.event_id "
+            "WHERE v.vehicle_id=? ORDER BY v.created_at DESC LIMIT 50",
+            (vehicle_id,),
+        ).fetchall()
+    )
+    now_s = time.time()
+    for row in violations:
+        at = str(row.get("alert_type") or "")
+        row["penalty_points"] = float(config.SAFETY_SCORE_PENALTY.get(at, 0.0))
+        created = float(row.get("created_at") or 0.0)
+        within_48h = (now_s - created) <= DISPUTE_WINDOW_SECONDS if created > 0 else True
+        is_penalized = bool(row.get("penalty_applied")) and row["penalty_points"] > 0
+        row["can_dispute"] = bool(
+            within_48h
+            and is_penalized
+            and not row.get("dispute_status")
+            and str(row.get("human_review_status") or "") != "HUMAN_FALSE_POSITIVE"
+        )
+    active_trip = next((t for t in trips if t.get("status") == "ACTIVE"), None)
+    if active_trip and active_trip.get("safety_score") is not None:
+        current_score = round(float(active_trip["safety_score"]), 1)
+    elif trips and trips[0].get("safety_score") is not None:
+        current_score = round(float(trips[0]["safety_score"]), 1)
+    else:
+        current_score = float(config.SAFETY_SCORE_BASE)
+
+    tier = "RED_LOCKED" if current_score <= 20 else ("YELLOW_WARN" if current_score <= 65 else "GREEN_GOOD")
+    return {
+        "ok": True,
+        "vehicle_id": vehicle_id,
+        "driver_name": v.get("current_driver_name") or v.get("current_driver_id") or "Tài xế",
+        "current_score": current_score,
+        "score_tier": tier,
+        "trip_count": len(trips),
+        "trips": trips,
+        "violations": violations,
+    }
+
+
+@app.post("/api/v1/phone/disputes")
+async def create_phone_dispute(request: Request, role: str = Depends(auth.require_role("driver_phone"))):
+    """Driver submits a 48h dispute on a confirmed penalized violation (1 dispute per violation)."""
+    payload = await _read_json_dict(request)
+    vid = str(payload.get("vehicle_id") or "").strip()
+    event_id = str(payload.get("violation_event_id") or payload.get("event_id") or "").strip()
+    reason_code = str(payload.get("reason_code") or "FALSE_DETECTION").strip().upper()
+    explanation = str(payload.get("explanation") or "").strip()[:500]
+    if not vid or not event_id:
+        raise HTTPException(status_code=400, detail="Can vehicle_id va violation_event_id")
+    if role == "driver_phone":
+        bluetooth_hub.verify_driver_phone_binding(getattr(request.state, "token", ""), vid)
+    if reason_code not in DISPUTE_REASON_LABELS:
+        raise HTTPException(status_code=400, detail=f"reason_code khong hop le: {sorted(DISPUTE_REASON_LABELS)}")
+    if not explanation:
+        raise HTTPException(status_code=400, detail="Vui long nhap noi dung giai trinh khieu nai")
+
+    now_s = time.time()
+    dispute_id = f"DSP_{int(now_s * 1000)}_{uuid.uuid4().hex[:6]}"
+    with database.tx() as c:
+        vrow = c.execute("SELECT * FROM violations WHERE event_id=?", (event_id,)).fetchone()
+        if not vrow:
+            raise HTTPException(status_code=404, detail="Khong tim thay vi pham de khieu nai")
+        v = dict(vrow)
+        if str(v.get("vehicle_id") or "") != vid:
+            raise HTTPException(status_code=403, detail="Ban chi duoc khieu nai vi pham cua xe minh")
+        if (now_s - float(v.get("created_at") or now_s)) > DISPUTE_WINDOW_SECONDS:
+            raise HTTPException(status_code=400, detail="Da qua thoi han khieu nai 48 gio")
+        if str(v.get("human_review_status") or "") == "HUMAN_FALSE_POSITIVE":
+            raise HTTPException(status_code=400, detail="Vi pham nay da duoc hoan diem")
+        dup = c.execute("SELECT dispute_id FROM disputes WHERE violation_event_id=?", (event_id,)).fetchone()
+        if dup:
+            raise HTTPException(status_code=409, detail="Vi pham nay da duoc gui khieu nai truoc do")
+        c.execute(
+            """INSERT INTO disputes
+               (dispute_id, violation_event_id, vehicle_id, driver_id, driver_name,
+                reason_code, reason_label, explanation, status, created_at)
+               VALUES (?,?,?,?,?,?,?,?,'OPEN',?)""",
+            (
+                dispute_id,
+                event_id,
+                vid,
+                v.get("driver_id"),
+                v.get("driver_name"),
+                reason_code,
+                DISPUTE_REASON_LABELS[reason_code],
+                explanation,
+                now_s,
+            ),
+        )
+    broker.publish("dispute_created", {"dispute_id": dispute_id, "vehicle_id": vid, "violation_event_id": event_id})
+    auth.audit(request, 200, vid, detail=f"dispute_created={dispute_id}")
+    return {
+        "ok": True,
+        "dispute_id": dispute_id,
+        "violation_event_id": event_id,
+        "status": "OPEN",
+        "reason_code": reason_code,
+        "reason_label": DISPUTE_REASON_LABELS[reason_code],
+    }
+
+
+@app.get("/api/v1/disputes")
+def list_disputes(
+    vehicle_id: Optional[str] = None,
+    status: Optional[str] = None,
+    role: str = Depends(auth.require_role("viewer")),
+):
+    conn = database.get_conn()
+    q = (
+        "SELECT d.*, v.alert_type, v.behavior_detail, v.image_url, v.video_url, v.penalty_applied, "
+        "v.human_review_status, v.human_reviewed_by, v.trip_id "
+        "FROM disputes d LEFT JOIN violations v ON v.event_id = d.violation_event_id WHERE 1=1"
+    )
+    params = []
+    if vehicle_id:
+        q += " AND d.vehicle_id=?"
+        params.append(vehicle_id)
+    if status:
+        q += " AND d.status=?"
+        params.append(status.upper())
+    q += " ORDER BY d.created_at DESC LIMIT 200"
+    rows = database.rows_to_list(conn.execute(q, params).fetchall())
+    for r in rows:
+        r["penalty_points"] = float(config.SAFETY_SCORE_PENALTY.get(str(r.get("alert_type") or ""), 0.0))
+    return {"disputes": rows}
+
+
+@app.post("/api/v1/disputes/{dispute_id}/resolve")
+async def resolve_dispute(dispute_id: str, request: Request, role: str = Depends(auth.require_role("operator"))):
+    """Admin/Operator resolves driver dispute (Four-Eyes Check: original operator reviewer cannot self-resolve)."""
+    payload = await _read_json_dict(request)
+    decision = str(payload.get("decision") or "").strip().upper()
+    note = str(payload.get("response_note") or payload.get("note") or "").strip()[:500]
+    if decision not in ("APPROVED", "REJECTED"):
+        raise HTTPException(status_code=400, detail="decision phai la APPROVED hoac REJECTED")
+    if not note:
+        raise HTTPException(status_code=400, detail="Bat buoc nhap noi dung phan hoi cho tai xe")
+
+    now_s = time.time()
+    need_refund = False
+    trip_id = None
+    alert_type = ""
+    vid = ""
+    event_id = ""
+    with database.tx() as c:
+        drow = c.execute("SELECT * FROM disputes WHERE dispute_id=?", (dispute_id,)).fetchone()
+        if not drow:
+            raise HTTPException(status_code=404, detail="Khong tim thay don khieu nai")
+        d = dict(drow)
+        if d.get("status") != "OPEN":
+            raise HTTPException(status_code=400, detail="Don khieu nai da duoc xu ly truoc do")
+        vid = str(d.get("vehicle_id") or "")
+        event_id = str(d.get("violation_event_id") or "")
+        vrow = c.execute("SELECT * FROM violations WHERE event_id=?", (event_id,)).fetchone()
+        if vrow:
+            v = dict(vrow)
+            # Four-Eyes Check: non-admin operator who originally confirmed the penalty cannot self-resolve dispute
+            if (
+                role != "admin"
+                and v.get("human_reviewed_by")
+                and str(v.get("human_reviewed_by")).lower() == str(role).lower()
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Four-Eyes Check: Nguoi duyet phat ban dau khong duoc tu xu ly khieu nai (can Admin)",
+                )
+            trip_id = v.get("trip_id")
+            alert_type = str(v.get("alert_type") or "")
+            if decision == "APPROVED":
+                if bool(v.get("penalty_applied")):
+                    need_refund = True
+                c.execute(
+                    "UPDATE violations SET human_review_status='HUMAN_FALSE_POSITIVE', human_reviewed_by=?, "
+                    "human_review_note=?, human_reviewed_at=?, penalty_applied=0 WHERE event_id=?",
+                    (role, f"[Dispute APPROVED] {note}", now_s, event_id),
+                )
+        c.execute(
+            "UPDATE disputes SET status=?, resolved_by=?, response_note=?, resolved_at=? WHERE dispute_id=?",
+            (decision, role, note, now_s, dispute_id),
+        )
+
+    new_score = analytics.refund_violation_penalty(trip_id, alert_type) if need_refund else None
+    msg = (
+        f"Khiếu nại {dispute_id} ĐƯỢC CHẤP NHẬN (đã hoàn điểm): {note}"
+        if decision == "APPROVED"
+        else f"Khiếu nại {dispute_id} bị từ chối: {note}"
+    )
+    if vid:
+        bluetooth_hub.push_notification(vid, msg, level="INFO" if decision == "APPROVED" else "WARN")
+    broker.publish("dispute_resolved", {"dispute_id": dispute_id, "vehicle_id": vid, "decision": decision, "safety_score": new_score})
+    auth.audit(request, 200, vid, detail=f"dispute_{decision}={dispute_id}")
+    return {
+        "ok": True,
+        "dispute_id": dispute_id,
+        "status": decision,
+        "refunded": need_refund,
+        "safety_score": new_score,
+        "response_note": note,
     }
 
 

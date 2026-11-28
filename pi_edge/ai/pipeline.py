@@ -59,17 +59,72 @@ def _bbox_iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> flo
     return inter / max(1.0, area_a + area_b - inter)
 
 
+EYE_GROUP = frozenset({"Eye_Closed", "Eye_Open"})
+FACE_GROUP = frozenset({"Normal", "Distracted Head"})
+MOUTH_GROUP = frozenset({"Mouth_Open"})
+
+
+def _boxes_overlap_same_region(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int], iou_thr: float) -> bool:
+    if _bbox_iou(a, b) >= iou_thr:
+        return True
+    # Also catch concentric/contained double boxes (e.g. tight ROI eye inside wider full-frame eye box)
+    acx, acy = 0.5 * (a[0] + a[2]), 0.5 * (a[1] + a[3])
+    bcx, bcy = 0.5 * (b[0] + b[2]), 0.5 * (b[1] + b[3])
+    a_in_b = (b[0] <= acx <= b[2]) and (b[1] <= acy <= b[3])
+    b_in_a = (a[0] <= bcx <= a[2]) and (a[1] <= bcy <= a[3])
+    return a_in_b and b_in_a
+
+
+def _det_group_key(label: str) -> str:
+    if label in EYE_GROUP:
+        return "EYE"
+    if label in FACE_GROUP:
+        return "FACE"
+    if label in MOUTH_GROUP:
+        return "MOUTH"
+    return label.lower()
+
+
+def _deduplicate_detections(
+    dets: List[Tuple[str, float, Tuple[int, int, int, int]]],
+) -> List[Tuple[str, float, Tuple[int, int, int, int]]]:
+    """Cross-class group NMS so the same eye/face/mouth NEVER emits 2 overlapping label layers."""
+    if len(dets) <= 1:
+        return list(dets)
+
+    def _sort_score(item: Tuple[str, float, Tuple[int, int, int, int]]) -> float:
+        lbl, conf, _ = item
+        # Slight safety tie-breaker for Eye_Closed over Eye_Open when confidences are within 0.05
+        bonus = 0.05 if lbl == "Eye_Closed" else (0.03 if lbl == "Distracted Head" else 0.0)
+        return float(conf) + bonus
+
+    ordered = sorted(dets, key=_sort_score, reverse=True)
+    kept: List[Tuple[str, float, Tuple[int, int, int, int]]] = []
+    for cand in ordered:
+        clbl, _, cbox = cand
+        cgrp = _det_group_key(clbl)
+        thr = 0.25 if cgrp == "EYE" else (0.30 if cgrp == "FACE" else 0.35)
+        is_dup = False
+        for klbl, _, kbox in kept:
+            if _det_group_key(klbl) == cgrp and _boxes_overlap_same_region(kbox, cbox, thr):
+                is_dup = True
+                break
+        if not is_dup:
+            kept.append(cand)
+    return kept
+
+
 def _merge_roi_detection(
     dets: List[Tuple[str, float, Tuple[int, int, int, int]]],
     new_det: Tuple[str, float, Tuple[int, int, int, int]],
     same_group: frozenset[str],
-    iou_thr: float = 0.35,
+    iou_thr: float = 0.25,
 ) -> None:
     """Merge an ROI eye/mouth box into full-frame `dets` without duplicating the same eye/mouth."""
     nlbl, nconf, nbox = new_det
     for idx, (elbl, econf, ebox) in enumerate(dets):
-        if elbl in same_group and _bbox_iou(ebox, nbox) >= iou_thr:
-            if nconf > econf:
+        if elbl in same_group and _boxes_overlap_same_region(ebox, nbox, iou_thr):
+            if nconf > econf or (nlbl == "Eye_Closed" and elbl == "Eye_Open" and (nconf + 0.05) >= econf):
                 dets[idx] = new_det
             return
     dets.append(new_det)
@@ -86,6 +141,7 @@ class InferenceOutput:
     mouth_yawn: Optional[bool] = None
     distracted: Optional[bool] = None
     smoking: Optional[bool] = None
+    smoking_soft: bool = False
     phone: Optional[bool] = None
     channel_confidences: Dict[str, float] = field(default_factory=dict)
     behavior_detail: str = ""
@@ -211,11 +267,17 @@ class EdgeAiPipeline:
                 self.smoking_conf = max(0.1, min(0.95, float(patch["smoking_conf_threshold"])))
             if "phone_conf_threshold" in patch:
                 self.phone_conf = max(0.1, min(0.95, float(patch["phone_conf_threshold"])))
+            if "eye_threshold_seconds" in patch:
+                self.fusion.channels["eye"].threshold_s = max(0.5, min(10.0, float(patch["eye_threshold_seconds"])))
+            if "yawn_threshold_seconds" in patch:
+                self.fusion.channels["mouth"].threshold_s = max(0.5, min(10.0, float(patch["yawn_threshold_seconds"])))
             return {
                 "allow_smoking": self.allow_smoking,
                 "allow_phone": self.allow_phone,
                 "smoking_conf_threshold": self.smoking_conf,
                 "phone_conf_threshold": self.phone_conf,
+                "eye_threshold_seconds": self.fusion.channels["eye"].threshold_s,
+                "yawn_threshold_seconds": self.fusion.channels["mouth"].threshold_s,
             }
 
     def get_behavior_permissions(self) -> Dict[str, Any]:
@@ -287,6 +349,7 @@ class EdgeAiPipeline:
             pose = self._geo.detect_pose(frame_bgr)
 
         dets: List[Tuple[str, float, Tuple[int, int, int, int]]] = []
+        smoking_soft_confs: List[float] = []
         h_img, w_img = frame_bgr.shape[:2]
         glare_active = False
         if self._yolo is not None:
@@ -299,13 +362,18 @@ class EdgeAiPipeline:
             )
             if res and len(res) > 0 and res[0].boxes is not None:
                 names = res[0].names or {}
+                smoke_soft_thr = max(0.26, perms["smoking_conf_threshold"] - 0.12)
                 for b in res[0].boxes:
                     cls_id = int(b.cls[0])
                     label = str(names.get(cls_id, cls_id))
                     conf = float(b.conf[0])
                     x1, y1, x2, y2 = [int(v) for v in b.xyxy[0].tolist()]
                     if label.lower() == "smoking":
-                        if not perms["allow_smoking"] or conf < perms["smoking_conf_threshold"]:
+                        if not perms["allow_smoking"]:
+                            continue
+                        if conf < perms["smoking_conf_threshold"]:
+                            if conf >= smoke_soft_thr:
+                                smoking_soft_confs.append(conf)
                             continue
                     elif label.lower() == "phone":
                         if not perms["allow_phone"] or conf < perms["phone_conf_threshold"]:
@@ -316,14 +384,22 @@ class EdgeAiPipeline:
                             continue
                     dets.append((label, conf, (x1, y1, x2, y2)))
 
-            # Smart Face-ROI + CLAHE Glare Compensation Pass (only when Pass 1 misses or has low eye confidence, < 80°C)
+            # Cross-class deduplication after Pass 1 (eliminates Eye_Open + Eye_Closed double layer!)
+            dets = _deduplicate_detections(dets)
+
+            # Smart Face-ROI + CLAHE Glare Compensation Pass (strictly gated to avoid 2x YOLO stall on normal frames!)
             if pose is not None and pose.valid and pose.face_box is not None and plan.thermal_level < 3:
                 eye_dets = [d for d in dets if d[0] in ("Eye_Closed", "Eye_Open")]
                 max_eye_conf = max((d[1] for d in eye_dets), default=0.0)
                 glare_detected, _, _ = inspect_upper_face_glare(frame_bgr, pose.face_box)
                 glare_active = glare_detected or self.calibrator.is_glare_mode()
 
-                if len(eye_dets) < 2 or max_eye_conf < 0.52:
+                need_roi_pass = (
+                    (len(eye_dets) == 0)
+                    or (glare_active and (len(eye_dets) < 2 or max_eye_conf < 0.42))
+                    or (abs(pose.roll_deg) >= 18.0 and (len(eye_dets) < 2 or max_eye_conf < 0.45))
+                )
+                if need_roi_pass:
                     rx1, ry1, rx2, ry2 = expand_square_face_roi(pose.face_box, w_img, h_img, scale_mult=1.30)
                     roi = frame_bgr[ry1:ry2, rx1:rx2]
                     if roi.size > 0 and roi.shape[0] >= 24 and roi.shape[1] >= 24:
@@ -336,8 +412,6 @@ class EdgeAiPipeline:
                         if r2 and len(r2) > 0 and r2[0].boxes is not None:
                             names2 = r2[0].names or {}
                             roi_h, roi_w = roi.shape[:2]
-                            eye_group = frozenset({"Eye_Closed", "Eye_Open"})
-                            mouth_group = frozenset({"Mouth_Open"})
                             for b in r2[0].boxes:
                                 lbl2 = str(names2.get(int(b.cls[0]), ""))
                                 if lbl2 not in ("Eye_Closed", "Eye_Open", "Mouth_Open"):
@@ -356,8 +430,9 @@ class EdgeAiPipeline:
                                     ux2 = max(ux1 + 1, min(roi_w, bx2))
                                     uy2 = max(uy1 + 1, min(roi_h, by2))
                                 mapped_box = (rx1 + ux1, ry1 + uy1, rx1 + ux2, ry1 + uy2)
-                                grp = eye_group if lbl2 in eye_group else mouth_group
+                                grp = EYE_GROUP if lbl2 in EYE_GROUP else MOUTH_GROUP
                                 _merge_roi_detection(dets, (lbl2, c2, mapped_box), grp)
+                        dets = _deduplicate_detections(dets)
 
         labels = [d[0] for d in dets]
         face_detected = bool((pose and pose.valid) or any(l in FACE_RELATED_CLASSES for l in labels))
@@ -413,9 +488,10 @@ class EdgeAiPipeline:
                         eye_conf = round(min(0.85, max(0.50, 0.50 + (ear_thr - ms.ear) * 2.0)), 3)
                         extra_detail = f"MeshEAR({ms.ear:.3f}<={ear_thr:.3f})"
                         if ms.left_eye_box is not None:
-                            dets.append(("Eye_Closed", eye_conf, ms.left_eye_box))
+                            _merge_roi_detection(dets, ("Eye_Closed", eye_conf, ms.left_eye_box), EYE_GROUP)
                         if ms.right_eye_box is not None:
-                            dets.append(("Eye_Closed", eye_conf, ms.right_eye_box))
+                            _merge_roi_detection(dets, ("Eye_Closed", eye_conf, ms.right_eye_box), EYE_GROUP)
+                        dets = _deduplicate_detections(dets)
                         labels = [d[0] for d in dets]
                     elif ms.ear >= ear_thr + 0.04:
                         eye_closed = False
@@ -453,21 +529,24 @@ class EdgeAiPipeline:
         smoke_confs = [c for lbl, c, _ in dets if lbl.lower() == "smoking"]
         phone_confs = [c for lbl, c, _ in dets if lbl.lower() == "phone"]
         # Require a detected driver face before triggering PHONE / SMOKING (blocks empty-cabin background hallucinations!)
-        smoking = True if (face_detected and smoke_confs) else (False if face_detected else False)
-        phone = True if (face_detected and phone_confs) else (False if face_detected else False)
+        smoking = True if (face_detected and smoke_confs) else False
+        smoking_soft = bool(face_detected and (smoke_confs or smoking_soft_confs))
+        phone = True if (face_detected and phone_confs) else False
         ver_mode = "YOLO_BLAZEFACE_SEQ" if (pose and pose.valid) else "SINGLE_MODEL_YOLO"
 
         ch_confs = {
             "DROWSY": round(eye_conf, 3),
             "YAWNING": round(mouth_conf, 3),
             "DISTRACTED": round(dist_conf, 3),
-            "SMOKING": round(max(smoke_confs), 3) if smoke_confs else 0.0,
+            "SMOKING": round(max(smoke_confs), 3) if smoke_confs else (round(max(smoking_soft_confs), 3) if smoking_soft_confs else 0.0),
             "PHONE": round(max(phone_confs), 3) if phone_confs else 0.0,
         }
         beh_detail = f"{mouth_detail} {extra_detail}".strip() if (mouth_detail and extra_detail) else (mouth_detail or extra_detail)
+        # Stamp completion monotonic timestamp (when now_mono is None) so inference time NEVER eats into blind_hold_max_s!
+        done_m = time.monotonic() if now_mono is None else float(now_mono)
 
         return InferenceOutput(
-            ts_mono=now_m,
+            ts_mono=done_m,
             detected_classes=labels,
             detections=dets,
             face_detected=face_detected,
@@ -476,6 +555,7 @@ class EdgeAiPipeline:
             mouth_yawn=mouth_yawn,
             distracted=distracted,
             smoking=smoking,
+            smoking_soft=smoking_soft,
             phone=phone,
             channel_confidences=ch_confs,
             behavior_detail=beh_detail,
@@ -536,8 +616,10 @@ class EdgeAiPipeline:
         plan: ThrottlePlan,
         now_mono: Optional[float] = None,
         is_stale: bool = False,
+        co2_ppm: Optional[float] = None,
+        mq135_warmup: bool = False,
     ) -> Dict[str, Any]:
-        """Non-blocking 30Hz tick: feeds each InferenceOutput ONCE to SensorFusion (enforces LCK-06 <= 0.8s & 2-hit guard!)."""
+        """Non-blocking tick: feeds each InferenceOutput ONCE to SensorFusion (enforces LCK-06 <= 0.8s & 2-hit guard!)."""
         now_m = now_mono if now_mono is not None else time.monotonic()
         if frame_bgr is not None and not is_stale:
             self.calibrator.notify_real_camera_frame(now_m)
@@ -552,15 +634,16 @@ class EdgeAiPipeline:
         fresh_display = inf is not None and (now_m - inf.ts_mono) <= self.cfg.blind_hold_max_s
         is_new_infer = fresh_display and (inf.ts_mono > self._last_consumed_infer_ts)
 
+        smoking_soft_hit = False
         if cal_status["state"] == "RUNNING":
             # Never emit false violation alerts while running 10s driver calibration
-            for ch in self.fusion.channels.values():
-                ch.reset()
+            self.fusion.reset_all()
             if is_new_infer and inf is not None:
                 self._last_consumed_infer_ts = inf.ts_mono
             obs = {"eye": False, "mouth": False, "distracted": False, "smoking": False, "phone": False}
         elif is_new_infer and inf is not None:
             self._last_consumed_infer_ts = inf.ts_mono
+            smoking_soft_hit = bool(inf.smoking_soft)
             obs = {
                 "eye": inf.eye_closed,
                 "mouth": inf.mouth_yawn,
@@ -585,7 +668,14 @@ class EdgeAiPipeline:
             detail = f"CALIB_{cal_status['mode']}_{cal_status['progress_s']:.1f}s" if cal_status["state"] == "RUNNING" else ""
             lat_ms = 0.0
 
-        primary, all_dec = self.fusion.update(obs, now_m, verification_mode=ver_mode)
+        primary, all_dec = self.fusion.update(
+            obs,
+            now_m,
+            verification_mode=ver_mode,
+            co2_ppm=co2_ppm,
+            mq135_warmup=mq135_warmup,
+            smoking_soft_hit=smoking_soft_hit,
+        )
         perms = self.get_behavior_permissions()
         real_conf = 0.0
         if inf is not None and primary.alert_type != "NORMAL":

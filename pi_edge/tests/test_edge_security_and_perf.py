@@ -1856,6 +1856,178 @@ class TestPiEdgeSecurityAndPerf(unittest.TestCase):
                     else:
                         os.environ[k] = v
 
+    def test_40_deduplicate_eliminates_two_layer_labels_and_hud_suppresses_dup_face(self):
+        from pi_edge.ai.pipeline import _deduplicate_detections
+        from pi_edge.app.main import _render_live_hud_overlay
+
+        # Same eye predicted as BOTH Eye_Open (0.46) and Eye_Closed (0.43) -> only 1 box kept (Eye_Closed wins 0.05 safety margin)
+        raw = [
+            ("Eye_Open", 0.46, (100, 100, 140, 125)),
+            ("Eye_Closed", 0.43, (102, 101, 139, 124)),
+            ("Eye_Open", 0.70, (180, 100, 220, 125)),
+            ("Normal", 0.80, (70, 50, 250, 240)),
+            ("Distracted Head", 0.78, (72, 52, 248, 238)),
+        ]
+        cleaned = _deduplicate_detections(raw)
+        eye_boxes = [d for d in cleaned if d[0] in ("Eye_Closed", "Eye_Open")]
+        face_boxes = [d for d in cleaned if d[0] in ("Normal", "Distracted Head")]
+        self.assertEqual(len(eye_boxes), 2)
+        self.assertEqual(len(face_boxes), 1)
+        self.assertEqual(face_boxes[0][0], "Distracted Head")
+
+        # HUD renders cleanly with single-layer overlay (no crash, non-overlapping labels)
+        img = np.zeros((360, 640, 3), dtype=np.uint8)
+        rendered = _render_live_hud_overlay(
+            img,
+            {
+                "driver_state": {
+                    "alert_type": "DROWSY",
+                    "drowsy_escalation": {"count": 2, "limit": 3, "state": "COUNTING", "alarm_active": False},
+                    "monitoring": {"mode": "AUTO", "presence": "DRIVER_PRESENT"},
+                },
+                "pi": {"camera_fps": 20.0, "ai_fps": 6.5, "cpu_temp_c": 61.0},
+                "gps": {"is_valid": True, "lat": 16.06, "lon": 108.22, "speed_kmh": 35.0},
+            },
+            {
+                "valid": True,
+                "detections": cleaned,
+                "pose": {"valid": True, "yaw_deg": 4.0, "pitch_deg": -2.0, "roll_deg": 1.0, "face_box": (70, 50, 250, 240)},
+            },
+        )
+        self.assertEqual(rendered.shape, (360, 640, 3))
+
+    def test_41_smoking_fusion_window_and_mq135_smoke_delta(self):
+        from pi_edge.ai.sensor_fusion import SmokingFusionChannel
+
+        # A. Visual sliding window: 2 intermittent hits within 2.5s triggers SMOKING
+        ch = SmokingFusionChannel(window_s=2.5, min_hits=2, mq135_delta_ppm=100.0)
+        d1 = ch.update(True, 10.0, "YOLO_BLAZEFACE_SEQ")
+        self.assertEqual(d1.alert_state, "NORMAL")
+        # Intervening miss frame does NOT erase first hit inside 2.5s window
+        d_miss = ch.update(False, 10.6, "YOLO_BLAZEFACE_SEQ")
+        self.assertEqual(d_miss.alert_state, "NORMAL")
+        d2 = ch.update(True, 11.4, "YOLO_BLAZEFACE_SEQ")
+        self.assertEqual(d2.alert_state, "EDGE_TRIGGERED")
+        self.assertEqual(d2.alert_type, "SMOKING")
+
+        # B. Visual soft hit + rapid MQ-135 smoke delta (+130 ppm above baseline) confirms immediately
+        ch2 = SmokingFusionChannel(window_s=2.5, min_hits=2, mq135_delta_ppm=100.0)
+        for i in range(6):
+            ch2.update(False, 20.0 + i * 1.0, "YOLO_BLAZEFACE_SEQ", co2_ppm=450.0, mq135_warmup=False)
+        d_spike = ch2.update(
+            False,
+            27.0,
+            "YOLO_BLAZEFACE_SEQ",
+            co2_ppm=590.0,
+            mq135_warmup=False,
+            visual_soft_hit=True,
+        )
+        self.assertEqual(d_spike.alert_state, "EDGE_TRIGGERED")
+        self.assertIn("MQ135", d_spike.reason)
+
+    def test_42_drowsy_3_strike_escalation_and_probation_relapse(self):
+        from pi_edge.ai.alert_policy import DrowsyEscalationController
+
+        ctrl = DrowsyEscalationController(window_s=180.0, escalation_limit=3, episode_gap_s=6.0)
+        # Strike 1 -> VOICE:1
+        a1 = ctrl.update(True, 100.0)
+        self.assertEqual(a1.esp_cmd, "VOICE:1")
+        self.assertEqual(a1.count, 1)
+        self.assertEqual(a1.state, "COUNTING")
+        # Continuous drowsy in same episode must NOT double-count!
+        a1_cont = ctrl.update(True, 102.0)
+        self.assertIsNone(a1_cont.esp_cmd)
+        self.assertEqual(a1_cont.count, 1)
+
+        # Driver wakes up for >= 6s
+        ctrl.update(False, 104.0)
+        ctrl.update(False, 111.0)
+        # Strike 2 (within 3 min) -> VOICE:1
+        a2 = ctrl.update(True, 120.0)
+        self.assertEqual(a2.esp_cmd, "VOICE:1")
+        self.assertEqual(a2.count, 2)
+
+        # Wake up >= 6s, then Strike 3 (within 3 min) -> ALARM:ON (Level 3 latched)
+        ctrl.update(False, 122.0)
+        ctrl.update(False, 130.0)
+        a3 = ctrl.update(True, 150.0)
+        self.assertEqual(a3.esp_cmd, "ALARM:ON")
+        self.assertEqual(a3.state, "ALARM_LATCHED")
+        self.assertEqual(a3.server_incident, "DROWSY_LEVEL3_ALARM")
+        self.assertTrue(ctrl.get_status(151.0)["alarm_active"])
+
+        # Driver taps "Tắt loa cảnh báo" -> ALARM:OFF + enters 180s PROBATION
+        ok_d, _, cmd_off = ctrl.dismiss_alarm(155.0, source="PHONE_BLE")
+        self.assertTrue(ok_d)
+        self.assertEqual(cmd_off, "ALARM:OFF")
+        st_prob = ctrl.get_status(160.0)
+        self.assertEqual(st_prob["state"], "PROBATION")
+        self.assertFalse(st_prob["alarm_active"])
+        self.assertGreater(st_prob["probation_remaining_s"], 170.0)
+
+        # Driver opens eyes briefly (>= 6s) then dozes off AGAIN within 2-4 min probation -> CONTINUOUS ALARM!
+        ctrl.update(False, 160.0)
+        ctrl.update(False, 168.0)
+        a_rel = ctrl.update(True, 200.0)
+        self.assertEqual(a_rel.esp_cmd, "ALARM:CONT")
+        self.assertEqual(a_rel.state, "CONTINUOUS_RELAPSE")
+        self.assertEqual(a_rel.server_incident, "DROWSY_RELAPSE_CONTINUOUS")
+
+        # After dismissing again and staying awake past 180s probation -> resets cleanly to IDLE (0)
+        ctrl.dismiss_alarm(210.0, source="PHONE_BLE")
+        ctrl.update(False, 212.0)
+        ctrl.update(False, 400.0)
+        st_done = ctrl.get_status(400.0)
+        self.assertEqual(st_done["state"], "IDLE")
+        self.assertEqual(st_done["count"], 0)
+
+    def test_43_three_mode_presence_monitoring_and_speed_auto_resume(self):
+        from pi_edge.ai.alert_policy import MonitoringModeController
+
+        mon = MonitoringModeController(
+            absence_alert_s=20.0,
+            pause_duration_s=1800.0,
+            auto_resume_speed_kmh=15.0,
+            speed_sustain_s=3.0,
+        )
+        # Always boots into AUTO
+        self.assertEqual(mon.get_status(0.0)["mode"], "AUTO")
+
+        # Mode 1 (AUTO): missing person for >= 20s -> emits DRIVER_ABSENT and auto-transitions to TEMP_PAUSE_30M
+        r0 = mon.update(face_detected=False, camera_online=True, gps_valid=False, speed_kmh=0.0, now_mono=10.0)
+        self.assertIsNone(r0.event)
+        r1 = mon.update(face_detected=False, camera_online=True, gps_valid=False, speed_kmh=0.0, now_mono=31.0)
+        self.assertEqual(r1.event, "DRIVER_ABSENT")
+        self.assertEqual(r1.mode, "TEMP_PAUSE_30M")
+        self.assertTrue(r1.absence_suppressed)
+        self.assertFalse(r1.alerts_suppressed)  # If driver IS visible during TEMP_PAUSE_30M, violations still alert!
+
+        # Mode 2 (TEMP_PAUSE_30M): expires back to AUTO after 30 min
+        r_exp = mon.update(face_detected=True, camera_online=True, gps_valid=False, speed_kmh=0.0, now_mono=1840.0)
+        self.assertEqual(r_exp.mode, "AUTO")
+        self.assertEqual(r_exp.event, "PAUSE_EXPIRED_AUTO")
+
+        # Mode 3 (REST_SLEEP_OFF): silences cabin alerts while camera keeps reporting presence
+        ok_m, _ = mon.set_mode("REST_SLEEP_OFF", now_mono=2000.0, source="DRIVER_APP")
+        self.assertTrue(ok_m)
+        r_slp = mon.update(face_detected=True, camera_online=True, gps_valid=True, speed_kmh=0.0, now_mono=2005.0)
+        self.assertEqual(r_slp.mode, "REST_SLEEP_OFF")
+        self.assertEqual(r_slp.presence, "DRIVER_PRESENT")
+        self.assertTrue(r_slp.alerts_suppressed)
+
+        # Single transient GPS speed spike (< 3s) must NOT falsely wake AUTO
+        r_g1 = mon.update(face_detected=True, camera_online=True, gps_valid=True, speed_kmh=18.0, now_mono=2010.0)
+        self.assertEqual(r_g1.mode, "REST_SLEEP_OFF")
+        r_g2 = mon.update(face_detected=True, camera_online=True, gps_valid=True, speed_kmh=0.0, now_mono=2011.0)
+        self.assertEqual(r_g2.mode, "REST_SLEEP_OFF")
+
+        # Sustained GPS >= 15 km/h for >= 3s -> auto-resumes AUTO & emits report event!
+        mon.update(face_detected=True, camera_online=True, gps_valid=True, speed_kmh=16.5, now_mono=2020.0)
+        r_wake = mon.update(face_detected=True, camera_online=True, gps_valid=True, speed_kmh=22.0, now_mono=2023.5)
+        self.assertEqual(r_wake.mode, "AUTO")
+        self.assertFalse(r_wake.alerts_suppressed)
+        self.assertEqual(r_wake.event, "MONITORING_AUTO_RESUMED_BY_SPEED")
+
 
 if __name__ == "__main__":
     unittest.main()

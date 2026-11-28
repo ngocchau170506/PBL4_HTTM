@@ -83,6 +83,41 @@ def validate_telemetry_payload(payload: Dict[str, Any]) -> Tuple[bool, List[str]
                     errors.append("driver_state.calibration.locked must be bool")
                 if "glare_mode" in cal and not isinstance(cal["glare_mode"], bool):
                     errors.append("driver_state.calibration.glare_mode must be bool")
+
+        def _is_num_v(v: Any) -> bool:
+            return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+        d_esc = ds.get("drowsy_escalation")
+        if d_esc is not None:
+            if not isinstance(d_esc, dict):
+                errors.append("driver_state.drowsy_escalation must be a dict when provided")
+            else:
+                st = d_esc.get("state")
+                if st is not None and st not in ("IDLE", "COUNTING", "ALARM_LATCHED", "PROBATION", "CONTINUOUS_RELAPSE"):
+                    errors.append(f"invalid driver_state.drowsy_escalation.state: {st}")
+                for ik in ("count", "limit"):
+                    if ik in d_esc and (not isinstance(d_esc[ik], int) or isinstance(d_esc[ik], bool)):
+                        errors.append(f"driver_state.drowsy_escalation.{ik} must be int")
+                for nk in ("window_s", "probation_remaining_s"):
+                    if nk in d_esc and d_esc[nk] is not None and not _is_num_v(d_esc[nk]):
+                        errors.append(f"driver_state.drowsy_escalation.{nk} must be int/float")
+                if "alarm_active" in d_esc and not isinstance(d_esc["alarm_active"], bool):
+                    errors.append("driver_state.drowsy_escalation.alarm_active must be bool")
+
+        mon = ds.get("monitoring")
+        if mon is not None:
+            if not isinstance(mon, dict):
+                errors.append("driver_state.monitoring must be a dict when provided")
+            else:
+                mode = mon.get("mode")
+                if mode is not None and mode not in ("AUTO", "TEMP_PAUSE_30M", "REST_SLEEP_OFF"):
+                    errors.append(f"invalid driver_state.monitoring.mode: {mode}")
+                pres = mon.get("presence")
+                if pres is not None and pres not in ("DRIVER_PRESENT", "NO_DRIVER"):
+                    errors.append(f"invalid driver_state.monitoring.presence: {pres}")
+                for nk in ("pause_remaining_s", "absence_seconds", "auto_resume_speed_kmh"):
+                    if nk in mon and mon[nk] is not None and not _is_num_v(mon[nk]):
+                        errors.append(f"driver_state.monitoring.{nk} must be int/float")
     else:
         errors.append("driver_state must be a dict")
 

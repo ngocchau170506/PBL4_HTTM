@@ -407,6 +407,135 @@ class TestCrossSystemContract(unittest.TestCase):
         self.assertEqual(matched["status"], "EXECUTED_OK")
         self.assertEqual(matched["ack_detail"], "CALIBRATION_STARTED")
 
+    def test_09_drowsy_escalation_monitoring_modes_and_esp1_vol80_clips7(self):
+        # 1. Verify ESP32 #1 firmware upgrades (vol 80%, 7 clips, pip-pip + ALARM:ON/CONT/OFF, zero Wi-Fi/GPS)
+        ino = (Path(__file__).resolve().parent.parent / "firmware" / "esp32_audio_gps" / "esp32_audio_gps.ino").read_text(encoding="utf-8")
+        vclips = (Path(__file__).resolve().parent.parent / "firmware" / "esp32_audio_gps" / "voice_clips.h").read_text(encoding="utf-8")
+        self.assertIn("#define DEFAULT_VOL_PCT    80", ino)
+        self.assertIn("ALARM:ON", ino)
+        self.assertIn("ALARM:CONT", ino)
+        self.assertIn("ALARM:OFF", ino)
+        self.assertIn("playWakeupPipSequence", ino)
+        self.assertIn("#define VOICE_CLIP_COUNT  7", vclips)
+        self.assertIn("VOICE_DATA_6", vclips)
+        self.assertIn("VOICE_DATA_7", vclips)
+
+        # 2. Verify ESP32 #2 BLE hub supports new driver commands
+        hub_ino = (Path(__file__).resolve().parent.parent / "firmware" / "esp32_ble_wifi_hub" / "esp32_ble_wifi_hub.ino").read_text(encoding="utf-8")
+        for req in ("EVT,BLE_ACTION,DISMISS_DROWSY_ALARM", "EVT,BLE_ACTION,MODE_AUTO", "EVT,BLE_ACTION,MODE_PAUSE_30M", "EVT,BLE_ACTION,MODE_REST_OFF"):
+            self.assertIn(req, hub_ino)
+
+        # 3. Validate telemetry with drowsy_escalation + monitoring blocks against contract schema
+        sync = ServerSyncClient(
+            self.pi_cfg,
+            auth_token="lab-device-token",
+            spool=self.spool,
+            session=_TestClientRequestsAdapter(self.tc),
+        )
+        payload = sync.build_telemetry_payload(
+            ai_state={
+                "alert_state": "EDGE_TRIGGERED",
+                "alert_type": "DROWSY",
+                "verification_mode": "YOLO_BLAZEFACE_SEQ",
+                "face_detected": True,
+                "drowsy_escalation": {
+                    "count": 3,
+                    "limit": 3,
+                    "window_s": 180.0,
+                    "state": "ALARM_LATCHED",
+                    "alarm_active": True,
+                    "probation_remaining_s": 0.0,
+                },
+                "monitoring": {
+                    "mode": "AUTO",
+                    "presence": "DRIVER_PRESENT",
+                    "pause_remaining_s": 0.0,
+                    "absence_seconds": 0.0,
+                    "auto_resume_speed_kmh": 15.0,
+                    "last_resume_reason": "BOOT_AUTO",
+                },
+            },
+            hw_snap={"temp_c": 60.0, "throttled": "0x0"},
+            fps_snap={"camera_fps": 20.0, "ai_fps": 7.0},
+            esp_sensor={"co2_ppm": 520.0, "gps": {"speed_kmh": 25.0, "is_valid": True, "lat": 16.06, "lon": 108.22}},
+            esp_status={"connected": True, "vol": 80, "alarm_mode": 1},
+            mute_state={},
+        )
+        ok, errs = validate_telemetry_payload(payload)
+        self.assertTrue(ok, f"Schema errors: {errs}")
+        sync.send_telemetry_once(payload)
+
+        # 4. Phone HTTP actions DISMISS_DROWSY_ALARM & MODE_REST_OFF + phone/status exposes new blocks
+        otp = self.tc.post("/api/v1/phone/pair_otp", headers=self.op_h, json={"vehicle_id": "XE-CROSS-01"}).json()["pair_code"]
+        ptok = self.tc.post("/api/v1/phone/pair", json={"vehicle_id": "XE-CROSS-01", "pair_code": otp}).json()["driver_phone_token"]
+        for act in ("DISMISS_DROWSY_ALARM", "MODE_PAUSE_30M", "MODE_REST_OFF", "MODE_AUTO"):
+            r_act = self.tc.post(
+                "/api/v1/phone/action",
+                headers={"Authorization": f"Bearer {ptok}"},
+                json={"vehicle_id": "XE-CROSS-01", "action": act},
+            )
+            self.assertEqual(r_act.status_code, 200, f"Failed phone action {act}: {r_act.text}")
+
+        st = self.tc.get("/api/v1/phone/status?vehicle_id=XE-CROSS-01", headers={"Authorization": f"Bearer {ptok}"}).json()
+        self.assertEqual(st["drowsy_escalation"]["state"], "ALARM_LATCHED")
+        self.assertEqual(st["monitoring"]["mode"], "AUTO")
+        self.assertEqual(st["esp"]["vol"], 80)
+
+        # 5. Admin remote config accepts new drowsiness & presence policy fields
+        r_cfg = self.tc.post(
+            "/api/v1/config/XE-CROSS-01",
+            headers=self.admin_h,
+            json={"drowsy_window_s": 210, "drowsy_escalation_limit": 3, "absence_alert_s": 25, "auto_resume_speed_kmh": 15},
+        )
+        self.assertEqual(r_cfg.status_code, 200)
+        self.assertEqual(r_cfg.json()["drowsy_window_s"], 210.0)
+
+        # 6. Driver score summary + 48h dispute submission + Admin Four-Eyes approval refunds Safety Score
+        bc = BurstCollector(sample_fps=5.0, max_burst_frames=4)
+        img = np.full((240, 320, 3), 120, dtype=np.uint8)
+        bc.push_clean_frame(1, img, now_mono=1.0)
+        v_eid = sync.queue_violation_burst(
+            alert_type="DROWSY",
+            verification_mode="YOLO_BLAZEFACE_SEQ",
+            duration_seconds=2.4,
+            jpeg_frames=bc.extract_jpeg_burst(img),
+            gps={"lat": 16.06, "lon": 108.22, "speed_kmh": 35.0},
+            co2_ppm=520.0,
+            behavior_detail="Eye_Closed 2.4s",
+        )
+        self.assertEqual(sync.drain_spool_once(), 1)
+        self.sdv.verifier_engine._queue.join()
+
+        sc_before = self.tc.get(
+            "/api/v1/phone/score_summary?vehicle_id=XE-CROSS-01",
+            headers={"Authorization": f"Bearer {ptok}"},
+        ).json()
+        self.assertLess(sc_before["current_score"], 100.0)
+        v_match = [x for x in sc_before["violations"] if x["event_id"] == v_eid][0]
+        self.assertTrue(v_match["can_dispute"])
+
+        dsp = self.tc.post(
+            "/api/v1/phone/disputes",
+            headers={"Authorization": f"Bearer {ptok}"},
+            json={
+                "vehicle_id": "XE-CROSS-01",
+                "violation_event_id": v_eid,
+                "reason_code": "FALSE_DETECTION",
+                "explanation": "Nắng chiếu kính mắt gây báo nhầm buồn ngủ",
+            },
+        )
+        self.assertEqual(dsp.status_code, 200)
+        dsp_id = dsp.json()["dispute_id"]
+
+        res_dsp = self.tc.post(
+            f"/api/v1/disputes/{dsp_id}/resolve",
+            headers=self.admin_h,
+            json={"decision": "APPROVED", "response_note": "Xác nhận chói kính, hoàn điểm cho tài xế"},
+        )
+        self.assertEqual(res_dsp.status_code, 200)
+        self.assertTrue(res_dsp.json()["refunded"])
+        self.assertEqual(res_dsp.json()["safety_score"], 100.0)
+
 
 if __name__ == "__main__":
     unittest.main()

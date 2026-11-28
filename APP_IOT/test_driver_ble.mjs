@@ -8,9 +8,15 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const {
   BLE_NUS,
+  DISPUTE_REASONS,
   normalizeBaseUrl,
   detectTargetKind,
   formatAiEngineStatus,
+  formatDrowsyEscalationStatus,
+  formatMonitoringModeStatus,
+  canAccessAdminActions,
+  classifySafetyScoreTier,
+  validateDisputeSubmission,
   mapActionForTransport,
   shouldFinishHttpCalibration,
   BleLineFramingParser,
@@ -251,4 +257,52 @@ assert.equal(shouldFinishHttpCalibration({ state: "FAILED", profile_ts: null }, 
 assert.equal(shouldFinishHttpCalibration({ state: "DONE", profile_ts: 1025.5, locked: true }, false, 1000.0), true);
 assert.equal(shouldFinishHttpCalibration({ state: "DONE", profile_ts: 1025.5, locked: true }, false, null), true);
 
-console.log("APP_IOT_TESTS_PASS: 15/15 checks OK");
+// 16. New Driver/Admin actions map cleanly across BLE, Pi Local, and Server HTTP
+assert.equal(encodeBleCommand("DISMISS_ALARM"), "DISMISS_ALARM\n");
+assert.equal(encodeBleCommand("MODE_AUTO"), "MODE_AUTO\n");
+assert.equal(encodeBleCommand("MODE_PAUSE"), "MODE_PAUSE\n");
+assert.equal(encodeBleCommand("MODE_SLEEP"), "MODE_SLEEP\n");
+assert.equal(mapActionForTransport("DISMISS_ALARM", "pi_local"), "DISMISS_DROWSY_ALARM");
+assert.equal(mapActionForTransport("DISMISS_ALARM", "server_http"), "DISMISS_DROWSY_ALARM");
+assert.equal(mapActionForTransport("MODE_PAUSE", "pi_local"), "MODE_PAUSE_30M");
+assert.equal(mapActionForTransport("MODE_SLEEP", "server_http"), "MODE_REST_OFF");
+
+// 17. Drowsiness 3-strike meter, 3-mode presence formatter & Admin role guard
+const drL3 = formatDrowsyEscalationStatus({ state: "ALARM_LATCHED", count: 3, limit: 3, window_s: 180, alarm_active: true });
+assert.equal(drL3.alarmActive, true);
+assert.ok(drL3.badgeText.includes("3/3"));
+
+const drProb = formatDrowsyEscalationStatus({ state: "PROBATION", count: 3, limit: 3, probation_remaining_s: 125 });
+assert.equal(drProb.alarmActive, false);
+assert.ok(drProb.badgeText.includes("2:05"));
+
+const drRel = formatDrowsyEscalationStatus({ state: "CONTINUOUS_RELAPSE", count: 4, limit: 3 });
+assert.equal(drRel.alarmActive, true);
+assert.ok(drRel.title.includes("LIÊN TỤC"));
+
+const monPause = formatMonitoringModeStatus({ mode: "TEMP_PAUSE_30M", presence: "DRIVER_PRESENT", pause_remaining_s: 900 }, true);
+assert.equal(monPause.mode, "TEMP_PAUSE_30M");
+assert.ok(monPause.presenceText.includes("THẤY NGƯỜI"));
+
+const monSleep = formatMonitoringModeStatus({ mode: "REST_SLEEP_OFF", presence: "DRIVER_PRESENT", auto_resume_speed_kmh: 15 }, true);
+assert.equal(monSleep.mode, "REST_SLEEP_OFF");
+assert.ok(monSleep.detail.includes("15 km/h"));
+
+assert.equal(canAccessAdminActions("pi_local", true, "viewer", false, ""), false);
+assert.equal(canAccessAdminActions("pi_local", true, "admin", false, ""), true);
+assert.equal(canAccessAdminActions("server_http", false, "", true, "operator"), true);
+assert.equal(canAccessAdminActions("server_http", false, "", true, "driver_phone"), false);
+
+// 18. Unified PBL4_HTTM Safety Score tiers (>65 / <=65 / <=20) & 48h Dispute validation
+assert.equal(classifySafetyScoreTier(92).tier, "GREEN_GOOD");
+assert.equal(classifySafetyScoreTier(65).tier, "YELLOW_WARN");
+assert.equal(classifySafetyScoreTier(20).tier, "RED_LOCKED");
+assert.ok(DISPUTE_REASONS.FALSE_DETECTION && DISPUTE_REASONS.SENSOR_ERROR && DISPUTE_REASONS.NOT_ME && DISPUTE_REASONS.OTHER);
+assert.equal(validateDisputeSubmission("", "FALSE_DETECTION", "Loi AI").ok, false);
+assert.equal(validateDisputeSubmission("EVT_1", "BAD_CODE", "Giai trinh hop le").ok, false);
+assert.equal(validateDisputeSubmission("EVT_1", "FALSE_DETECTION", "abc").ok, false);
+const goodDsp = validateDisputeSubmission("EVT_1", "FALSE_DETECTION", "Chói nắng kính nên AI báo nhầm mắt nhắm");
+assert.equal(goodDsp.ok, true);
+assert.equal(goodDsp.reason_code, "FALSE_DETECTION");
+
+console.log("APP_IOT_TESTS_PASS: 18/18 checks OK");

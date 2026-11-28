@@ -1,95 +1,56 @@
-# BÀN GIAO HỆ THỐNG `PI_AI` CHO NHÓM APP / BLE (`APP_IOT/` — PHƯƠNG ÁN C1 PWA WEB BLUETOOTH)
+# BÀN GIAO BẢN APP HỢP NHẤT (`APP_IOT/` — DRIVER + ADMIN + ĐIỂM & KHIẾU NẠI 48H + IOT REAL-TIME)
 
-> **Dành cho thành viên App & AI Coding Agent phía bạn:**
-> Hãy đọc kỹ tài liệu này và [ble_protocol_contract.json](./ble_protocol_contract.json) **TRƯỚC KHI** chỉnh sửa giao diện hoặc chuyển sang app di động để đảm bảo tương thích 100% với **ESP32 #2 (`COMMS_BLE_GPS_HUB`)**, **Raspberry Pi 4 (`pi_edge/`)** và **Server AI (`server_ai/`)**.
-
----
-
-## 1. Toàn cảnh hệ thống IoT đã hoàn thiện & chạy sống thực tế
-
-```
-                     ┌──(BLE NUS mở, không PIN: PI_AI_HUB_XE-01)──► [ĐIỆN THOẠI TÀI XẾ: APP_IOT/]
-                     │   • Gửi: MUTE | SOS | ACK | REST_START | REST_END | STATUS
-                     │   • Nhận: ALERT:... | GPS:{...} (2s) | STATUS:{...} | OK:...
-                     ▼
-[ESP32 #2: COMMS_BLE_GPS_HUB] ◄──(USB /dev/esp_ble @115200)──► [Raspberry Pi 4 — pi_edge/]
-  • GPS cứng UART2 (GPIO16/17)                                   • Nhận EVT,BLE_ACTION,... từ ESP2
-  • On-Demand Wi-Fi Survival                                     • MUTE -> gửi ngay MUTE sang ESP1 tắt loa <5ms
-    (chỉ bật khi Pi tắt >=3.5s)                                  • SOS  -> gửi ngay sự cố CRITICAL lên Server
-                                                                 • Camera RTSP 192.168.1.210 (800x448 @20FPS)
-[ESP32 #1: AUDIO_MQ135_NODE] ◄──(USB /dev/esp_audio @115200)───► • AI Tier-1: YOLO + BlazeFace
-  • Loa I2S MAX98357A (GPIO26/25/22)                              │
-  • MQ-135 (GPIO34), Wi-Fi/BT TẮT                                 │ HTTP(S) Keep-Alive
-                                                                  ▼
-                                                       [Server of AI — server_ai/ (:5000)]
-                                                         • /driver -> phục vụ trực tiếp APP_IOT/driver.html
-                                                         • /api/v1/phone/pair (OTP 5 phút dùng 1 lần)
-                                                         • /api/v1/phone/telemetry (GPS điện thoại dự phòng)
-                                                         • /api/v1/phone/action & /api/v1/phone/notifications
-```
-
-### Trạng thái phần cứng đã nghiệm thu thật trên Pi 4 (`192.168.1.9`)
-- **ESP32 #2 (`COMMS_BLE_GPS_HUB`, `FW=PI_AI_3.0`, `/dev/esp_ble -> /dev/ttyUSB1`, cổng USB `1-1.3`, `115200` baud):**
-  - Đang phát sóng BLE công khai tên **`PI_AI_HUB_XE-01`** (mở không cần mã PIN theo `LCK-05 v3`).
-  - `free_heap = 107,516 B` ổn định 100% suốt >18 phút, `0` brownout, `0` reset, Wi-Fi Survival tự tắt khi Pi đang sống (`survival_wifi_on = false`).
-  - Khi nhận lệnh BLE từ điện thoại, ESP2 in `EVT,BLE_ACTION,<ACTION>` qua USB sang Pi 4 và trả ngay `OK:<ACTION>\n` về điện thoại.
-- **ESP32 #1 (`AUDIO_MQ135_NODE`, `FW=PI_AI_3.0`, `/dev/esp_audio -> /dev/ttyUSB0`, cổng USB `1-1.4`, `115200` baud):** Loa MAX98357A đã kiểm chứng `5/5` lệnh từ xa (`PING`, `VOL:65`, `VOICE:1`, `STOP`, `MUTE`) đều `EXECUTED_OK`.
+> **Dành cho thành viên App (`fleetguard-driver-app` / `PBL4_HTTM`) & AI Coding Agent:**
+> Nhánh này (`feat/app-iot-unified`) **CHỈ chứa bản thiết kế chuẩn thư mục `APP_IOT/`** đã hợp nhất toàn bộ 2 thế mạnh:
+> 1. **Điều khiển IoT thời gian thực `< 5ms`** (ESP32 #2 BLE NUS, Raspberry Pi 4 cục bộ `:8080`, Server `:5000`): Cảnh báo buồn ngủ 3 lần & nút **Tắt loa lần 3** (kiểm tra lại 2–4p), **3 chế độ giám sát hiện diện** (`AUTO` / `Tạm tắt 30p` / `Nghỉ ngủ trên xe tự bật lại ≥ 15 km/h`), Cân chỉnh MediaPipe 10s thật, Điều khiển loa ESP32 #1 (`VOL:50..100`, `VOICE:1..7`, `ALARM:ON/OFF`).
+> 2. **Nghiệp vụ Tài xế chuẩn `PBL4_HTTM`** (góp ý của giảng viên): **Xem Điểm Uy Tín (`/100` theo 3 ngưỡng `> 65` / `≤ 65` / `≤ 20`)**, lịch sử chuyến đi, **Xem Video/Ảnh Vi phạm AI**, **Gửi Đơn Khiếu nại trong 48h** (4 lý do chuẩn: `FALSE_DETECTION`, `SENSOR_ERROR`, `NOT_ME`, `OTHER`), và **Admin duyệt Khiếu nại theo nguyên tắc Four-Eyes Check** (tự động hoàn điểm khi chấp nhận).
 
 ---
 
-## 2. Hợp đồng BLE NUS & Server BẮT BUỘC GIỮ NGUYÊN (Không được sửa sai!)
+## 1. Kiến trúc 2 Phân hệ trong 1 Ứng dụng (`APP_IOT/driver.html`)
 
-| Thành phần | Giá trị chính xác | Ghi chú bắt buộc cho AI Agent bên bạn |
+### A. Phân hệ `🚗 Tài xế (Driver)` (2 tab con gọn gàng)
+1. **Tab con `🎛️ Buồng lái IoT`:**
+   - **Cảnh báo Buồn ngủ 3 lần (cửa sổ 2–4 phút):**
+     - Thanh 3 nấc (`0/3`, `1/3`, `2/3`, `3/3 BÁO ĐỘNG!`, `KIỂM TRA LẠI 2:59`, `TÁI PHẠM — BÁO ĐỘNG LIÊN TỤC!`).
+     - Nút nổi bật **`🔇 TẮT LOA CẢNH BÁO BUỒN NGỦ (LẦN 3)`** (`DISMISS_ALARM` / `DISMISS_DROWSY_ALARM`): dừng ngay còi ESP32 #1 và mở cửa sổ kiểm tra lại 2–4 phút trên Pi 4; nếu tài xế ngủ gục lại trong cửa sổ này → ESP32 #1 phát báo động liên tục mức khẩn cấp (`ALARM:CONT`).
+   - **Bộ chọn 3 Chế độ Giám sát Camera (`Cam thấy người` / `Cam không thấy người`):**
+     - **Chế độ 1 — `🟢 Tự động (AUTO)`** *(mặc định mỗi khi Pi bật/khởi động lại)*: Tự xác định thấy/không thấy người; mất mặt quá 15–30s tự báo App/Server (`DRIVER_ABSENT`) rồi tự chuyển sang `Tạm tắt 30p`.
+     - **Chế độ 2 — `🟡 Tạm tắt 30p` (`MODE_PAUSE`)**: Tắt cảnh báo vắng mặt trong 30 phút (có đếm ngược), **nhưng nếu Pi vẫn thấy người trước camera thì mọi cảnh báo vi phạm vẫn kêu bình thường**.
+     - **Chế độ 3 — `🌙 Nghỉ / Ngủ trên xe` (`MODE_SLEEP`)**: Camera vẫn giám sát & báo hiện diện, tắt toàn bộ loa cảnh báo để tài xế ngủ nghỉ/đi ăn; **tự động bật lại `AUTO` khi vận tốc GPS `≥ 15 km/h` liên tục ≥ 3s** (gửi báo cáo lên App/Server) hoặc khi Pi tắt nguồn/khởi động lại.
+   - **Cân chỉnh MediaPipe 478 (10 giây thật trên Pi 4)** + Thao tác an toàn (`Tắt còi 30s`, `SOS`, `Tôi đang tỉnh`, `Nghỉ giải lao`) + GPS/Nhiệt Pi + Kết nối 3 nguồn độc lập (`BLE ESP32 #2` → `Pi Cục Bộ :8080` → `Server PC :5000`).
+2. **Tab con `🏆 Điểm & Khiếu nại (48h)`:**
+   - **Điểm Uy Tín (`/100`)** đồng bộ theo 3 ngưỡng nghiệp vụ của `fleetguard-driver-app` (`ScoreScreen.js`): `> 65` (Hoạt động tốt), `≤ 65` (Cảnh cáo vàng), `≤ 20` (Báo động đỏ).
+   - **Lịch sử Chuyến đi & Vi phạm AI**: Xem video/ảnh bằng chứng trực tiếp trong modal, bấm **`⚖️ Khiếu nại (48h)`** chọn 1 trong 4 mã lý do chuẩn + nhập giải trình.
+
+### B. Phân hệ `🛡️ Quản trị (Admin / Operator)`
+- Đăng nhập bằng Token `admin` / `operator` (hỗ trợ cả **Pi Cục Bộ `:8080`** và **Server PC `:5000`**).
+- **Cấp mã OTP 8 ký tự (5 phút)** cho tài xế ghép điện thoại.
+- **Điều khiển Loa ESP32 #1 (`MAX98357A`)**: chọn âm lượng (`50%`, `65%`, `80% mặc định mới`, `90%`, `100%`), thử 7 giọng nói (`VOICE:1..7` gồm cả `VOICE:6` Điện thoại & `VOICE:7` Hút thuốc), bật/tắt báo động liên tục (`ALARM:ON` / `ALARM:OFF`).
+- **Cấu hình Tham số AI & Chính sách từ xa**: Bật/tắt Hút thuốc & Điện thoại, cửa sổ buồn ngủ (`120–240s`), số lần kích hoạt (`2–5`), ngưỡng vắng mặt (`15–30s`), thời gian tạm tắt (`5–60p`), vận tốc tự bật lại (`5–40 km/h`).
+- **⚖️ Duyệt Đơn Khiếu nại từ Tài xế (Four-Eyes Check)**: Xem giải trình + video bằng chứng, bấm **Hoàn điểm (`APPROVED`)** hoặc **Từ chối (`REJECTED`)** kèm phản hồi bắt buộc.
+- Ghi đè chế độ xe từ xa (`Ép AUTO` / `Tạm tắt 30p` / `Nghỉ/Ngủ`), lối tắt sang Fleet Dashboard (`/`) và Nhật ký kỹ thuật.
+
+---
+
+## 2. Hợp đồng Giao thức BLE & HTTP (Chi tiết tại [ble_protocol_contract.json](./ble_protocol_contract.json))
+
+| Kênh | Lệnh / Endpoint | Mục đích |
 |---|---|---|
-| Tên thiết bị BLE | `PI_AI_HUB_<vehicle_id>` (mặc định `PI_AI_HUB_XE-01`) | Filter theo `namePrefix: "PI_AI_HUB_"` hoặc Service UUID |
-| Service UUID (NUS) | `6e400001-b5a3-f393-e0a9-e50e24dcca9e` | Chữ thường theo chuẩn Web Bluetooth API |
-| RX Characteristic (Phone → ESP2) | `6e400002-b5a3-f393-e0a9-e50e24dcca9e` | Ghi ASCII **bắt buộc kết thúc bằng `\n`**, xếp hàng tuần tự tránh lỗi GATT busy |
-| TX Characteristic (ESP2 → Phone) | `6e400003-b5a3-f393-e0a9-e50e24dcca9e` | **QUAN TRỌNG:** Gói notify BLE bị cắt theo MTU `20 byte` → **PHẢI gom buffer tới ký tự `\n`** rồi mới `JSON.parse` (xem `BleLineFramingParser` trong `driver_ble.js`) |
-| 6 lệnh được phép gửi | `MUTE`, `SOS`, `ACK`, `REST_START`, `REST_END`, `STATUS` | Không gửi lệnh hệ thống khác qua BLE |
-| Chuỗi ESP2 đẩy về | `ALERT:<TYPE>\|<DETAIL>`, `GPS:{...}`, `STATUS:{...}`, `OK:<ACT>`, `ERR:...` | Xem mẫu đầy đủ trong `ble_protocol_contract.json` |
-
-### Giới hạn Web Bluetooth (Phương án C1) cần lưu ý khi chạy thật
-1. **Bắt buộc chạy trên HTTPS** (dùng `server_ai/run_tunnel.ps1` qua Cloudflare Tunnel `https://...trycloudflare.com/driver`, hoặc `http://localhost:5000/driver` trên máy tính). Nếu mở qua `http://192.168.1.7:5000/driver` trên điện thoại, Chrome Android sẽ **chặn Web Bluetooth** (UI đã tự hiện banner cảnh báo rõ ràng).
-2. **Hệ điều hành:** Chạy mượt trên **Android Chrome / Edge**. **Safari trên iPhone không hỗ trợ Web Bluetooth** (trên iOS có thể mở bằng trình duyệt *Bluefy* hoặc dùng bộ contract này để bọc lại thành app Flutter/React Native sau này).
-3. **Bảo mật BLE:** Hiện ESP2 mở không PIN theo `LCK-05 v3` để tiện demo. Nếu đưa ra thương mại, nhóm App + Firmware cần bổ sung mã PIN phiên ở tầng ứng dụng.
+| **BLE NUS (ESP32 #2)** | `MUTE`, `DISMISS_ALARM`, `MODE_AUTO`, `MODE_PAUSE`, `MODE_SLEEP`, `SOS`, `ACK`, `REST_START`, `REST_END`, `CALIBRATE`, `STATUS` | Giao tiếp trực tiếp không cần Internet (UUID `6e400001-...`, kết thúc `\n`, ghép mảnh MTU 20 byte) |
+| **HTTP Phone Actions** | `POST /api/v1/phone/action` | `MUTE_ALERT`, `DISMISS_DROWSY_ALARM`, `MODE_AUTO`, `MODE_PAUSE_30M`, `MODE_REST_OFF`, `SOS`, `ACK_AWAKE`, `REST_BREAK_START`, `REST_BREAK_END`, `CALIBRATE_LOCK` |
+| **HTTP Live Status** | `GET /api/v1/phone/status?vehicle_id=XE-01` | Trạng thái AI, `drowsy_escalation`, `monitoring`, `calibration`, `esp`, `gps`, `pi` |
+| **HTTP Điểm & Vi phạm** | `GET /api/v1/phone/score_summary?vehicle_id=XE-01` | Điểm uy tín `/100`, 3 ngưỡng màu, danh sách chuyến, danh sách vi phạm + cờ `can_dispute` |
+| **HTTP Khiếu nại 48h** | `POST /api/v1/phone/disputes` | Tài xế gửi khiếu nại (`FALSE_DETECTION \| SENSOR_ERROR \| NOT_ME \| OTHER`) |
+| **HTTP Admin Duyệt** | `GET /api/v1/disputes` · `POST /api/v1/disputes/{id}/resolve` | Admin duyệt Four-Eyes Check (`APPROVED` tự động hoàn điểm / `REJECTED`) |
 
 ---
 
-## 3. Bên trong thư mục `APP_IOT/` có gì & Cách chạy/test
-
-| File | Vai trò | Bạn có thể sửa? |
-|---|---|---|
-| `driver.html` | Giao diện buồng lái tài xế (nút bấm lớn >=68px: `TẮT CÒI 30s`, `SOS`, `TÔI ĐANG TỈNH`, `NGHỈ`, thẻ GPS trực tiếp, ô ghép OTP Server, log BLE) | **CÓ** (tùy biến giao diện, ngôn ngữ, bố cục) |
-| `driver.css` | Giao diện tối tương phản cao, 0 phụ thuộc CDN ngoài (chạy offline/LAN 100%) | **CÓ** |
-| `driver_ble.js` | Bộ xử lý Web Bluetooth NUS (`BleLineFramingParser` ghép gói 20-byte MTU, `DriverBleClient` tự nối lại sau 2.5s + khóa hàng đợi ghi GATT, đọc giọng nói TTS tiếng Việt + rung, gọi `/api/v1/phone/pair` & `/api/v1/phone/action`) | **CÓ** (giữ nguyên UUID & format lệnh) |
-| `manifest.json` | Cấu hình PWA cho phép "Thêm vào màn hình chính" trên Android | **CÓ** |
-| `ble_protocol_contract.json` | Hợp đồng máy đọc được (JSON) cho AI Agent bên bạn | **CHỈ ĐỌC** |
-| `test_driver_ble.mjs` | Bộ 5 bài test Node.js (kiểm chứng UUID, ghép mảnh 20-byte MTU, JSON lỗi, chống chèn lệnh lạ, chống tràn buffer) | **CÓ** (chạy trước khi gửi trả) |
+## 3. Cách chạy kiểm thử nhanh thư mục `APP_IOT/`
 
 ```bash
-# Chạy kiểm thử logic BLE ngay trên PC (yêu cầu Node.js >= 18)
+# Chạy 18 bài kiểm thử tự động cho toàn bộ logic BLE, 3 chế độ, buồn ngủ 3 lần, điểm & khiếu nại (Node.js >= 18)
 node APP_IOT/test_driver_ble.mjs
-
-# Xem thử giao diện trên Server of AI:
-#   - Trên PC: http://127.0.0.1:5000/driver
-#   - Trên điện thoại Android (Web Bluetooth thật): https://<cloudflare-tunnel-url>/driver
 ```
 
----
-
-## 4. Kiểm tra thay đổi của `server_ai/` so với bản Server trước đây
-
-So với bản Server trước đây (mốc `d50ea70` / `2a97e17` ngày 22/11/2026):
-- **Tất cả endpoint App/Phone cũ giữ nguyên 100% không đổi đường dẫn:**
-  - `POST /api/v1/phone/pair_otp` (alias `/api/v1/phone/pair/otp` cũng được hỗ trợ — operator tạo OTP 5 phút)
-  - `POST /api/v1/phone/pair` (điện thoại đổi OTP lấy `driver_phone_token` — không cần token đăng nhập trước, chống brute-force bằng rate-limit & atomic `BEGIN IMMEDIATE`)
-  - `POST /api/v1/phone/telemetry` (điện thoại gửi `phone_gps` dự phòng & `relay_packet`)
-  - `POST /api/v1/phone/action` (`MUTE_ALERT`, `SOS`, `ACK_AWAKE`, `REST_BREAK_START`, `REST_BREAK_END`)
-  - `GET /api/v1/phone/notifications?vehicle_id=XE-01`
-- **Các thay đổi mới trên `server_ai/` phía App cần biết:**
-  1. **Mới gắn sẵn `/driver` và `/app_iot/*`** trên `server_ai` để phục vụ trực tiếp thư mục `APP_IOT/` (trả `307 -> /app_iot/driver.html`).
-  2. **Chuẩn hóa mã lỗi JSON:** Nếu App gửi JSON sai cú pháp hoặc không phải object `{}` → Server trả `HTTP 400` rõ ràng (không còn `500`); payload > `2 MB` trả `HTTP 413`.
-  3. **Sửa hiển thị `bt_phone_connected`:** Server chỉ báo `bt_phone_connected=1` khi có điện thoại thật nối BLE (`phone_connected: true`), không còn báo ảo khi chỉ cắm USB ESP32 #2.
-  4. **Miễn phạt điểm cho `SOS` & `CO2`:** Bấm `SOS` từ App/BLE tạo ngay sự cố `CRITICAL` `SOS_PRESSED` nhưng **KHÔNG trừ điểm an toàn của tài xế**; cảnh báo `AUTO_CO2_CRIT/WARN` cũng chỉ cảnh báo, không trừ điểm và không tính vào số vi phạm tài xế.
-  5. **Khử trùng lặp MUTE 5 giây:** Bấm `MUTE` từ BLE (đi qua Pi) rồi gọi thêm API không bị đếm đúp 2 lần tắt còi trong vòng 5 giây.
-  6. **Tích hợp tùy chọn `pbl4_bridge` (Phương án A2):** Tắt mặc định (`PBL4_BACKEND_URL=""`), sẵn sàng chuyển tiếp sang Backend Node.js `PBL4_HTTM` (:3000) khi nhóm bật cấu hình.
+> **Gợi ý ghép với `fleetguard-driver-app` (React Native):** Team App có thể dùng trực tiếp giao diện web PWA `APP_IOT/driver.html` (mở ở `/driver` hoặc nhúng WebView), **hoặc** dùng đúng hợp đồng trong [ble_protocol_contract.json](./ble_protocol_contract.json) và các hàm thuần trong [driver_ble.js](./driver_ble.js) để mang 2 khối **Tắt loa buồn ngủ lần 3** + **3 Chế độ Giám sát Hiện diện** sang màn hình `TripScreen.js` của `fleetguard-driver-app`.

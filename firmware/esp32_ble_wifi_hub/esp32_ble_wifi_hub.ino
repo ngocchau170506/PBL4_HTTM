@@ -460,7 +460,7 @@ static void processBleEvents(unsigned long now) {
   if (bleConnected && !oldBleConnected) {
     oldBleConnected = true;
     Serial.println("EVT,BLE_STATE,PHONE_CONNECTED");
-    bleNotifyText("PI_AI_HUB CONNECTED (" + cfgVehicleId + ") - Cmds: MUTE, SOS, ACK, REST_START, REST_END, CALIBRATE, STATUS");
+    bleNotifyText("PI_AI_HUB CONNECTED (" + cfgVehicleId + ") - Cmds: MUTE, DISMISS_ALARM, MODE_AUTO, MODE_PAUSE, MODE_SLEEP, SOS, ACK, REST_START, REST_END, CALIBRATE, STATUS");
   } else if (!bleConnected && oldBleConnected) {
     oldBleConnected = false;
     Serial.println("EVT,BLE_STATE,PHONE_DISCONNECTED");
@@ -508,6 +508,18 @@ static void processBleEvents(unsigned long now) {
   if (up == "MUTE" || up == "MUTE_ALERT" || up == "M") {
     Serial.println("EVT,BLE_ACTION,MUTE_ALERT");
     bleNotifyText("OK:MUTE_ALERT");
+  } else if (up == "DISMISS_ALARM" || up == "ALARM_OFF" || up == "STOP_ALARM" || up == "DISMISS_DROWSY_ALARM") {
+    Serial.println("EVT,BLE_ACTION,DISMISS_DROWSY_ALARM");
+    bleNotifyText("OK:DISMISS_DROWSY_ALARM");
+  } else if (up == "MODE_AUTO" || up == "AUTO") {
+    Serial.println("EVT,BLE_ACTION,MODE_AUTO");
+    bleNotifyText("OK:MODE_AUTO");
+  } else if (up == "MODE_PAUSE" || up == "MODE_PAUSE_30M") {
+    Serial.println("EVT,BLE_ACTION,MODE_PAUSE_30M");
+    bleNotifyText("OK:MODE_PAUSE_30M");
+  } else if (up == "MODE_SLEEP" || up == "MODE_REST_OFF" || up == "REST_OFF") {
+    Serial.println("EVT,BLE_ACTION,MODE_REST_OFF");
+    bleNotifyText("OK:MODE_REST_OFF");
   } else if (up == "SOS" || up == "HELP") {
     Serial.println("EVT,BLE_ACTION,SOS");
     bleNotifyText("OK:SOS");
@@ -526,7 +538,7 @@ static void processBleEvents(unsigned long now) {
   } else if (up == "STATUS" || up == "?") {
     emitStatusJson(true);
   } else {
-    bleNotifyText("ERR:UNKNOWN_CMD (" + s + ") Use: MUTE|SOS|ACK|REST_START|REST_END|CALIBRATE|STATUS");
+    bleNotifyText("ERR:UNKNOWN_CMD (" + s + ") Use: MUTE|DISMISS_ALARM|MODE_AUTO|MODE_PAUSE|MODE_SLEEP|SOS|ACK|REST_START|REST_END|CALIBRATE|STATUS");
   }
 }
 

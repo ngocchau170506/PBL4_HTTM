@@ -121,6 +121,13 @@ class EdgeConfig:
     allow_phone: bool
     smoking_conf: float
     phone_conf: float
+    drowsy_window_s: float
+    drowsy_escalation_limit: int
+    absence_alert_s: float
+    pause_duration_min: float
+    auto_resume_speed_kmh: float
+    live_stream_max_fps: float
+    live_stream_jpeg_quality: int
 
     esp_port: str
     esp_baudrate: int
@@ -178,7 +185,7 @@ class EdgeConfig:
             camera_ip=(e.get("FD_CAMERA_IP") or "192.168.1.210").strip(),
             camera_width=_env_int(e, "CAMERA_WIDTH", 640),
             camera_height=_env_int(e, "CAMERA_HEIGHT", 480),
-            camera_fps=_env_float(e, "CAMERA_FPS", 30.0),
+            camera_fps=_env_float(e, "CAMERA_FPS", 20.0),
             camera_rotation=_env_int(e, "CAMERA_ROTATION", 180),
             camera_prefer_substream=_env_bool(e, "CAMERA_PREFER_SUBSTREAM", True),
             camera_stall_reset_s=_env_float(e, "CAMERA_STALL_RESET_S", 6.0),
@@ -195,8 +202,15 @@ class EdgeConfig:
             blind_hold_max_s=blind_hold,
             allow_smoking=_env_bool(e, "ALLOW_SMOKING_ALERTS", True),
             allow_phone=_env_bool(e, "ALLOW_PHONE_ALERTS", True),
-            smoking_conf=_env_float(e, "YOLO_SMOKING_CONF", 0.45),
+            smoking_conf=_env_float(e, "YOLO_SMOKING_CONF", 0.40),
             phone_conf=_env_float(e, "YOLO_PHONE_CONF", 0.45),
+            drowsy_window_s=max(120.0, min(240.0, _env_float(e, "DROWSY_WINDOW_SECONDS", 180.0))),
+            drowsy_escalation_limit=max(2, min(5, _env_int(e, "DROWSY_ESCALATION_LIMIT", 3))),
+            absence_alert_s=max(15.0, min(30.0, _env_float(e, "ABSENCE_ALERT_SECONDS", 20.0))),
+            pause_duration_min=max(5.0, min(60.0, _env_float(e, "PAUSE_DURATION_MINUTES", 30.0))),
+            auto_resume_speed_kmh=max(5.0, min(40.0, _env_float(e, "AUTO_RESUME_SPEED_KMH", 15.0))),
+            live_stream_max_fps=max(4.0, min(20.0, _env_float(e, "LIVE_STREAM_MAX_FPS", 10.0))),
+            live_stream_jpeg_quality=max(50, min(90, _env_int(e, "LIVE_STREAM_JPEG_QUALITY", 72))),
             esp_port=(e.get("ESP_PORT") or e.get("FD_ESP32_URI") or "/dev/ttyUSB0").strip(),
             esp_baudrate=_env_int(e, "ESP_BAUDRATE", 115200),
             esp_mode=(e.get("ESP_MODE") or "SERIAL").strip().upper(),

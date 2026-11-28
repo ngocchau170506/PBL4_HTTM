@@ -66,6 +66,7 @@ class CameraFrameSource:
         self._latest_id = 0
         self._last_fresh_mono = 0.0
         self._opened = False
+        self.native_fps: Optional[float] = None
         self.error: str = ""
 
     def start(self) -> None:
@@ -131,6 +132,11 @@ class CameraFrameSource:
                         self._stop.wait(1.0)
                         continue
                     self._cap = cap
+                    try:
+                        raw_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+                        self.native_fps = round(raw_fps, 1) if 5.0 <= raw_fps <= 30.0 else None
+                    except Exception:
+                        self.native_fps = None
                     self._last_fresh_mono = time.monotonic()
                     with self._cond:
                         self._opened = True

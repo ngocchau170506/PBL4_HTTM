@@ -147,6 +147,12 @@ class ServerSyncClient:
         cal_blk = ai_state.get("calibration")
         if isinstance(cal_blk, dict):
             driver_state_blk["calibration"] = dict(cal_blk)
+        d_esc_blk = ai_state.get("drowsy_escalation")
+        if isinstance(d_esc_blk, dict):
+            driver_state_blk["drowsy_escalation"] = dict(d_esc_blk)
+        mon_blk = ai_state.get("monitoring")
+        if isinstance(mon_blk, dict):
+            driver_state_blk["monitoring"] = dict(mon_blk)
 
         payload = {
             "schema_version": "1.0.0",
